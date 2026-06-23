@@ -2,82 +2,77 @@
 #define SEMANTICS_AR_PROTOCOL_H
 
 #include <stdint.h>
+#include "semantics_ar/keystore_format.h"
 
-#define SEMANTICS_AR_MSG_CHAIN_CANDIDATE     1
-#define SEMANTICS_AR_MSG_CONFIRMED           2
-#define SEMANTICS_AR_MSG_RESTORE_COMPLETE    3
-#define SEMANTICS_AR_MSG_SHADOW_SPACE_FREED  4
-#define SEMANTICS_AR_MSG_SHADOW_USAGE_SET    5
-#define SEMANTICS_AR_MSG_ASSOCIATE_CHILD     6
-#define SEMANTICS_AR_MSG_SET_CONFIG          7
-#define SEMANTICS_AR_MSG_ADD_TRUSTED_PID     8
-#define SEMANTICS_AR_MSG_REMOVE_TRUSTED_PID  9
-#define SEMANTICS_AR_MSG_GET_STATUS          10
+#define SEMANTICS_AR_PROTOCOL_VERSION 1u
 
-#define SEMANTICS_AR_ACTION_ALLOW  0
-#define SEMANTICS_AR_ACTION_BLOCK  1
+#define SEMANTICS_AR_MSG_VERDICT_NOTIFY   1
+#define SEMANTICS_AR_MSG_RECOVERY_REQUEST 2
+#define SEMANTICS_AR_MSG_RECOVERY_DONE    3
+#define SEMANTICS_AR_MSG_SET_MODE         4
+#define SEMANTICS_AR_MSG_WHITELIST_ADD    5
+#define SEMANTICS_AR_MSG_WHITELIST_REMOVE 6
+#define SEMANTICS_AR_MSG_GET_STATUS       7
 
-#define SEMANTICS_AR_MAX_SECTION_PIDS   4
-#define SEMANTICS_AR_MAX_TRUSTED_PIDS   64
-#define SEMANTICS_AR_ORACLE_SAMPLE_SIZE 256
-#define SEMANTICS_AR_PROTO_PATH_MAX     260
+#define SEMANTICS_AR_MODE_AUDIT   0
+#define SEMANTICS_AR_MODE_ENFORCE 1
+
+#define SEMANTICS_AR_PROTO_PATH_MAX  260
+#define SEMANTICS_AR_PROTO_SUBJECT_MAX 256
+#define SEMANTICS_AR_CONTENT_HASH_SIZE 32
 
 #pragma pack(push, 1)
 
 typedef struct {
+    uint32_t protocol_version;
     uint32_t message_type;
+    uint32_t message_length;
 } semantics_ar_msg_header_t;
 
 typedef struct {
-    uint32_t message_type;
-    uint32_t process_id;
-    uint32_t thread_id;
-    uint16_t file_path[SEMANTICS_AR_PROTO_PATH_MAX];
-    uint64_t file_offset;
-    uint32_t write_length;
-    uint32_t sample_size;
-    uint8_t  plaintext_sample[SEMANTICS_AR_ORACLE_SAMPLE_SIZE];
-    uint8_t  ciphertext_sample[SEMANTICS_AR_ORACLE_SAMPLE_SIZE];
-} semantics_ar_chain_notification_t;
+    semantics_ar_msg_header_t header;
+    uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
+    uint32_t algorithm;
+    uint32_t mode;
+    uint64_t mode_params;
+    uint64_t provenance_offset;
+    uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+} semantics_ar_verdict_notify_t;
 
 typedef struct {
-    uint32_t action;
-} semantics_ar_chain_response_t;
+    semantics_ar_msg_header_t header;
+    uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
+} semantics_ar_recovery_request_t;
 
 typedef struct {
-    uint32_t timeout_ms;
-    uint32_t max_pending_writes;
-} semantics_ar_config_t;
+    semantics_ar_msg_header_t header;
+    uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
+    int32_t  result;
+    uint32_t files_recovered;
+} semantics_ar_recovery_done_t;
 
 typedef struct {
-    uint32_t pid;
-    int64_t  creation_time;
-} semantics_ar_trusted_pid_info_t;
+    semantics_ar_msg_header_t header;
+    uint32_t mode;
+} semantics_ar_set_mode_t;
 
 typedef struct {
-    uint32_t target_pid;
-} semantics_ar_confirm_payload_t;
+    semantics_ar_msg_header_t header;
+    uint16_t image_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint16_t cert_subject[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+    uint8_t  content_hash[SEMANTICS_AR_CONTENT_HASH_SIZE];
+} semantics_ar_whitelist_control_t;
 
 typedef struct {
-    uint64_t bytes_freed;
-    uint16_t volume_nt_path[SEMANTICS_AR_PROTO_PATH_MAX];
-} semantics_ar_space_freed_payload_t;
+    semantics_ar_msg_header_t header;
+} semantics_ar_get_status_t;
 
 typedef struct {
-    int64_t  actual_bytes_used;
-    uint16_t volume_nt_path[SEMANTICS_AR_PROTO_PATH_MAX];
-} semantics_ar_shadow_usage_set_payload_t;
-
-typedef struct {
-    uint32_t child_pid;
-    uint32_t originator_pid;
-} semantics_ar_associate_child_payload_t;
-
-typedef struct {
-    int32_t  result_code;
-    uint32_t protection_active;
-    uint32_t confirmed_active;
-    uint32_t trusted_pid_count;
+    semantics_ar_msg_header_t header;
+    int32_t  result;
+    uint32_t protocol_version;
+    uint32_t mode;
+    uint64_t captured_key_count;
 } semantics_ar_status_reply_t;
 
 #pragma pack(pop)

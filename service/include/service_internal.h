@@ -5,7 +5,6 @@
 #include <fltUser.h>
 #include "semantics_ar/protocol.h"
 #include "semantics_ar/errors.h"
-#include "semantics_ar/shadow_format.h"
 #include "key_capture.h"
 
 #define SEMANTICS_AR_SVC_NAME        L"SemanticsAR"

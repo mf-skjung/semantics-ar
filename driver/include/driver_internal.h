@@ -8,7 +8,6 @@
 #include <bcrypt.h>
 #include "semantics_ar/protocol.h"
 #include "semantics_ar/errors.h"
-#include "semantics_ar/shadow_format.h"
 
 #define SEMANTICS_AR_POOL_TAG      'rAmS'
 #define SEMANTICS_AR_POOL_TAG_PG   'pAmS'

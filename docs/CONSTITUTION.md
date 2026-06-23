@@ -195,7 +195,10 @@ at least one capture across N is `1 − (1−p)^N → 1` rapidly.
 ### II.5 The keystore
 **[DECISION] II.5.1 — The keystore is the system's sole persistent recovery asset.**
 Captured keys (with the algorithm and parameters needed to use them) are written to
-a keystore. It is kilobytes in scale. It is the new center of gravity: if it
+a keystore. Its size is proportional to the number of distinct captured keys; under
+per-file keying, up to one record per encrypted file — thousands to hundreds of
+thousands of records, megabytes in scale; the on-disk format is append-oriented and
+must scale to many records. It is the new center of gravity: if it
 survives, recovery is possible; if it is destroyed, recovery is lost. Its protection
 is therefore the crown-jewel concern of Part VII, replacing every protection the old
 design spent on a shadow store.
