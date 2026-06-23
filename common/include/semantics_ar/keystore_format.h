@@ -4,11 +4,12 @@
 #include <stdint.h>
 
 #define SEMANTICS_AR_KEYSTORE_MAGIC      0x53414B53u
-#define SEMANTICS_AR_KEYSTORE_VERSION    1u
+#define SEMANTICS_AR_KEYSTORE_VERSION    2u
 
 #define SEMANTICS_AR_KEY_ID_SIZE         32
 #define SEMANTICS_AR_MAC_SIZE            32
 #define SEMANTICS_AR_MAX_KEY_BYTES       64
+#define SEMANTICS_AR_IV_MAX              24
 #define SEMANTICS_AR_PROVENANCE_PATH_MAX 260
 
 #define SAR_ALG_AES_128   1
@@ -41,6 +42,9 @@ typedef struct {
     uint32_t mode;
     uint32_t key_length;
     uint8_t  key_bytes[SEMANTICS_AR_MAX_KEY_BYTES];
+    uint8_t  iv[SEMANTICS_AR_IV_MAX];
+    uint8_t  iv_length;
+    uint8_t  ctr_layout_tag;
     uint64_t mode_params;
     uint64_t provenance_offset;
     uint16_t provenance_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];

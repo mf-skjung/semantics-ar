@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "conviction_engine.h"
 #include "sar_keystore.h"
 
@@ -22,6 +23,9 @@ static void make_verdict(sar_verdict_t *v, uint32_t alg, uint8_t seed) {
     v->mode_params = 0;
     for (int i = 0; i < 16; i++)
         v->key[i] = (uint8_t)(seed + 3u * (uint8_t)i);
+    v->iv_length = 16;
+    for (int i = 0; i < 16; i++)
+        v->iv[i] = (uint8_t)(seed ^ (uint8_t)(i * 5u));
 }
 
 int main(void) {
@@ -96,6 +100,26 @@ int main(void) {
         memcpy(t, buf, shortened);
         int rv = sar_keystore_verify(t, shortened, K, &anchor, NULL);
         CHECK(rv == SAR_KS_TRUNCATED, "(iii) tail truncation detected");
+        free(t);
+    }
+    {
+        size_t iv_off = offsetof(semantics_ar_keystore_record_t, iv);
+        uint8_t *t = (uint8_t *)malloc(need);
+        memcpy(t, buf, need);
+        t[hdr_sz + iv_off] ^= 0x01;
+        int rv = sar_keystore_verify(t, need, K, &anchor, NULL);
+        CHECK(rv == SAR_KS_RECORD_MAC, "(v) v2 IV-field edit detected (MAC covers IV)");
+        free(t);
+    }
+    {
+        uint8_t *t = (uint8_t *)malloc(need);
+        memcpy(t, buf, need);
+        semantics_ar_keystore_header_t h;
+        memcpy(&h, t, sizeof(h));
+        h.protocol_version = 1;
+        memcpy(t, &h, sizeof(h));
+        int rv = sar_keystore_verify(t, need, K, &anchor, NULL);
+        CHECK(rv == SAR_KS_BAD_VERSION, "(vi) non-v2 protocol_version rejected (no silent misparse)");
         free(t);
     }
     {

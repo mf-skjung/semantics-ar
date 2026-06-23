@@ -24,6 +24,9 @@ typedef struct {
     uint8_t  key[SAR_ENGINE_KEY_MAX];
     uint32_t key_length;
     uint64_t mode_params;
+    uint8_t  iv[SEMANTICS_AR_IV_MAX];
+    uint8_t  iv_length;
+    uint8_t  ctr_layout_tag;
 } sar_verdict_t;
 
 typedef struct {
