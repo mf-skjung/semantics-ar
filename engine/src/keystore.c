@@ -32,6 +32,11 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
     uint32_t kl = verdict->key_length > SEMANTICS_AR_MAX_KEY_BYTES
                       ? SEMANTICS_AR_MAX_KEY_BYTES : verdict->key_length;
     sar_memcpy(rec->key_bytes, verdict->key, kl);
+    uint8_t ivl = verdict->iv_length > SEMANTICS_AR_IV_MAX
+                      ? SEMANTICS_AR_IV_MAX : verdict->iv_length;
+    sar_memcpy(rec->iv, verdict->iv, ivl);
+    rec->iv_length = ivl;
+    rec->ctr_layout_tag = verdict->ctr_layout_tag;
     rec->mode_params = verdict->mode_params;
     rec->provenance_offset = provenance_offset;
     if (provenance_path) {

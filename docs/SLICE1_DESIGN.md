@@ -90,12 +90,17 @@ Constitution II.3.1 names it). It is implemented because the Constitution names 
 its weight in the threat model is low. The engine tries the two standard data-unit sizes,
 512 and 4096 bytes, and records the matched size in `mode_params`.
 
-## IV / nonce is not an engine concern
+## IV / nonce is not a *conviction* concern
 
-The IV/nonce is neither an engine input nor a keystore field. Conviction needs no IV: for
-CTR/CFB/OFB/stream the keystream is `P XOR C` over the sample, and for CTR the counter
-structure is recovered from two adjacent keystream blocks. The per-file IV is a
-recovery-time concern handled in a later slice.
+The IV/nonce is not an engine *input*. Conviction needs no IV: for CTR/CFB/OFB/stream the
+keystream is `P XOR C` over the sample, and for CTR the counter structure is recovered from
+two adjacent keystream blocks.
+
+> **Superseded for persistence by Slice 2.** Slice 1 also said the IV is not a keystore
+> field; that is no longer true. Slice 2 (`SLICE2_DESIGN.md`) persists the IV/nonce the
+> engine already recovers, because *recovery* needs it (Constitution II.5.1). The verdict
+> and the keystore record now carry `iv[24] / iv_length / ctr_layout_tag`, and the forward-
+> conviction path emits them. Conviction itself is unchanged in what it must *find*.
 
 ## [DESIGN] Keystore integrity — HMAC-SHA256 MAC chain
 
@@ -111,6 +116,10 @@ recovery-time concern handled in a later slice.
   and the running head MAC (`= mac_{n-1}`).
 - HMAC-SHA256 is the recorded [DESIGN] choice (keyed, standard, kernel-implementable; the
   MAC key never exists in user mode per Constitution VII.1).
+- **Keystore version:** Slice 1 shipped no on-disk keystore in production; Slice 2 bumps
+  `SEMANTICS_AR_KEYSTORE_VERSION` to **2** (the `iv[24] / iv_length / ctr_layout_tag`
+  fields are inside `record_i`, so the record-MAC chain covers them automatically). There
+  is no v1→v2 migration — v2 is the format; non-2 versions are still rejected.
 - **Verification order** (`sar_keystore_verify`): magic/version → declared size vs buffer
   length (short buffer = truncation) → each record MAC recomputed and chained → head MAC
   vs last record → then, if an external anchor is supplied, generation and head MAC vs the

@@ -9,7 +9,8 @@ add_library(semantics_ar_engine STATIC
     src/modes.c
     src/battery.c
     src/sha256.c
-    src/keystore.c)
+    src/keystore.c
+    src/recover.c)
 
 target_include_directories(semantics_ar_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -27,4 +28,24 @@ else()
     target_compile_options(semantics_ar_engine PRIVATE -Wall -Wextra -Werror)
     set_source_files_properties(src/battery.c src/keystore.c
         PROPERTIES COMPILE_OPTIONS "-Wconversion")
+endif()
+
+if(NOT WIN32)
+    add_library(semantics_ar_recovery_host STATIC
+        host/recover_file.c)
+
+    target_include_directories(semantics_ar_recovery_host PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/host"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../common/include")
+
+    target_link_libraries(semantics_ar_recovery_host PUBLIC semantics_ar_engine)
+
+    target_compile_definitions(semantics_ar_recovery_host PRIVATE
+        _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+
+    set_target_properties(semantics_ar_recovery_host PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+
+    target_compile_options(semantics_ar_recovery_host PRIVATE -Wall -Wextra -Werror)
 endif()

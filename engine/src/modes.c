@@ -1,7 +1,15 @@
 #include "modes.h"
+#include "ctr_layout.h"
 #include "../ciphers/cipher_common.h"
 
 static int sar_be_eq(const uint8_t *a, const uint8_t *b, uint32_t n);
+
+static void iv_clear(sar_iv_out_t *iv) {
+    if (!iv) return;
+    for (int i = 0; i < SEMANTICS_AR_IV_MAX; i++) iv->bytes[i] = 0;
+    iv->length = 0;
+    iv->tag = 0;
+}
 
 void gf128_mul_alpha(uint8_t *tweak) {
     uint8_t carry = 0;
@@ -25,7 +33,8 @@ static int generic_ecb(const block_cipher_ctx_t *bc, const uint8_t *pt,
 }
 
 static int generic_cbc(const block_cipher_ctx_t *bc, const uint8_t *pt,
-                       const uint8_t *ct, uint32_t len) {
+                       const uint8_t *ct, uint32_t len, uint64_t file_offset,
+                       sar_iv_out_t *iv) {
     uint32_t bs = bc->block_size;
     uint8_t dec[16];
     for (uint32_t s = 0; s < bs && s + 2 * bs <= len; s++) {
@@ -33,29 +42,46 @@ static int generic_cbc(const block_cipher_ctx_t *bc, const uint8_t *pt,
             int match = 1;
             for (uint32_t i = 0; i < bs; i++)
                 if ((dec[i] ^ ct[s + i]) != pt[s + bs + i]) { match = 0; break; }
-            if (match) return 1;
+            if (match) {
+                if (iv && file_offset == 0 && bc->decrypt(bc->ctx, ct, dec)) {
+                    for (uint32_t i = 0; i < bs; i++)
+                        iv->bytes[i] = (uint8_t)(dec[i] ^ pt[i]);
+                    iv->length = (uint8_t)bs;
+                }
+                return 1;
+            }
         }
     }
     return 0;
 }
 
 static int generic_cfb(const block_cipher_ctx_t *bc, const uint8_t *pt,
-                       const uint8_t *ct, uint32_t len) {
+                       const uint8_t *ct, uint32_t len, uint64_t file_offset,
+                       sar_iv_out_t *iv) {
     uint32_t bs = bc->block_size;
-    uint8_t enc[16];
+    uint8_t enc[16], seed[16];
     for (uint32_t s = 0; s < bs && s + 2 * bs <= len; s++) {
         if (bc->encrypt(bc->ctx, ct + s, enc)) {
             int match = 1;
             for (uint32_t i = 0; i < bs; i++)
                 if ((enc[i] ^ ct[s + bs + i]) != pt[s + bs + i]) { match = 0; break; }
-            if (match) return 1;
+            if (match) {
+                if (iv && file_offset == 0) {
+                    for (uint32_t i = 0; i < bs; i++)
+                        seed[i] = (uint8_t)(pt[i] ^ ct[i]);
+                    if (bc->decrypt(bc->ctx, seed, iv->bytes))
+                        iv->length = (uint8_t)bs;
+                }
+                return 1;
+            }
         }
     }
     return 0;
 }
 
 static int generic_ofb(const block_cipher_ctx_t *bc, const uint8_t *pt,
-                       const uint8_t *ct, uint32_t len) {
+                       const uint8_t *ct, uint32_t len, uint64_t file_offset,
+                       sar_iv_out_t *iv) {
     uint32_t bs = bc->block_size;
     uint8_t ks0[16], ks1[16], enc[16];
     for (uint32_t s = 0; s < bs && s + 2 * bs <= len; s++) {
@@ -63,14 +89,27 @@ static int generic_ofb(const block_cipher_ctx_t *bc, const uint8_t *pt,
             ks0[i] = (uint8_t)(pt[s + i] ^ ct[s + i]);
             ks1[i] = (uint8_t)(pt[s + bs + i] ^ ct[s + bs + i]);
         }
-        if (bc->encrypt(bc->ctx, ks0, enc))
-            if (sar_be_eq(enc, ks1, bs)) return 1;
+        if (bc->encrypt(bc->ctx, ks0, enc) && sar_be_eq(enc, ks1, bs)) {
+            if (iv) {
+                uint64_t blk = (file_offset + s) / bs;
+                uint8_t cur[16], prev[16];
+                for (uint32_t i = 0; i < bs; i++) cur[i] = ks0[i];
+                for (uint64_t step = 0; step < blk; step++) {
+                    if (!bc->decrypt(bc->ctx, cur, prev)) return 1;
+                    for (uint32_t i = 0; i < bs; i++) cur[i] = prev[i];
+                }
+                if (bc->decrypt(bc->ctx, cur, iv->bytes))
+                    iv->length = (uint8_t)bs;
+            }
+            return 1;
+        }
     }
     return 0;
 }
 
 static int generic_ctr(const block_cipher_ctx_t *bc, const uint8_t *pt,
-                       const uint8_t *ct, uint32_t len) {
+                       const uint8_t *ct, uint32_t len, uint64_t file_offset,
+                       sar_iv_out_t *iv) {
     uint32_t bs = bc->block_size;
     uint8_t ks0[16], ks1[16], c0[16], c1[16];
     for (uint32_t s = 0; s < bs && s + 2 * bs <= len; s++) {
@@ -80,35 +119,21 @@ static int generic_ctr(const block_cipher_ctx_t *bc, const uint8_t *pt,
         }
         if (!bc->decrypt(bc->ctx, ks0, c0)) continue;
         if (!bc->decrypt(bc->ctx, ks1, c1)) continue;
-        if (bs == 16) {
-            if (sar_be_eq(c0, c1, 12)) {
-                uint32_t v0 = sar_be32(c0 + 12), v1 = sar_be32(c1 + 12);
-                if (v1 == v0 + 1) return 1;
+        for (int t = 0; t < SAR_CTR_LAYOUT_COUNT; t++) {
+            const sar_ctr_layout_t *L = &SAR_CTR_LAYOUTS[t];
+            if (L->block_size != bs) continue;
+            if (!sar_ctr_const_equal(c0, c1, L)) continue;
+            uint64_t v0 = sar_ctr_field_read(c0, L);
+            uint64_t v1 = sar_ctr_field_read(c1, L);
+            if (((v0 + 1) & sar_ctr_field_mask(L->width)) != v1) continue;
+            if (iv) {
+                uint64_t blk = (file_offset + s) / bs;
+                for (uint32_t i = 0; i < bs; i++) iv->bytes[i] = c0[i];
+                sar_ctr_field_write(iv->bytes, L, v0 - blk);
+                iv->length = (uint8_t)bs;
+                iv->tag = (uint8_t)(t + 1);
             }
-            if (sar_be_eq(c0, c1, 8)) {
-                uint64_t v0 = sar_le64(c0 + 8), v1 = sar_le64(c1 + 8);
-                if (v1 == v0 + 1) return 1;
-                v0 = sar_be64(c0 + 8); v1 = sar_be64(c1 + 8);
-                if (v1 == v0 + 1) return 1;
-            }
-            if (c0[0] == c1[0] && sar_be_eq(c0 + 1, c1 + 1, 13)) {
-                uint16_t v0 = (uint16_t)(((uint16_t)c0[14] << 8) | c0[15]);
-                uint16_t v1 = (uint16_t)(((uint16_t)c1[14] << 8) | c1[15]);
-                if (v1 == (uint16_t)(v0 + 1)) return 1;
-            }
-            { uint64_t lo0 = sar_le64(c0), lo1 = sar_le64(c1),
-                       hi0 = sar_le64(c0 + 8), hi1 = sar_le64(c1 + 8);
-              if (lo1 == lo0 + 1 && hi0 == hi1) return 1; }
-            { uint64_t hi0 = sar_be64(c0), hi1 = sar_be64(c1),
-                       lo0 = sar_be64(c0 + 8), lo1 = sar_be64(c1 + 8);
-              if (lo1 == lo0 + 1 && hi0 == hi1) return 1; }
-        } else if (bs == 8) {
-            if (sar_be_eq(c0, c1, 4)) {
-                uint32_t v0 = sar_be32(c0 + 4), v1 = sar_be32(c1 + 4);
-                if (v1 == v0 + 1) return 1;
-            }
-            { uint64_t v0 = sar_le64(c0), v1 = sar_le64(c1); if (v1 == v0 + 1) return 1; }
-            { uint64_t v0 = sar_be64(c0), v1 = sar_be64(c1); if (v1 == v0 + 1) return 1; }
+            return 1;
         }
     }
     return 0;
@@ -122,13 +147,15 @@ static int sar_be_eq(const uint8_t *a, const uint8_t *b, uint32_t n) {
 
 int engine_try_block_modes(const block_cipher_ctx_t *bc,
                            const uint8_t *pt, const uint8_t *ct,
-                           uint32_t len, uint32_t *out_mode) {
+                           uint32_t len, uint64_t file_offset,
+                           uint32_t *out_mode, sar_iv_out_t *out_iv) {
+    iv_clear(out_iv);
     if (generic_ecb(bc, pt, ct, len)) { *out_mode = SAR_MODE_ECB; return 1; }
     if (len >= 2 * bc->block_size) {
-        if (generic_cbc(bc, pt, ct, len)) { *out_mode = SAR_MODE_CBC; return 1; }
-        if (generic_cfb(bc, pt, ct, len)) { *out_mode = SAR_MODE_CFB; return 1; }
-        if (generic_ofb(bc, pt, ct, len)) { *out_mode = SAR_MODE_OFB; return 1; }
-        if (generic_ctr(bc, pt, ct, len)) { *out_mode = SAR_MODE_CTR; return 1; }
+        if (generic_cbc(bc, pt, ct, len, file_offset, out_iv)) { *out_mode = SAR_MODE_CBC; return 1; }
+        if (generic_cfb(bc, pt, ct, len, file_offset, out_iv)) { *out_mode = SAR_MODE_CFB; return 1; }
+        if (generic_ofb(bc, pt, ct, len, file_offset, out_iv)) { *out_mode = SAR_MODE_OFB; return 1; }
+        if (generic_ctr(bc, pt, ct, len, file_offset, out_iv)) { *out_mode = SAR_MODE_CTR; return 1; }
     }
     return 0;
 }
