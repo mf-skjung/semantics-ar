@@ -93,8 +93,19 @@ static sar_comm_status_t sar_comm_recv_message(sar_comm_client_t *client,
     if (FAILED(hr))
         return SAR_COMM_ERR_TRANSPORT;
 
-    if (sar_msg_validate(msg.payload, capacity, &type) != SAR_MSG_OK)
-        return SAR_COMM_ERR_PROTOCOL;
+    {
+        semantics_ar_msg_header_t hdr;
+        uint32_t mlen;
+
+        if (capacity < sizeof(hdr))
+            return SAR_COMM_ERR_PROTOCOL;
+        memcpy(&hdr, msg.payload, sizeof(hdr));
+        mlen = hdr.message_length;
+        if (mlen > capacity)
+            return SAR_COMM_ERR_PROTOCOL;
+        if (sar_msg_validate(msg.payload, mlen, &type) != SAR_MSG_OK)
+            return SAR_COMM_ERR_PROTOCOL;
+    }
 
     {
         uint32_t declared = sar_msg_expected_length(type);
