@@ -1,67 +1,57 @@
 #include "recovery.h"
 
 #include <windows.h>
+#include <stdio.h>
 #include <string.h>
 
+#include "sar_recover.h"
 #include "sar_recover_file.h"
 
-int32_t sar_recovery_run(const sar_recovery_input_t *input,
-                         uint32_t *out_files_recovered)
+int32_t sar_recovery_run(sar_comm_client_t *client,
+                         const uint8_t *key_id,
+                         const wchar_t *target_path,
+                         uint64_t *out_bytes)
 {
-    sar_recover_file_result_t result;
-    sar_recover_status_t      status;
-    const sar_recovery_sample_t *confirm;
+    semantics_ar_recovery_exec_t   req;
+    semantics_ar_recovery_result_t res;
+    sar_comm_status_t              cs;
+    char target_utf8[SEMANTICS_AR_PROTO_PATH_MAX * 4];
+    char temp_utf8[SEMANTICS_AR_PROTO_PATH_MAX * 4 + 16];
+    uint32_t i;
 
-    if (out_files_recovered)
-        *out_files_recovered = 0;
-
-    if (!input || !input->target_path)
+    if (out_bytes)
+        *out_bytes = 0;
+    if (!client || !key_id || !target_path)
         return SAR_RECOVER_INVALID;
 
-    confirm = input->has_confirm_sample ? &input->confirm_sample : NULL;
+    memset(&req, 0, sizeof(req));
+    req.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    req.header.message_type = SEMANTICS_AR_MSG_RECOVERY_EXEC;
+    req.header.message_length = (uint32_t)sizeof(req);
+    memcpy(req.key_id, key_id, SEMANTICS_AR_KEY_ID_SIZE);
+    for (i = 0; i + 1 < SEMANTICS_AR_PROTO_PATH_MAX && target_path[i] != 0; i++)
+        req.target_path[i] = (uint16_t)target_path[i];
+    req.target_path[i] = 0;
 
-    memset(&result, 0, sizeof(result));
-    status = sar_recover_file(input->target_path, &input->key_material,
-                              &input->geometry, confirm, &result);
+    memset(&res, 0, sizeof(res));
+    cs = sar_comm_send_recv(client, &req, (uint32_t)sizeof(req),
+                            &res, (uint32_t)sizeof(res),
+                            SEMANTICS_AR_MSG_RECOVERY_RESULT);
+    if (cs != SAR_COMM_OK)
+        return SAR_RECOVER_INVALID;
+    if (res.status != SAR_RECOVER_OK)
+        return res.status;
 
-    if (status == SAR_RECOVER_OK && out_files_recovered)
-        *out_files_recovered = 1;
+    if (WideCharToMultiByte(CP_UTF8, 0, target_path, -1, target_utf8,
+                            (int)sizeof(target_utf8), NULL, NULL) <= 0)
+        return SAR_RECOVER_INVALID;
+    if (_snprintf_s(temp_utf8, sizeof(temp_utf8), _TRUNCATE, "%s.sarrectmp", target_utf8) < 0)
+        return SAR_RECOVER_INVALID;
 
-    return (int32_t)status;
-}
+    if (sar_atomic_replace_file(target_utf8, temp_utf8) != 0)
+        return SAR_RECOVER_INVALID;
 
-void sar_recovery_handle_request(const semantics_ar_recovery_request_t *req,
-                                 sar_comm_client_t *client,
-                                 const sar_recovery_dispatch_t *dispatch)
-{
-    semantics_ar_recovery_done_t done;
-    sar_recovery_input_t         input;
-    int32_t                      result = SAR_RECOVER_INVALID;
-    uint32_t                     files = 0;
-
-    if (!req || !client)
-        return;
-
-    memset(&done, 0, sizeof(done));
-    done.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
-    done.header.message_type = SEMANTICS_AR_MSG_RECOVERY_DONE;
-    done.header.message_length = (uint32_t)sizeof(done);
-    memcpy(done.key_id, req->key_id, SEMANTICS_AR_KEY_ID_SIZE);
-
-    if (dispatch && dispatch->resolve) {
-        memset(&input, 0, sizeof(input));
-        memcpy(input.key_id, req->key_id, SEMANTICS_AR_KEY_ID_SIZE);
-
-        if (dispatch->resolve(req->key_id, &input, dispatch->resolve_ctx) == 0)
-            result = sar_recovery_run(&input, &files);
-        else
-            result = SAR_RECOVER_DECLINED_KEY;
-
-        SecureZeroMemory(&input, sizeof(input));
-    }
-
-    done.result = result;
-    done.files_recovered = files;
-
-    sar_comm_send(client, &done, (uint32_t)sizeof(done));
+    if (out_bytes)
+        *out_bytes = res.bytes_recovered;
+    return SAR_RECOVER_OK;
 }

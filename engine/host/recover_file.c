@@ -93,6 +93,30 @@ static int sar_rename_posix(const wchar_t *temp, const wchar_t *target) {
     return ok ? 0 : -1;
 }
 
+static int sar_replace_w(const wchar_t *wtarget, const wchar_t *wrepl) {
+    if (ReplaceFileW(wtarget, wrepl, NULL,
+                     REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
+                     NULL, NULL))
+        return 0;
+    if (GetLastError() == ERROR_UNABLE_TO_MOVE_REPLACEMENT)
+        return 0;
+    return sar_rename_posix(wrepl, wtarget);
+}
+
+int sar_atomic_replace_file(const char *target_path, const char *replacement_path) {
+    wchar_t *wtarget = sar_widen(target_path);
+    wchar_t *wrepl = sar_widen(replacement_path);
+    int result = -1;
+    if (wtarget && wrepl) {
+        result = sar_replace_w(wtarget, wrepl);
+        if (result != 0)
+            DeleteFileW(wrepl);
+    }
+    free(wtarget);
+    free(wrepl);
+    return result;
+}
+
 static int sar_write_replace(const char *path, const uint8_t *data, uint64_t size) {
     wchar_t *wpath = sar_widen(path);
     if (!wpath)
@@ -139,18 +163,9 @@ static int sar_write_replace(const char *path, const uint8_t *data, uint64_t siz
     }
     CloseHandle(h);
 
-    int result = -1;
-    if (ReplaceFileW(wpath, wtemp, NULL,
-                     REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS,
-                     NULL, NULL)) {
-        result = 0;
-    } else if (GetLastError() == ERROR_UNABLE_TO_MOVE_REPLACEMENT) {
-        result = 0;
-    } else if (sar_rename_posix(wtemp, wpath) == 0) {
-        result = 0;
-    } else {
+    int result = sar_replace_w(wpath, wtemp);
+    if (result != 0)
         DeleteFileW(wtemp);
-    }
 
     free(wpath);
     free(wtemp);
@@ -200,6 +215,15 @@ static int sync_parent_dir(const char *path) {
     int r = fsync(fd);
     close(fd);
     return r;
+}
+
+int sar_atomic_replace_file(const char *target_path, const char *replacement_path) {
+    if (rename(replacement_path, target_path) != 0) {
+        unlink(replacement_path);
+        return -1;
+    }
+    sync_parent_dir(target_path);
+    return 0;
 }
 
 static int sar_write_replace(const char *path, const uint8_t *data, uint64_t size) {

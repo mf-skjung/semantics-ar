@@ -16,4 +16,6 @@ sar_recover_status_t sar_recover_file(const char *path,
                                       const sar_recovery_sample_t *confirm_sample,
                                       sar_recover_file_result_t *out);
 
+int sar_atomic_replace_file(const char *target_path, const char *replacement_path);
+
 #endif

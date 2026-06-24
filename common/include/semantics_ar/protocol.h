@@ -9,8 +9,8 @@
 #define SAR_COMM_PORT_NAME L"\\SemanticsArPort"
 
 #define SEMANTICS_AR_MSG_VERDICT_NOTIFY   1
-#define SEMANTICS_AR_MSG_RECOVERY_REQUEST 2
-#define SEMANTICS_AR_MSG_RECOVERY_DONE    3
+#define SEMANTICS_AR_MSG_RECOVERY_EXEC    2
+#define SEMANTICS_AR_MSG_RECOVERY_RESULT  3
 #define SEMANTICS_AR_MSG_SET_MODE         4
 #define SEMANTICS_AR_MSG_WHITELIST_ADD    5
 #define SEMANTICS_AR_MSG_WHITELIST_REMOVE 6
@@ -49,14 +49,14 @@ typedef struct {
 typedef struct {
     semantics_ar_msg_header_t header;
     uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
-} semantics_ar_recovery_request_t;
+    uint16_t target_path[SEMANTICS_AR_PROTO_PATH_MAX];
+} semantics_ar_recovery_exec_t;
 
 typedef struct {
     semantics_ar_msg_header_t header;
-    uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
-    int32_t  result;
-    uint32_t files_recovered;
-} semantics_ar_recovery_done_t;
+    int32_t  status;
+    uint64_t bytes_recovered;
+} semantics_ar_recovery_result_t;
 
 typedef struct {
     semantics_ar_msg_header_t header;

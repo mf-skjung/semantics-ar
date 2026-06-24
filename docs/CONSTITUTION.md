@@ -219,6 +219,19 @@ There are exactly two recovery sources, and neither is a backup of the original:
 Recovery is: decrypt the on-disk ciphertext with the captured key, write the
 plaintext back. No original is ever preserved to disk or held as a recovery copy.
 
+**[INVARIANT] III.1.2 — Recovery decrypts where the key already lives: in the kernel.**
+Recovery is operator-initiated. The captured key never leaves the kernel pool to
+perform it. The minifilter reads the on-disk ciphertext, decrypts it in kernel with the
+key it holds (VII.1.1), and writes the plaintext to a temporary file beside the target;
+the user-mode service then performs the final metadata-preserving atomic replacement of
+the target by that temporary file. The service drives recovery by key identifier and
+target path only — it never receives the key and never receives the recovered plaintext.
+The communication port therefore carries, for recovery, only the key identifier, the
+target path, and a status; never key material and never plaintext. No recovery step
+relaxes the privilege boundary of VII.1.1, and the atomic replacement preserves the
+target's security descriptor, alternate streams, object identifier, and creation time so
+recovery restores the file, not merely its bytes.
+
 > **Why this is the consistent endpoint, not a cost-saving shortcut.** A preserved
 > original could only save one case a captured key cannot: a file whose key was
 > never captured at any of its writes. But the verdict "never captured" never
@@ -501,9 +514,11 @@ under that sealed key and an attacker without kernel-code execution cannot read
 captured keys; where the platform cannot seal, the on-disk copy is integrity-protected
 but its confidentiality descends to the kernel-line boundary and the descent is
 recorded (VII.5). The live in-kernel copy is confidential by the privilege boundary
-regardless. The MAC key is held in kernel pool; it exists in user mode only inside the
-single bounded boot-time unsealing window of VII.1.2, and where the platform cannot
-seal it its persisted secrecy descends to that same boundary and is recorded.
+regardless, and no operation exports a captured key to user mode — recovery itself
+decrypts in kernel (III.1.2). The MAC key is held in kernel pool; it exists in user mode
+only inside the single bounded boot-time unsealing window of VII.1.2, and where the
+platform cannot seal it its persisted secrecy descends to that same boundary and is
+recorded.
 
 **[DECISION] VII.1.2.** The seal is rooted in the platform, never synthesized in
 software. A Windows kernel driver has no TPM access — the TPM is reached only through
@@ -659,6 +674,9 @@ An implementation is constitutional iff all hold.
 **Recovery (Part III)**
 - [ ] No original is preserved as a recovery source; recovery is decryption of the
       on-disk ciphertext with the captured key (III.1).
+- [ ] Recovery decrypts in kernel; neither the captured key nor the recovered plaintext is
+      exported to user mode; the port carries only key_id + target path + status, and the
+      writeback is a metadata-preserving atomic replace (III.1.2).
 - [ ] The only transient is the in-memory Oracle input; under pressure it is dropped (a
       missed attempt, confirmed limit), never spilled to disk and never held on the IRP
       (III.2).

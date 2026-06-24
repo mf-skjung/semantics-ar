@@ -4,7 +4,6 @@
 
 #include "commclient.h"
 #include "control.h"
-#include "recovery.h"
 #include "identity.h"
 
 #define SAR_SERVICE_NAME L"SemanticsAr"
@@ -16,20 +15,9 @@ typedef struct {
     sar_comm_client_t     comm;
     HANDLE                control_thread;
     HANDLE                stop_event;
-    sar_recovery_dispatch_t recovery;
 } sar_service_t;
 
 static sar_service_t g_service;
-
-static int sar_recovery_resolve_stub(const uint8_t *key_id,
-                                     sar_recovery_input_t *out,
-                                     void *ctx)
-{
-    (void)key_id;
-    (void)out;
-    (void)ctx;
-    return -1;
-}
 
 static void sar_set_status(DWORD state, DWORD exit_code, DWORD wait_hint)
 {
@@ -58,13 +46,6 @@ static void sar_on_verdict(const semantics_ar_verdict_notify_t *notify, void *ct
     if (!notify)
         return;
     InterlockedIncrement64((volatile LONG64 *)&g_service.comm.captured_key_count);
-}
-
-static void sar_on_recovery(const semantics_ar_recovery_request_t *req,
-                            sar_comm_client_t *client, void *ctx)
-{
-    const sar_recovery_dispatch_t *dispatch = (const sar_recovery_dispatch_t *)ctx;
-    sar_recovery_handle_request(req, client, dispatch);
 }
 
 static DWORD WINAPI sar_control_handler(DWORD control, DWORD event_type,
@@ -147,16 +128,12 @@ static void WINAPI sar_service_main(DWORD argc, LPWSTR *argv)
         return;
     }
 
-    g_service.recovery.resolve = sar_recovery_resolve_stub;
-    g_service.recovery.resolve_ctx = NULL;
-
     g_service.control_thread = sar_control_listener_start(&g_service.comm);
 
     {
         sar_comm_dispatch_t dispatch;
         dispatch.on_verdict = sar_on_verdict;
-        dispatch.on_recovery = sar_on_recovery;
-        dispatch.ctx = &g_service.recovery;
+        dispatch.ctx = NULL;
         sar_comm_run(&g_service.comm, &dispatch);
     }
 

@@ -28,13 +28,9 @@ typedef struct {
 
 typedef void (*sar_comm_verdict_cb)(const semantics_ar_verdict_notify_t *notify,
                                     void *ctx);
-typedef void (*sar_comm_recovery_cb)(const semantics_ar_recovery_request_t *req,
-                                     sar_comm_client_t *client,
-                                     void *ctx);
 
 typedef struct {
     sar_comm_verdict_cb  on_verdict;
-    sar_comm_recovery_cb on_recovery;
     void                *ctx;
 } sar_comm_dispatch_t;
 

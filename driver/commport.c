@@ -1,6 +1,7 @@
 #include "commport.h"
 #include "state.h"
 #include "ntsystem.h"
+#include "recovery.h"
 
 #include <bcrypt.h>
 
@@ -339,6 +340,40 @@ static NTSTATUS SarHandleGetStatus(_Inout_ PSAR_COMM Comm,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandleRecoveryExec(_Inout_ PSAR_COMM Comm,
+                                      _In_ const semantics_ar_recovery_exec_t *Request,
+                                      _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                      _In_ ULONG OutputBufferLength,
+                                      _Out_ PULONG ReturnLength)
+{
+    semantics_ar_recovery_exec_t req;
+    semantics_ar_recovery_result_t reply;
+    UINT64 bytes = 0;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlCopyMemory(&req, Request, sizeof(req));
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_RECOVERY_RESULT;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.status = SarRecoveryExecute(&req, &bytes);
+    reply.bytes_recovered = bytes;
+
+    RtlSecureZeroMemory(&req, sizeof(req));
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
                               _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
                               _In_ ULONG InputBufferLength,
@@ -369,6 +404,10 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
     case SEMANTICS_AR_MSG_GET_STATUS:
         status = SarHandleGetStatus(comm, (const semantics_ar_get_status_t *)InputBuffer,
                                     OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_RECOVERY_EXEC:
+        status = SarHandleRecoveryExec(comm, (const semantics_ar_recovery_exec_t *)InputBuffer,
+                                       OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
         break;
     case SEMANTICS_AR_MSG_SET_MODE:
         if (!sar_handshake_authenticated(&comm->handshake)) {

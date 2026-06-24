@@ -15,6 +15,7 @@ set(SAR_DRIVER_SOURCES
     capture.c
     keystore_persist.c
     commport.c
+    recovery.c
     state.c
     processnotify.c
     feature.c
@@ -29,6 +30,7 @@ set(SAR_DRIVER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/gate.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/keystore.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/keystore_mgr.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/recover.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/sha256.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/aes.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/des.c

@@ -78,10 +78,10 @@ static void test_msg_validation(void) {
 
     CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_VERDICT_NOTIFY)
               == sizeof(semantics_ar_verdict_notify_t), "expected len verdict");
-    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_RECOVERY_REQUEST)
-              == sizeof(semantics_ar_recovery_request_t), "expected len rec req");
-    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_RECOVERY_DONE)
-              == sizeof(semantics_ar_recovery_done_t), "expected len rec done");
+    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_RECOVERY_EXEC)
+              == sizeof(semantics_ar_recovery_exec_t), "expected len rec exec");
+    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_RECOVERY_RESULT)
+              == sizeof(semantics_ar_recovery_result_t), "expected len rec result");
     CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_WHITELIST_ADD)
               == sizeof(semantics_ar_whitelist_control_t), "expected len wl add");
     CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_GET_STATUS)

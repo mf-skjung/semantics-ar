@@ -4,6 +4,7 @@
 #include <sddl.h>
 
 #include "semantics_ar/protocol.h"
+#include "recovery.h"
 
 typedef struct {
     sar_comm_client_t *client;
@@ -96,6 +97,21 @@ int sar_control_apply(sar_comm_client_t *client,
 
         cs = sar_control_send_whitelist(client, cmd->op, &eval.identity);
         reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
+        break;
+    }
+
+    case SAR_CTL_OP_RECOVER: {
+        wchar_t  path[SEMANTICS_AR_PROTO_PATH_MAX];
+        uint64_t bytes = 0;
+        uint32_t i;
+
+        for (i = 0; i + 1 < SEMANTICS_AR_PROTO_PATH_MAX && cmd->image_path[i] != 0; i++)
+            path[i] = (wchar_t)cmd->image_path[i];
+        path[i] = L'\0';
+
+        reply->result = sar_recovery_run(client, cmd->key_id, path, &bytes);
+        reply->verdict = (reply->result == 0) ? SAR_IDENTITY_VERDICT_VERIFIED
+                                              : SAR_IDENTITY_VERDICT_ERROR;
         break;
     }
 

@@ -270,12 +270,6 @@ sar_comm_status_t sar_comm_run(sar_comm_client_t *client,
                     (const semantics_ar_verdict_notify_t *)rxbuf,
                     dispatch->ctx);
             break;
-        case SEMANTICS_AR_MSG_RECOVERY_REQUEST:
-            if (dispatch->on_recovery)
-                dispatch->on_recovery(
-                    (const semantics_ar_recovery_request_t *)rxbuf,
-                    client, dispatch->ctx);
-            break;
         default:
             break;
         }

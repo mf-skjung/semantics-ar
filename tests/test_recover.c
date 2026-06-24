@@ -522,6 +522,33 @@ static void no_clobber(void) {
     remove(path);
 }
 
+static void atomic_replace(void) {
+    printf("[atomic replace: kernel-written temp swapped onto target by path only]\n");
+    char target[128], repl[160];
+    snprintf(target, sizeof target, "sar_repl_%d.bin", (int)sar_getpid());
+    snprintf(repl, sizeof repl, "%s.sarrectmp", target);
+
+    static const char oldb[32] = "OLD-CONTENT-0123456789ABCDEF012";
+    static const char newb[32] = "NEW-RECOVERED-PLAINTEXT-9876543";
+
+    FILE *f = fopen(target, "wb"); fwrite(oldb, 1, 32, f); fclose(f);
+    f = fopen(repl, "wb"); fwrite(newb, 1, 32, f); fclose(f);
+
+    int rc = sar_atomic_replace_file(target, repl);
+
+    uint8_t disk[32];
+    int swapped = (read_file_bytes(target, disk, 32) == 0) && (memcmp(disk, newb, 32) == 0);
+    FILE *rf = fopen(repl, "rb");
+    int repl_consumed = (rf == NULL);
+    if (rf) fclose(rf);
+
+    CHECK(rc == 0 && swapped && repl_consumed,
+          "replacement swapped onto target name, replacement file consumed");
+
+    remove(target);
+    remove(repl);
+}
+
 static void absorbed_kats(void) {
     printf("[absorbed published decrypt-direction KATs (RFC / OpenSSL cross-checked)]\n");
     uint8_t key[32], pt[16], ct[16], out[16];
@@ -601,6 +628,7 @@ int main(void) {
     block0_limit();
     slice_aware();
     no_clobber();
+    atomic_replace();
     absorbed_kats();
     printf("\nrecover: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

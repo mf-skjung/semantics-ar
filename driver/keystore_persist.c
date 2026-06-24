@@ -533,6 +533,26 @@ int SarKeystoreAppend(_Inout_ PSAR_KEYSTORE Keystore,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+int SarKeystoreLookup(_In_ PSAR_KEYSTORE Keystore,
+                      _In_reads_bytes_(SEMANTICS_AR_KEY_ID_SIZE) const UCHAR *KeyId,
+                      _Out_ semantics_ar_keystore_record_t *Record)
+{
+    ULONG64 i;
+    int found = 0;
+
+    FltAcquirePushLockShared(&Keystore->lock);
+    for (i = 0; i < Keystore->record_count; i++) {
+        if (RtlEqualMemory(Keystore->records[i].key_id, KeyId, SEMANTICS_AR_KEY_ID_SIZE)) {
+            RtlCopyMemory(Record, &Keystore->records[i], sizeof(*Record));
+            found = 1;
+            break;
+        }
+    }
+    FltReleasePushLock(&Keystore->lock);
+    return found;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarKeystoreDestroy(_Inout_ PSAR_KEYSTORE Keystore)
 {
     if (Keystore == NULL)

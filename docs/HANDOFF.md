@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — Unit 6 service build + recovery-backend + contract reconciliation (2026-06-24)
+# Handoff — semantics-ar Windows realization — Unit 4 recovery wiring (kernel-side decrypt, optimal split) (2026-06-24)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
@@ -155,6 +155,36 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
   (`ReplyLength` is the *expected reply* size, zero for fire-and-forget) — inbound length now comes from the
   app header via `sar_msg_validate`.
 
+**Unit 4 decisions (external-validated against primary Microsoft sources + a focused re-verification
+pass; not derivable from code):**
+- **"Design C" — recovery decrypts in the kernel; the optimal split.** Cost was declared no object; the
+  theoretically-best secrecy posture keeps both the captured key *and* the recovered plaintext inside the
+  kernel. The kernel reads the ciphertext, decrypts with its in-pool key, and writes the plaintext temp;
+  the user-mode service handles **paths only** and does the `ReplaceFileW` swap (whose free DACL/ADS/
+  object-id/creation-time preservation is the reason file I/O stays in user mode). Rejected **Design A**
+  (decrypt in the PPL service, key shipped over the port) and full **Design B** (kernel also does the
+  atomic replace + attribute copy). Design C dominates both: it needs no kernel re-implementation of
+  `ReplaceFileW`'s attribute preservation, and it **preserves** the Slice-1 "no plaintext keys cross the
+  port" contract instead of revising it — the port carries only key_id + target path + status.
+- **PPL is not a secrecy boundary against admin (confirmed), but this does NOT force Design B over A — and
+  Design C moots it.** MSRC's *Windows Security Servicing Criteria* (read directly): PPL is defense-in-depth,
+  "Intent to service? **No**," and its stated goal guards only against **non-administrative** non-PPL
+  processes; admin is part of the TCB (admin→kernel is explicitly **not** a security boundary). So the only
+  threat that distinguished A from B (admin reads the PPL service's memory) is one Microsoft never scoped
+  PPL to defend *and* one Constitution 0.3/VII.4/VII.5 already treat as out-of-scope/recorded-descent.
+  The deep-research framing of "Design A premise collapsed → switch to B" was **overstated**; Design C
+  sidesteps the question by never exporting the key at all.
+- **POSIX-semantics rename DOES win the held-open race (deep-research's 0-3 refutation was a verification
+  artifact).** Read directly from MS-FSCC `FileRenameInformationEx`: `FILE_RENAME_POSIX_SEMANTICS` +
+  `REPLACE_IF_EXISTS` — "Existing handles to the replaced file continue to be valid. Any subsequent opens
+  of the target name will open the renamed file, not the replaced file." So `sar_atomic_replace_file`'s
+  fallback correctly replaces a target a still-running ransomware holds open (NTFS; ReFS/SMB are VM items).
+- **ReplaceFile has no write-through flag** (`REPLACEFILE_WRITE_THROUGH` is documented "not supported");
+  durability rides `FlushFileBuffers` (kernel `ZwFlushBuffersFile` on the temp) + NTFS journaling for the
+  rename. ReplaceFile preserves creation time but **not** last-write/last-access — acceptable for recovery.
+- **METHOD_NEITHER TOCTOU:** the recovery handler snapshots the request (`RtlCopyMemory` into a kernel
+  local) before validate-and-use; the request is handshake-authenticated like `SET_MODE`.
+
 ## 4. Remaining work (ordered; each: boundary / definition-of-done / deps)
 
 > **Unit 2 (Capture path) is DONE this session** — freestanding core host-verified
@@ -183,24 +213,36 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
    (PPL) for the boot-time unseal window. *Remaining for Unit 3-Core itself:* only the VM behavioral
    validations in `SLICE6_DESIGN.md` (boot-load timing, atomic-write power-loss, self-I/O skip) — it
    already compiles + links against the real WDK.
-2. **Windows recovery wiring (Unit 4).** *Boundary:* the comm-port `RECOVERY_REQUEST` →
-   kernel-keystore key-material read → the existing `engine/host` recovery core →
-   `RECOVERY_DONE`, plus volume enumeration, ReFS/same-volume specifics, large-file streaming,
-   and residue clearing. The service relay end is the chassis (done); the **named typed boundary**
-   where kernel key material feeds the recovery core is `sar_recovery_resolver_fn` /
-   `sar_recovery_input_t` in `service/recovery.h` (the service installs a declining stub until the
-   kernel keystore-read path is wired — it never fabricates keys). **Engine prerequisite — DONE
-   (Unit 6):** `sar_recover_file` now has a Win32 atomic-write backing (`ReplaceFileW` + POSIX-rename
-   fallback) and `semantics_ar_recovery_host` builds on Windows, host-verified by `test_recover`.
-   **Remaining for Unit 4:** a comm-port/IOCTL message carrying `key_id` → an in-kernel keystore-read
-   that returns the key material (algorithm/mode/iv/params, never plaintext over the wire unless the
-   Slice-1 contract is revisited — note the current `RECOVERY_REQUEST` carries only `key_id`, so the
-   key material must reach the service's resolver by a defined path), the resolver replacing the
-   stub, plus volume enumeration, ReFS/same-volume specifics, large-file **streaming** (the Win32
-   backend currently reads the whole file into memory, adequate for the host test, a named streaming
-   follow-on for multi-GB), and residue clearing. *DoD:* an operator recovery request recovers real
-   files end-to-end on Windows; no-clobber holds. *Deps:* Units 2 (done), 3 (Core done), and the
-   Unit 6 service build (done).
+2. **Windows recovery wiring (Unit 4) — CORE DONE (host-verified + compile/link-verified, unrun).**
+   The optimal split ("Design C", recorded in §3) is implemented end-to-end for the dominant
+   full-file provenance case: operator → service control pipe (`SAR_CTL_OP_RECOVER {key_id, target}`)
+   → `RECOVERY_EXEC {key_id, target_path}` over the authenticated comm port (send-recv, handshake-gated)
+   → driver `SarRecoveryExecute` (`driver/recovery.c`): `SarKeystoreLookup` by key_id → open the
+   on-disk ciphertext (`\??\<target>`) → **decrypt in kernel** with the freestanding engine
+   (`sar_recover_buffer`, now compiled into the `.sys`) → write plaintext to `<target>.sarrectmp` →
+   `RECOVERY_RESULT {status, bytes}` → service `sar_atomic_replace_file` does the metadata-preserving
+   `ReplaceFileW`/POSIX-rename swap. **The captured key and the recovered plaintext never enter a
+   user-mode process; the port carries only key_id + path + status** (Slice-1 "no keys over the port"
+   contract is *preserved*, not revised — Design C made the revision unnecessary). Host-verified:
+   `test_recover` 79/0 incl. the new `atomic_replace` test; service + control + engine build `/W4 /WX`;
+   the driver compiles+links against the real WDK 26100 (`COMPILE_OK`/`LINK_OK`, `semantics_ar.sys`
+   ≈121 KB) with `driver/recovery.c` + `engine/src/recover.c` added to the build.
+   **Named follow-ons (deferred by budget, each boundary/DoD below; none half-edited):**
+   (a) **large-file streaming** — the kernel reads the whole file into paged pool under a recorded
+   `SAR_RECOVERY_MAX_BYTES` (64 MiB) cap; files over it return `SAR_RECOVER_DECLINED_TOO_LARGE` (no
+   silent truncation). Constant-memory streaming needs a resumable engine decrypt (CBC/CFB chain across
+   chunk boundaries — `sar_recover_buffer` references `ct[o-bs]`). *DoD:* multi-GB recovery in bounded
+   memory. (b) **intermittent-encryption geometry** — recovery defaults to `SAR_GEOM_FULL` (the record
+   stores no geometry); a full-file decrypt of an intermittently-encrypted file corrupts the plaintext
+   regions, so per-family geometry (or per-write range capture) is required for those families. *DoD:*
+   intermittent files recover without corrupting cleartext spans. (c) **recovery verification before
+   swap** — applying a wrong key/geometry yields a garbage temp; the core trusts the operator's
+   key_id↔target pairing (safe for the proven provenance file). Persist a hash of the capture-time
+   original sample `P` (a verification tag, not a recovery source → not preservation under III.1) in the
+   keystore record (format v2→v3, couples to capture) and have the kernel verify the decrypted head
+   before producing the temp. *DoD:* a wrong key can never overwrite a file. (d) **volume enumeration /
+   recover-all** — a VERDICT_NOTIFY-fed catalog (key_id→provenance paths) + ReFS/same-volume specifics +
+   residue clearing. *Deps:* Units 2/3-Core/6 (done).
 3. **PPL-AM / ELAM / MVI provisioning (Unit 5).** *Boundary:* the ELAM driver, MVI membership,
    and PPL-AM service launch that turn comm-port auth Layer B from "queried + recorded" into
    "enforced," and protect the service against injection (VII.4). *DoD:* the service runs PPL-AM
@@ -238,6 +280,25 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
 - **Open empirical items** (answer in WDK/VM, do not guess): `cldflt` hydrate-vs-write
   discrimination, ReFS integrity-stream / block-clone pre-image behavior, future non-cached-write
   BypassIO. Listed in `SLICE4_DESIGN.md`.
+
+- **Recovery I/O is non-convicting by construction — no self-exemption code added, by design.** The
+  kernel's temp write goes to a freshly created/overwritten file, so its pre-image is empty
+  (`pre_image_len < SAR_CANDIDATE_SIZE`) and the worker never convicts; even if a stale temp gave a
+  pre-image, plaintext-over-anything fails the forward proof (III.3.1). The service's `ReplaceFileW`
+  rename-over-target is a `FileRename*` op, which `SarCaptureMemberCapturable` already excludes (capture
+  is only `WRITE_CACHED`/`WRITE_NONCACHED`). Do **not** add a path/suffix-based recovery exemption — a
+  `.sarrectmp`-suffix skip would be a capture-evasion hole.
+- **`sar_recover_buffer` uses a function-`static` `ranges[SAR_MAX_RANGES]` (16 KiB) — not re-entrant.**
+  Recovery is serialized in practice (single comm connection, `MaxConnections=1`, synchronous send-recv
+  driven by the one-instance control pipe), so kernel recovery calls do not overlap. If recovery is ever
+  parallelized, give the expansion a caller-provided buffer first.
+- **Recovery target paths are operator/service-supplied Win32 absolute paths** (`C:\...`); the kernel
+  prefixes `\??\`. The temp is `<target>.sarrectmp` derived identically on both sides, so the kernel-written
+  temp and the service's `ReplaceFileW` replacement resolve to the same file. The path is trusted because
+  the connecting service is authenticated (PPL query + signed-nonce handshake + image allow-list).
+- **`SAR_RECOVERY_MAX_BYTES` (64 MiB) is a recorded design limit, not a silent cap** — over-cap files
+  return `SAR_RECOVER_DECLINED_TOO_LARGE`. Streaming (constant memory) is the named follow-on; the cap is
+  the in-kernel analogue of `SAR_KS_MAX_FILE`.
 
 ## 6. WDK-context verification checklist (driver compiles+links but is UNRUN; service still uncompiled)
 
@@ -281,6 +342,13 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
 > INF validation, test-signing, load, or behavioral test was done — those need a VM. Still run
 > `InfVerif /h` + CodeQL Must-Fix and confirm the points below in a VM:
 
+- **Recovery path (`driver/recovery.c`, Unit 4) — compiles+links into the `.sys`, UNRUN:** validate in a
+  VM that `SarRecoveryExecute` opens `\??\<target>` and decrypts correctly end-to-end; that the kernel
+  temp write + the service `ReplaceFileW`/POSIX-rename swap leave the recovered file with the target's
+  DACL/ADS/object-id intact; that the recovery I/O is not self-convicted under ENFORCE; that concurrent
+  capture and recovery do not deadlock on the keystore push lock (lookup takes it **shared**, never held
+  across `ZwReadFile`/`ZwWriteFile` or `FltSendMessage`); and the held-open/POSIX-rename race against
+  live ransomware on NTFS, ReFS, and SMB.
 - **Capture path (`driver/capture.c`, Unit 2) — the new high-risk surface:**
   - `FltReadFile` pre-image read at the write pre-op: confirm it does not stall or invert FS
     locks (paging/main resource) per filesystem and write-type; confirm

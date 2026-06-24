@@ -41,6 +41,11 @@ int SarKeystoreAppend(_Inout_ PSAR_KEYSTORE Keystore,
                       _In_ const semantics_ar_keystore_record_t *Record);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+int SarKeystoreLookup(_In_ PSAR_KEYSTORE Keystore,
+                      _In_reads_bytes_(SEMANTICS_AR_KEY_ID_SIZE) const UCHAR *KeyId,
+                      _Out_ semantics_ar_keystore_record_t *Record);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarKeystoreFlush(_Inout_ PSAR_KEYSTORE Keystore);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

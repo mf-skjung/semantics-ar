@@ -5,10 +5,10 @@ uint32_t sar_msg_expected_length(uint32_t message_type) {
     switch (message_type) {
     case SEMANTICS_AR_MSG_VERDICT_NOTIFY:
         return (uint32_t)sizeof(semantics_ar_verdict_notify_t);
-    case SEMANTICS_AR_MSG_RECOVERY_REQUEST:
-        return (uint32_t)sizeof(semantics_ar_recovery_request_t);
-    case SEMANTICS_AR_MSG_RECOVERY_DONE:
-        return (uint32_t)sizeof(semantics_ar_recovery_done_t);
+    case SEMANTICS_AR_MSG_RECOVERY_EXEC:
+        return (uint32_t)sizeof(semantics_ar_recovery_exec_t);
+    case SEMANTICS_AR_MSG_RECOVERY_RESULT:
+        return (uint32_t)sizeof(semantics_ar_recovery_result_t);
     case SEMANTICS_AR_MSG_SET_MODE:
         return (uint32_t)sizeof(semantics_ar_set_mode_t);
     case SEMANTICS_AR_MSG_WHITELIST_ADD:
