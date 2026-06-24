@@ -8,4 +8,10 @@ endif()
 enable_testing()
 
 add_subdirectory(engine)
+add_subdirectory(control)
 add_subdirectory(tests)
+
+if(WIN32)
+    add_subdirectory(driver)
+    add_subdirectory(service)
+endif()

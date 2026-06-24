@@ -13,6 +13,9 @@
 #define SEMANTICS_AR_MSG_WHITELIST_ADD    5
 #define SEMANTICS_AR_MSG_WHITELIST_REMOVE 6
 #define SEMANTICS_AR_MSG_GET_STATUS       7
+#define SEMANTICS_AR_MSG_CONNECT_CHALLENGE 8
+#define SEMANTICS_AR_MSG_CONNECT_RESPONSE  9
+#define SEMANTICS_AR_MSG_STATUS_REPLY     10
 
 #define SEMANTICS_AR_MODE_AUDIT   0
 #define SEMANTICS_AR_MODE_ENFORCE 1
@@ -20,6 +23,8 @@
 #define SEMANTICS_AR_PROTO_PATH_MAX  260
 #define SEMANTICS_AR_PROTO_SUBJECT_MAX 256
 #define SEMANTICS_AR_CONTENT_HASH_SIZE 32
+#define SEMANTICS_AR_HS_NONCE_SIZE 32
+#define SEMANTICS_AR_HS_SIG_MAX 512
 
 #pragma pack(push, 1)
 
@@ -74,6 +79,17 @@ typedef struct {
     uint32_t mode;
     uint64_t captured_key_count;
 } semantics_ar_status_reply_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint8_t  nonce[SEMANTICS_AR_HS_NONCE_SIZE];
+} semantics_ar_connect_challenge_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint32_t sig_length;
+    uint8_t  signature[SEMANTICS_AR_HS_SIG_MAX];
+} semantics_ar_connect_response_t;
 
 #pragma pack(pop)
 
