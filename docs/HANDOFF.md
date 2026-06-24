@@ -110,8 +110,18 @@ correctness; the bring-up prerequisites that block ever loading the product):**
   removed the four `DefaultUninstall*` sections (prohibited for primitive drivers since Win10 1903),
   set a non-empty `DriverVer`, and moved `Instances/DefaultInstance/Altitude/Flags` under the
   `Parameters` subkey — the last is **required by the WDK-26100 InfVerif gate** (it errors 1323 on
-  bare `Instances`), not optional. *Empirical item for the VM: confirm a `Parameters`-only layout
-  also attaches on the pre-24H2 First-Light guest; if not, pin the guest to 24H2.*
+  bare `Instances`; a dual-write INF carrying *both* bare and `Parameters` keys was tested and **also
+  rejected** — InfVerif forbids the bare keys' presence at all). **OPEN MATRIX ITEM (does not narrow
+  the IX support goal; it is a packaging question):** whether a `Parameters`-only INF *attaches at
+  runtime on pre-24H2* (Win10 22H2 / Server 2019-2022) is **undocumented** — MS Learn is silent and
+  the matching sample-repo issue (#553) closed unanswered, so it is a VM-matrix empirical, not a
+  guess. The `.sys` binary is single/unaffected (IX.1 intact); only registry packaging is at issue.
+  Resolution paths, to decide with VM evidence: (i) if pre-24H2 FltMgr also reads
+  `Parameters\Instances` → the one Parameters-only INF serves all; (ii) else use **OS-version-decorated
+  DDInstall/AddReg sections** (one INF: down-level section writes bare `Instances`, 24H2 section writes
+  `Parameters` — the documented single-INF-multi-OS mechanism, IX.1.1 superset), or build the
+  down-level package with a down-level InfVerif. **First Light should run on Win11 24H2** (the committed
+  INF matches it and is InfVerif-clean); the down-level matrix + this INF resolution is its own unit.
 
 **[CORRECTION — capture region; supersedes SLICE5's stack-primary choice; established by primary
 sources this session]** The Phase-1 stack snapshot (`driver/capture.c` `SarCaptureSnapshotStack`,
