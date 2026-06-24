@@ -3,7 +3,7 @@ Signature   = "$Windows NT$"
 Class       = "ActivityMonitor"
 ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ManufacturerName%
-DriverVer   =
+DriverVer   = 06/25/2026,1.0.0.0
 CatalogFile = semantics_ar.cat
 PnpLockdown = 1
 
@@ -25,20 +25,6 @@ AddService = %ServiceName%,,SemanticsArDriver.Service
 [DefaultInstall.NTarm64.Services]
 AddService = %ServiceName%,,SemanticsArDriver.Service
 
-[DefaultUninstall.NTamd64]
-LegacyUninstall = 1
-DelFiles        = SemanticsArDriver.Copy
-
-[DefaultUninstall.NTarm64]
-LegacyUninstall = 1
-DelFiles        = SemanticsArDriver.Copy
-
-[DefaultUninstall.NTamd64.Services]
-DelService = %ServiceName%,0x200
-
-[DefaultUninstall.NTarm64.Services]
-DelService = %ServiceName%,0x200
-
 [SemanticsArDriver.Service]
 DisplayName    = %ServiceName%
 Description    = %ServiceDescription%
@@ -51,9 +37,9 @@ LoadOrderGroup = "FSFilter Activity Monitor"
 AddReg         = SemanticsArDriver.AddRegistry
 
 [SemanticsArDriver.AddRegistry]
-HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
-HKR,"Instances\"%InstanceName%,"Altitude",0x00000000,%Altitude%
-HKR,"Instances\"%InstanceName%,"Flags",0x00010001,0
+HKR,"Parameters\Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Parameters\Instances\"%InstanceName%,"Altitude",0x00000000,%Altitude%
+HKR,"Parameters\Instances\"%InstanceName%,"Flags",0x00010001,0
 
 [SemanticsArDriver.Copy]
 semantics_ar.sys

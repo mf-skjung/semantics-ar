@@ -90,6 +90,43 @@ compiles clean (`cl /kernel` `NTDDI_WIN11_GE`, `/W4`, only Microsoft-header nois
 and reconfirmed the §6 `capture.obj` name-collision caveat (the core gets a distinct `/Fo`). Behavior
 is **unrun**: VM validation remains. See `SLICE6_DESIGN.md`.
 
+**Done and host-verified this session (Realization V0 — handshake crypto realized + INF
+correctness; the bring-up prerequisites that block ever loading the product):**
+- **Handshake key pair is real, no longer a placeholder.** `tools/provision_handshake_key.c`
+  creates the persisted ECDSA-P256 key `SemanticsArServiceKey` (machine store + SYSTEM/Admin DACL;
+  `--user` for a no-elevation dev key), exports the `BCRYPT_ECCPUBLIC_BLOB`, and writes
+  `driver/service_pubkey.h`. `driver/commport.c` now `#include`s that header instead of the
+  all-zero placeholder array it carried (which could never have authenticated anyone). The public
+  key and the private key are produced together at provision time and cannot be a committed constant
+  (committing the private half would be a service-impersonation hole); the committed
+  `service_pubkey.h` is a dev default to be regenerated at deployment.
+- **The exact production handshake scheme is host-proven** by `tests/test_handshake_crypto.c`
+  (17 checks, `ctest` green): user-mode `NCryptSignHash` over a **raw 32-byte nonce, NULL padding**
+  ↔ kernel-shape `BCryptVerifySignature` of the same nonce with the imported 72-byte public blob;
+  asserts blob magic `0x31534345`/`cbKey==32`, 64-byte IEEE-P1363 `r‖s` signature (not DER),
+  tamper rejection (nonce + sig), and no cross-key acceptance. This closes the prior §3 "verify by
+  build, not doc" items (signature size, magic literal, raw-nonce-as-input).
+- **INF correctness — `InfVerif /h` clean (exit 0) under WDK 26100.** `driver/semantics_ar.inf`:
+  removed the four `DefaultUninstall*` sections (prohibited for primitive drivers since Win10 1903),
+  set a non-empty `DriverVer`, and moved `Instances/DefaultInstance/Altitude/Flags` under the
+  `Parameters` subkey — the last is **required by the WDK-26100 InfVerif gate** (it errors 1323 on
+  bare `Instances`), not optional. *Empirical item for the VM: confirm a `Parameters`-only layout
+  also attaches on the pre-24H2 First-Light guest; if not, pin the guest to 24H2.*
+
+**[CORRECTION — capture region; supersedes SLICE5's stack-primary choice; established by primary
+sources this session]** The Phase-1 stack snapshot (`driver/capture.c` `SarCaptureSnapshotStack`,
+16 KiB at `StackLimit`) is the **wrong place to scan for the dominant case.** MS CNG keeps the AES
+key schedule in a **heap-allocated key object reused across every write** (`BCryptGenerateSymmetricKey`
+`pbKeyObject`; the "Encrypting Data with CNG" sample `HeapAlloc`s it), as do OpenSSL EVP and Crypto++;
+`StackLimit` is the low/deep stack frontier, and a popped encrypt frame surviving there is an
+unreliable heuristic. The capture must scan the originator's **committed-private / heap regions
+(bounded)**, which is what every memory-forensics tool (aeskeyfind, Volatility) does. This is **not a
+Constitution change** (II.3.1 already anchors the key to the "writing process's *memory*", II.3.2
+lists the memory scan) and **not an engine change** (`scan_battery` already slides over any buffer and
+`aes_window_battery` already inverts a round-key schedule to the master — host-verified). It is a
+kernel-glue correction (what region to hand the engine), VM-bound, and is the substance of the
+remaining capture unit (§4.2 below). SLICE5 named heap-walk a follow-on; it is now **primary**.
+
 **Forbidden-concept grep** (`preserve|shadow|journal|evict|saturat|capacity-limit|trusted_pid|
 self_trust|auto_block|access_denied`) is empty over the host-verifiable + freestanding tree and
 every filesystem-callback path **except two Constitution-mandated `access_denied` occurrences**:
@@ -197,6 +234,19 @@ pass; not derivable from code):**
 > kernel glue now **compiles + links against the real WDK** (§6); only runtime/VM behavioral
 > validation remains.
 
+0. **Realization track (the gate to everything VM-bound; this is where "compiles" becomes "runs").**
+   *V0 (provisioning/handshake/INF) is host-done this session (§2).* **Remaining V0:** a
+   test-signing + packaging step (Stampinf → Inf2Cat → signtool on the proven `cl /kernel` build, or
+   migrate the driver to a WDK vcxproj/EWDK) producing a signed `.sys`+`.cat`. **V1 (First Light):**
+   a Hyper-V Gen2 VM (Secure Boot off, `bcdedit testsigning on`, KDNET) that loads the driver,
+   attaches to a volume (`fltmc`), and completes the now-real signed-challenge handshake with the
+   service. *DoD:* `fltmc filters` shows the filter; the service authenticates over the port (KD
+   evidence). *Deps:* the user provides the VM + (ideally) PowerShell Direct; see §5 prep notes.
+   **Capture-region correction (the heart, §2 CORRECTION):** rework `driver/capture.c` Phase 2 to
+   scan the originator's committed-private/heap regions (bounded) under `KeStackAttachProcess`
+   instead of the 16 KiB stack slice; feed those bytes to the already-host-verified engine scan.
+   *DoD:* in the VM, a controlled CNG-based encryptor's key is captured and the file recovers.
+   *Deps:* First Light. The freestanding engine and the projection need no change.
 1. **Keystore self-protection — Unit 3-Core: DONE (host core verified; kernel glue written,
    uncompiled).** Cross-reboot survival now exists on every platform: the keystore + MAC key +
    external anchor persist to disk, are verified and restored at boot, and rollback/erasure/tamper
@@ -395,9 +445,12 @@ pass; not derivable from code):**
   `ZwQueryInformationProcess` / `PROCESS_QUERY_LIMITED_INFORMATION` are **not** exposed to kernel
   callers in the 26100 headers; declared in `driver/ntsystem.h`. Runtime-validate that the PPL
   query succeeds and `PsProtectedSignerAntimalware` is read correctly in a VM.
-- **Handshake signing primitive:** the service uses `NCryptOpenKey`/`NCryptSignHash` (persisted KSP
-  key); reconcile the padding (`BCRYPT_PKCS1_PADDING_INFO`) with the driver's `BCryptVerifySignature`
-  verify side so both agree on the scheme.
+- **Handshake signing primitive — RESOLVED + host-proven (this session).** Scheme is ECDSA-P256 over
+  the raw 32-byte nonce, NULL padding, 64-byte P1363 signature; `tests/test_handshake_crypto.c`
+  proves the `NCryptSignHash`↔`BCryptVerifySignature` interop and the 72-byte blob format. A real key
+  pair is provisioned by `tools/provision_handshake_key.c` and the driver consumes
+  `driver/service_pubkey.h` (no more placeholder). VM item reduces to: provision the **machine**-store
+  key on the target and confirm the live port handshake end-to-end.
 - **Comm-port reply framing:** reconcile the `FilterGetMessage`/`FilterSendMessage` /
   `FILTER_MESSAGE_HEADER` reply-buffer convention between `service/commclient.c` and
   `driver/commport.c` (whether our header is inline vs. behind the FltMgr reply header).

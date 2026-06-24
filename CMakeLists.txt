@@ -13,6 +13,7 @@ add_subdirectory(capture)
 add_subdirectory(tests)
 
 if(WIN32)
+    add_subdirectory(tools)
     add_subdirectory(driver)
     add_subdirectory(service)
 endif()
