@@ -1,0 +1,74 @@
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ManufacturerName%
+DriverVer   =
+CatalogFile = semantics_ar.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir          = 12
+SemanticsArDriver.Copy  = 12
+
+[DefaultInstall.NTamd64]
+OptionDesc = %ServiceDescription%
+CopyFiles  = SemanticsArDriver.Copy
+
+[DefaultInstall.NTarm64]
+OptionDesc = %ServiceDescription%
+CopyFiles  = SemanticsArDriver.Copy
+
+[DefaultInstall.NTamd64.Services]
+AddService = %ServiceName%,,SemanticsArDriver.Service
+
+[DefaultInstall.NTarm64.Services]
+AddService = %ServiceName%,,SemanticsArDriver.Service
+
+[DefaultUninstall.NTamd64]
+LegacyUninstall = 1
+DelFiles        = SemanticsArDriver.Copy
+
+[DefaultUninstall.NTarm64]
+LegacyUninstall = 1
+DelFiles        = SemanticsArDriver.Copy
+
+[DefaultUninstall.NTamd64.Services]
+DelService = %ServiceName%,0x200
+
+[DefaultUninstall.NTarm64.Services]
+DelService = %ServiceName%,0x200
+
+[SemanticsArDriver.Service]
+DisplayName    = %ServiceName%
+Description    = %ServiceDescription%
+ServiceBinary  = %12%\semantics_ar.sys
+Dependencies   = "FltMgr"
+ServiceType    = 2
+StartType      = 0
+ErrorControl   = 1
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = SemanticsArDriver.AddRegistry
+
+[SemanticsArDriver.AddRegistry]
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%InstanceName%,"Altitude",0x00000000,%Altitude%
+HKR,"Instances\"%InstanceName%,"Flags",0x00010001,0
+
+[SemanticsArDriver.Copy]
+semantics_ar.sys
+
+[SourceDisksFiles]
+semantics_ar.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[Strings]
+ManufacturerName   = "semantics-ar"
+ServiceDescription = "semantics-ar anti-ransomware minifilter"
+ServiceName        = "semantics_ar"
+DiskName           = "semantics-ar Installation Disk"
+DefaultInstance    = "semantics_ar Instance"
+InstanceName       = "semantics_ar Instance"
+Altitude           = "385000"

@@ -178,7 +178,7 @@ static void test_mode(void) {
     CHECK(sar_mode_set(&st, SEMANTICS_AR_MODE_ENFORCE) == 1, "set ENFORCE ok");
     CHECK(sar_mode_get(&st) == SEMANTICS_AR_MODE_ENFORCE, "mode is ENFORCE");
     CHECK(sar_mode_set(&st, 7u) == 0, "invalid mode rejected");
-    CHECK(sar_mode_get(&st) == SEMANTICS_AR_MODE_ENFORCE, "invalid set preserves mode");
+    CHECK(sar_mode_get(&st) == SEMANTICS_AR_MODE_ENFORCE, "invalid set keeps current mode");
     CHECK(sar_mode_set(&st, SEMANTICS_AR_MODE_AUDIT) == 1, "set AUDIT ok");
     CHECK(sar_mode_get(&st) == SEMANTICS_AR_MODE_AUDIT, "mode is AUDIT");
 }

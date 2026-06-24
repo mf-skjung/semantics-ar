@@ -128,10 +128,21 @@ identity-independent and non-blocking.
   classification (which member + the cached/non-cached/paging discriminant captured *now*,
   because it is unrecoverable at post-op), a **continuation handle** (a synchronize token + a
   deferred work-item) so capture can split into a bounded synchronous register grab at pre-op
-  plus a deferred `PASSIVE_LEVEL` pre-image read + memory scan, and a **pre-allocated**
-  non-paged capture buffer (no allocation on the write hot path). The seam **hands
-  references**; it never serializes keys and never crosses the comm port (Slice 1's contract:
-  plaintext keys / candidates / `(P,C)` never cross driver↔service).
+  plus a deferred `PASSIVE_LEVEL` pre-image read + memory scan, and a non-paged
+  capture-buffer descriptor field (`PSAR_CAPTURE_BUFFER`). The seam **hands references**; it
+  never serializes keys and never crosses the comm port (Slice 1's contract: plaintext keys /
+  candidates / `(P,C)` never cross driver↔service).
+
+> **Capture-buffer lifecycle — deliberately not allocated by the chassis.** The §-spec calls
+> for a *pre-allocated* buffer with *no allocation on the write hot path*. The chassis is a
+> counting sink that never reads a pre-image, so it allocates **nothing** on the write path
+> (the literal realization of "no hot-path allocation"): `capture_buffer` is carried as a
+> typed descriptor field left `NULL`, and `SarSeamWriteRelease` already frees it when present.
+> Pre-allocation belongs with the **consumer** — the capture unit that actually fills the
+> pre-image — which will source the buffer from a non-paged **lookaside list** (the idiomatic
+> no-hot-path-allocation mechanism), initialized at load and torn down at unload. Establishing
+> the lookaside in the chassis for a buffer nothing reads would be allocation without a
+> consumer; the descriptor field is the forward contract, the lookaside is the capture unit's.
 - **Metadata/telemetry seam** (rename/disposition/truncate + the keyless FSCTLs): classification
   only, no register capture.
 

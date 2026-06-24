@@ -65,8 +65,12 @@ Server 2022; recovery-only Win10 1809 / Server 2019).
    comm port, and ENFORCE blocking using the D1-held referenced originator. *DoD:* every
    convicted host-replayed encryption yields a keystore append + a `VERDICT_NOTIFY`; ENFORCE
    blocks the originator's *next live-context write* and nothing else; the gate is never on the
-   IRP wait path; host-replayable portions are tested. *Deps:* Slice 4 seam (done), `engine`
-   battery/gate (done).
+   IRP wait path; host-replayable portions are tested. **Owns the capture-buffer
+   pre-allocation:** the seam's `capture_buffer` descriptor is carried but left `NULL` by the
+   chassis (which reads no pre-image); this unit adds the non-paged **lookaside list**
+   (`ExInitializeNPagedLookasideList` at load, `ExDeleteNPagedLookasideList` at unload,
+   allocate-from on the deferred path) that fills it — the idiomatic no-hot-path-allocation
+   mechanism. *Deps:* Slice 4 seam (done), `engine` battery/gate (done).
 2. **Keystore self-protection (Unit 3).** *Boundary:* kernel non-paged-pool residence of the
    authoritative keystore + whitelist, in-kernel keyed MAC (the MAC key never in user mode), and
    the TPM-sealed key + external anchor (the on-disk format and anchor *comparison* already exist
@@ -77,8 +81,15 @@ Server 2022; recovery-only Win10 1809 / Server 2019).
    kernel-keystore key-material read → the existing `engine/host` recovery core →
    `RECOVERY_DONE`, plus volume enumeration, ReFS/same-volume specifics, large-file streaming,
    and residue clearing. The service relay end is the chassis (done); the **named typed boundary**
-   where kernel key material feeds the recovery core is in `service/recovery.*` (see the service
-   sub-tree report). *DoD:* an operator recovery request recovers real files end-to-end on
+   where kernel key material feeds the recovery core is `sar_recovery_resolver_fn` /
+   `sar_recovery_input_t` in `service/recovery.h` (the service installs a declining stub until the
+   kernel keystore-read path is wired — it never fabricates keys). **Link prerequisite (engine
+   change):** `semantics_ar_recovery_host` is declared only under `if(NOT WIN32)` in
+   `engine/CMakeLists.txt` because `host/recover_file.c` uses POSIX `open`/`mkstemp`/`fsync`; the
+   service links it on Windows, so this unit (or a small engine sub-task) must give
+   `sar_recover_file` a Win32 atomic-write backing
+   (`CreateFile`/`FlushFileBuffers`/`MoveFileEx(MOVEFILE_REPLACE_EXISTING)`) and let the target
+   configure on `WIN32`. *DoD:* an operator recovery request recovers real files end-to-end on
    Windows; no-clobber holds. *Deps:* Units 2 and 3.
 4. **PPL-AM / ELAM / MVI provisioning (Unit 5).** *Boundary:* the ELAM driver, MVI membership,
    and PPL-AM service launch that turn comm-port auth Layer B from "queried + recorded" into
@@ -108,6 +119,39 @@ Server 2022; recovery-only Win10 1809 / Server 2019).
   cumulative-N, never a data loss. Do not "fix" any of them by reintroducing a backup.
 - **Altitude 385000 is a placeholder** — replace with the Microsoft-allocated integer before
   production signing.
+- **Comm-port SD is at default ACL.** `SarBuildPortSecurity` uses
+  `FltBuildDefaultSecurityDescriptor(FLT_PORT_ALL_ACCESS)`; the spec's "tighten so only the
+  service SID has `FLT_PORT_CONNECT`" is deferred because the service SID is not fixed at this
+  unit's scope. Runtime identity is still enforced in `ConnectNotify` (canonical image
+  allow-list + signed challenge). Add the SID-restricted ACL once the service SID is known
+  (install/PPL unit).
 - **Open empirical items** (answer in WDK/VM, do not guess): `cldflt` hydrate-vs-write
   discrimination, ReFS integrity-stream / block-clone pre-image behavior, future non-cached-write
   BypassIO. Listed in `SLICE4_DESIGN.md`.
+
+## 6. WDK-context verification checklist (driver/service are written, NOT compiled)
+
+Neither Windows tree was compiled here (no WDK on the build host). Before trusting them, compile
+Release x64 against the WDK, run `InfVerif /h` + CodeQL Must-Fix, and confirm these specific DDI
+points the sub-builders flagged as reconstructed-from-memory:
+
+- **BypassIO registration:** whether `SUPPORTED_FS_FEATURES_BYPASS_IO` is the trailing
+  `FLT_REGISTRATION` member at the targeted `FLT_REGISTRATION_VERSION` (vs. a separate call), and
+  the exact `FltVetoBypassIo` signature, against the installed `fltKernel.h` (24H2).
+- **VBS/HVCI detection structs:** `SYSTEM_ISOLATED_USER_MODE_INFORMATION` /
+  `SystemIsolatedUserModeInformation` and `CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED` availability at
+  the targeted `NTDDI_VERSION`.
+- **TPM presence:** the TBS/`TpmExtractEK`-based proxy in `feature.c` is heuristic — replace with a
+  real TBS-presence check if available.
+- **Process-notify enum:** the `PSCREATEPROCESSNOTIFYTYPE` constant passed to
+  `PsSetCreateProcessNotifyRoutineEx2`.
+- **`ZwQueryInformationProcess(ProcessProtectionInformation)` → `PS_PROTECTION`:** confirm the info
+  class + struct are exposed to kernel callers in the target headers.
+- **Handshake signing primitive:** the service uses `NCryptOpenKey`/`NCryptSignHash` (persisted KSP
+  key); reconcile the padding (`BCRYPT_PKCS1_PADDING_INFO`) with the driver's `BCryptVerifySignature`
+  verify side so both agree on the scheme.
+- **Comm-port reply framing:** reconcile the `FilterGetMessage`/`FilterSendMessage` /
+  `FILTER_MESSAGE_HEADER` reply-buffer convention between `service/commclient.c` and
+  `driver/commport.c` (whether our header is inline vs. behind the FltMgr reply header).
+- **Port name** is single-valued (`L"\\SemanticsArPort"`) but duplicated in `driver/commport.h`
+  and `service/commclient.h`; they currently match — keep them in sync (or hoist to `protocol.h`).
