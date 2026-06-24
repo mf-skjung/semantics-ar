@@ -10,7 +10,8 @@ add_library(semantics_ar_engine STATIC
     src/battery.c
     src/sha256.c
     src/keystore.c
-    src/recover.c)
+    src/recover.c
+    src/gate.c)
 
 target_include_directories(semantics_ar_engine PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -26,7 +27,7 @@ if(MSVC)
     target_compile_options(semantics_ar_engine PRIVATE /W4 /WX)
 else()
     target_compile_options(semantics_ar_engine PRIVATE -Wall -Wextra -Werror)
-    set_source_files_properties(src/battery.c src/keystore.c
+    set_source_files_properties(src/battery.c src/keystore.c src/gate.c
         PROPERTIES COMPILE_OPTIONS "-Wconversion")
 endif()
 
