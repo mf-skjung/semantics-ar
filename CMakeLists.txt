@@ -9,6 +9,7 @@ enable_testing()
 
 add_subdirectory(engine)
 add_subdirectory(control)
+add_subdirectory(capture)
 add_subdirectory(tests)
 
 if(WIN32)

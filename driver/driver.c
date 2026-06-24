@@ -3,6 +3,7 @@
 #include "seam.h"
 #include "feature.h"
 #include "commport.h"
+#include "capture.h"
 
 SAR_GLOBALS g_sar;
 PSAR_STATE g_sar_state;
@@ -75,6 +76,11 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 
     SarProcessNotifyUnregister();
 
+    if (g_sar.capture != NULL) {
+        SarCaptureDestroy(g_sar.capture);
+        g_sar.capture = NULL;
+    }
+
     if (g_sar.comm != NULL) {
         SarCommPortClose(g_sar.comm);
         g_sar.comm = NULL;
@@ -111,12 +117,6 @@ static const FLT_REGISTRATION g_sar_registration = {
     NULL,
     NULL,
     NULL,
-    NULL,
-#if defined(SUPPORTED_FS_FEATURES_BYPASS_IO)
-    SUPPORTED_FS_FEATURES_BYPASS_IO
-#else
-    0
-#endif
 };
 
 _Use_decl_annotations_
@@ -172,8 +172,23 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
+    status = SarCaptureCreate(g_sar.filter, &g_sar.capture);
+    if (!NT_SUCCESS(status)) {
+        SarCommPortClose(g_sar.comm);
+        g_sar.comm = NULL;
+        SarProcessNotifyUnregister();
+        FltUnregisterFilter(g_sar.filter);
+        g_sar.filter = NULL;
+        SarStateDestroy(g_sar.state);
+        g_sar.state = NULL;
+        g_sar_state = NULL;
+        return status;
+    }
+
     status = FltStartFiltering(g_sar.filter);
     if (!NT_SUCCESS(status)) {
+        SarCaptureDestroy(g_sar.capture);
+        g_sar.capture = NULL;
         SarCommPortClose(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();

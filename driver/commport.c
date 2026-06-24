@@ -1,5 +1,6 @@
 #include "commport.h"
 #include "state.h"
+#include "ntsystem.h"
 
 #include <bcrypt.h>
 

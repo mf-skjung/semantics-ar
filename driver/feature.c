@@ -1,6 +1,7 @@
 #include "feature.h"
 
 #include <ntddk.h>
+#include "ntsystem.h"
 
 typedef BOOLEAN (NTAPI *SAR_EX_IS_PROCESSOR_FEATURE_PRESENT)(ULONG);
 

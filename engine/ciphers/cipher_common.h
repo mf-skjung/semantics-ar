@@ -5,6 +5,7 @@
 
 #ifdef _MSC_VER
 #include <stdlib.h>
+#pragma intrinsic(_rotl, _rotr, _rotl64)
 #define SAR_ROTL32(x,n) _rotl((x),(n))
 #define SAR_ROTR32(x,n) _rotr((x),(n))
 #define SAR_ROTL64(x,n) _rotl64((x),(n))

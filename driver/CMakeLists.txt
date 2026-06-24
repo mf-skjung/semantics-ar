@@ -12,6 +12,7 @@ set(SAR_DRIVER_SOURCES
     driver.c
     operations.c
     seam.c
+    capture.c
     commport.c
     state.c
     processnotify.c
@@ -20,7 +21,20 @@ set(SAR_DRIVER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/msg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/whitelist.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/mode.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/handshake.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/handshake.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../capture/src/capture.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/battery.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/modes.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/gate.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/keystore.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/sha256.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/aes.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/des.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/sm4.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/camellia.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/aria.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/seed.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/stream.c)
 
 add_library(semantics_ar_driver MODULE ${SAR_DRIVER_SOURCES})
 
@@ -31,12 +45,16 @@ set_target_properties(semantics_ar_driver PROPERTIES
 target_include_directories(semantics_ar_driver PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../capture/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers)
 
 target_compile_definitions(semantics_ar_driver PRIVATE
     _AMD64_
     AMD64
-    NTDDI_VERSION=NTDDI_WIN10_RS3
+    NTDDI_VERSION=NTDDI_WIN11_GE
     _WIN32_WINNT=0x0A00
     POOL_NX_OPTIN=1)
 

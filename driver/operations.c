@@ -1,6 +1,7 @@
 #include "driver.h"
 #include "seam.h"
 #include "state.h"
+#include "capture.h"
 
 _IRQL_requires_max_(APC_LEVEL)
 FLT_PREOP_CALLBACK_STATUS SarPreManageBypassIo(_Inout_ PFLT_CALLBACK_DATA Data,
@@ -155,21 +156,12 @@ static VOID SarSubmitWrite(_In_ PFLT_CALLBACK_DATA Data,
     request.related = FltObjects;
     request.originator_process = process;
     request.originator_thread = thread;
-    request.stream_context = SarGetStreamContext(FltObjects);
     request.member = Member;
     request.irp_flags = IrpFlags;
     request.write_offset = Offset;
     request.write_length = Length;
-    request.capture_buffer = NULL;
-    KeInitializeEvent(&request.continuation.register_grab_done, NotificationEvent, FALSE);
-    request.continuation.deferred_work = NULL;
-    request.continuation.deferred_queued = FALSE;
 
-    SarSeamWriteSubmit(&request);
-
-    if (request.stream_context != NULL)
-        FltReleaseContext(request.stream_context);
-    SarSeamWriteRelease(&request);
+    SarCaptureSubmitWrite(g_sar.capture, &request);
 }
 
 FLT_PREOP_CALLBACK_STATUS
@@ -180,11 +172,26 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
     sar_destruct_member_t member;
     LARGE_INTEGER offset;
     ULONG length;
+    PETHREAD thread;
+    PEPROCESS process;
 
     UNREFERENCED_PARAMETER(CompletionContext);
 
     if (Data->Iopb == NULL)
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    thread = Data->Thread;
+    if (thread == NULL)
+        thread = PsGetCurrentThread();
+    process = IoThreadToProcess(thread);
+    if (process == NULL)
+        process = PsGetCurrentProcess();
+
+    if (SarCaptureOriginatorBlocked(g_sar.capture, process)) {
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
 
     member = SarClassifyWrite(Data->Iopb->IrpFlags);
 

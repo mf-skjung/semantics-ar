@@ -16,10 +16,20 @@
 #define SAR_POOL_TAG_STREAMCTX 'cSrS'
 #define SAR_POOL_TAG_COMM      'mCrS'
 #define SAR_POOL_TAG_HANDSHAKE 'hHrS'
+#define SAR_POOL_TAG_CAPCTX    'xCrS'
+#define SAR_POOL_TAG_KEYSTORE  'sKrS'
+#define SAR_POOL_TAG_BLOCKED   'kBrS'
+#define SAR_POOL_TAG_GATEMAP   'gGrS'
+#define SAR_POOL_TAG_CAPWORK   'wCrS'
+#define SAR_POOL_TAG_CAPRES    'rCrS'
 
 #define SAR_WHITELIST_CAPACITY    256u
 #define SAR_IDENTITY_BUCKET_COUNT 1024u
 #define SAR_CAPTURE_BUFFER_BYTES  256u
+#define SAR_KEYSTORE_CAPACITY     16384u
+#define SAR_BLOCKED_CAPACITY      256u
+#define SAR_CAPTURE_SCAN_BYTES    16384u
+#define SAR_CAPTURE_INFLIGHT_CAP  256
 
 typedef enum {
     SAR_DESTRUCT_NONE = 0,
@@ -65,12 +75,14 @@ typedef struct _SAR_POSTURE {
 struct _SAR_STATE;
 struct _SAR_COMM;
 struct _SAR_FEATURE_FNS;
+struct _SAR_CAPTURE_CTX;
 
 typedef struct _SAR_GLOBALS {
     PDRIVER_OBJECT driver_object;
     PFLT_FILTER filter;
     struct _SAR_STATE *state;
     struct _SAR_COMM *comm;
+    struct _SAR_CAPTURE_CTX *capture;
     SAR_POSTURE posture;
     BOOLEAN process_notify_registered;
 } SAR_GLOBALS, *PSAR_GLOBALS;

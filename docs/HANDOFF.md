@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — Slice 4 / chassis session (2026-06-24)
+# Handoff — semantics-ar Windows realization — Unit 2 capture + driver compile/link session (2026-06-24)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
@@ -20,28 +20,50 @@ kernel-bound and Win32 code is verified in a WDK/VM context.
 
 ## 2. Current true state
 
-**Done and host-verified (builds clean `-Werror`/`-Wconversion`, `ctest` green):**
+**Done and host-verified (builds clean `-Werror`/`-Wconversion` on Linux gcc and `/W4 /WX` on
+MSVC; `ctest` green):**
 - `engine/` — ciphers, conviction battery, keystore v2 (MAC chain + anchor compare), recovery
   transform, Gate-T. (Slices 1–3.)
 - `control/` — the freestanding chassis control-plane core: message-header validation, whitelist
   match + identity-state resolution, AUDIT/ENFORCE mode SM, connect-handshake/challenge SM.
-  `tests/test_chassis.c`, 64 assertions incl. a 200k-iteration parser fuzz. (Slice 4, this
-  session.)
-- Contract extended: `protocol.h` gained the signed-challenge handshake wire format
-  (`CONNECT_CHALLENGE` / `CONNECT_RESPONSE`) and the `STATUS_REPLY` message type; the validator
-  and tests cover all message types 1–10.
+  `tests/test_chassis.c`, 64 assertions incl. a 200k-iteration parser fuzz. (Slice 4.)
+- `capture/` — the freestanding capture core (Unit 2): Gate-T → `sar_convict` orchestration and
+  the verdict→keystore-record→`VERDICT_NOTIFY` projection with a tested zero-plaintext-key-leak
+  invariant. `tests/test_capture.c`, 51 checks (ECB/CBC conviction, scan-buffer-primary path,
+  gate skip, no-conviction, invalid inputs, provenance, key_id determinism, no-leak). See
+  `SLICE5_DESIGN.md`.
+- Contract: `protocol.h` signed-challenge handshake + `STATUS_REPLY`; validator/tests cover
+  message types 1–10. The `VERDICT_NOTIFY` projection is now exercised by `test_capture`.
 
-**Done but UNVERIFIED (written this session against the DDIs + contract; NOT compiled — no WDK
-on the build host; root adds them only under `if(WIN32)`):**
-- `driver/` — the minifilter chassis (registration table, two seams, comm port + handshake,
-  non-paged state, process-create identity, feature/posture). See `SLICE4_DESIGN.md`.
-- `service/` — the user-mode service chassis (SCM, comm client + handshake, mode/whitelist
-  control, recovery relay, identity verification).
+**Compiles + links against the real WDK, but NEVER LOADED/RUN (no runtime/VM validation yet):**
+A WDK (26100 km headers + libs) is present on this host. The **entire `driver/` tree** — chassis
+(Slice 4) + Unit 2 capture + the freestanding `engine` battery/`capture` core compiled into the
+`.sys` (Slice 1: battery in kernel) — compiles clean with `cl /kernel` at `NTDDI_WIN11_GE` and
+links into `semantics_ar.sys` (≈95 KB). The build-out fixed several real bugs (lookaside API,
+`FLT_REGISTRATION`, missing `ntsystem.h` declarations, NTDDI, `_rotl` intrinsic — see §6). What is
+proven is **compile + link**, not behavior: it has not been loaded, attached, or exercised.
+- `driver/` chassis (Slice 4): registration table, seams, comm port + handshake, non-paged state,
+  process-create identity, feature/posture.
+- `driver/capture.{c,h}` (Unit 2, this session): two-phase kernel capture — **Phase 1** (pre-op,
+  requestor context) copies `C`, reads pre-image `P` (`FltReadFile`), resolves provenance, snapshots
+  the originator thread's own user stack (`PsGetCurrentThreadTeb` + `NT_TIB`, SEH-bounded 16 KiB),
+  queues a generic work item, releases the IRP immediately; **Phase 2** (deferred `PASSIVE_LEVEL`
+  worker) runs the freestanding core (gate → convict → project) → keystore append + `VERDICT_NOTIFY`
+  send + ENFORCE originator registry. `EX_RUNDOWN_REF` drain + in-flight backpressure; lookaside
+  work items. `operations.c` routes captures here and applies the ENFORCE block; `driver.c` owns the
+  capture lifecycle. Memory-scan is primary; register-grab is a named follow-on (`SLICE5_DESIGN.md`).
+- `driver/ntsystem.h` (this session): driver-declared semi-documented system structs/enums/prototypes
+  (`PS_PROTECTION`, `SYSTEM_CODEINTEGRITY_INFORMATION`, `SYSTEM_ISOLATED_USER_MODE_INFORMATION`,
+  `Zw*`) absent from the WDK km headers — **layouts need VM runtime validation** (§6).
+- `service/` chassis (Slice 4) — still **written but NOT compiled** here (user-mode exe; outside the
+  driver build-out). Compile/link-verifying it the way the driver now is, is a small follow-on.
 
 **Forbidden-concept grep** (`preserve|shadow|journal|evict|saturat|capacity-limit|trusted_pid|
-self_trust|auto_block|access_denied`) is empty over the host-verifiable tree and every
-filesystem-callback path; the **sole** `access_denied` is the mandated comm-port `ConnectNotify`
-reject in `driver/commport.c` (rationale: `SLICE4_DESIGN.md`, "JUDGMENT CALL").
+self_trust|auto_block|access_denied`) is empty over the host-verifiable + freestanding tree and
+every filesystem-callback path **except two Constitution-mandated `access_denied` occurrences**:
+the comm-port `ConnectNotify` reject in `driver/commport.c` (VII.3; `SLICE4_DESIGN.md` JUDGMENT
+CALL) and the V.1 ENFORCE block in `driver/operations.c` `SarPreWrite` (`SLICE5_DESIGN.md`). Both
+are downstream-of-verdict / client-reject acts, not the old block-the-write residue.
 
 ## 3. Decisions & rationale not derivable from code
 
@@ -54,30 +76,34 @@ MVI/ELAM gate; Layer B PPL query is recorded-and-degraded); the **`STATUS_ACCESS
 judgment call** vs the forbidden grep; and the **OS floor** (self-protection-intact Win10 22H2 /
 Server 2022; recovery-only Win10 1809 / Server 2019).
 
+Recorded in `SLICE5_DESIGN.md` (Unit 2 capture path): the **freestanding/kernel split** (orchestration
++ projection are host-tested; only the grab/scan/deferral are kernel); **memory-scan is primary,
+register-grab deferred** (XMM is clobbered by the write IRP, the key schedule lives in memory); the
+**Phase-1 stack snapshot** (vs a Phase-2 cross-thread TEB read, which is undeclared and wrong-context);
+the **second mandated `access_denied`** (V.1 ENFORCE block); and the **rejected** options (entropy
+pre-screen — IV.2.3; in-kernel process termination — scope/philosophy). The driver build-out's
+cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
+
 ## 4. Remaining work (ordered; each: boundary / definition-of-done / deps)
 
-1. **Capture path (Unit 2) — the heart's kernel action.** *Boundary:* fills the
-   destructive-write seam delivered in Slice 4 — register-first XMM/`FXSAVE` grab under a
-   bounded synchronous pre-op hold, post-release `PASSIVE_LEVEL` pre-image read + memory-scan
-   fallback, Gate-T (`sar_gate`) invocation on the `(P,C)` sample, the gate→battery request
-   assembly (turning `sar_gate_result_t` + `(P,C)` + the destruction-member tag into a battery
-   request and binding provenance for per-file keying), `sar_convict`, verdict emission over the
-   comm port, and ENFORCE blocking using the D1-held referenced originator. *DoD:* every
-   convicted host-replayed encryption yields a keystore append + a `VERDICT_NOTIFY`; ENFORCE
-   blocks the originator's *next live-context write* and nothing else; the gate is never on the
-   IRP wait path; host-replayable portions are tested. **Owns the capture-buffer
-   pre-allocation:** the seam's `capture_buffer` descriptor is carried but left `NULL` by the
-   chassis (which reads no pre-image); this unit adds the non-paged **lookaside list**
-   (`ExInitializeNPagedLookasideList` at load, `ExDeleteNPagedLookasideList` at unload,
-   allocate-from on the deferred path) that fills it — the idiomatic no-hot-path-allocation
-   mechanism. *Deps:* Slice 4 seam (done), `engine` battery/gate (done).
-2. **Keystore self-protection (Unit 3).** *Boundary:* kernel non-paged-pool residence of the
+> **Unit 2 (Capture path) is DONE this session** — freestanding core host-verified
+> (`capture/`, `test_capture`), kernel glue compile+link-verified but unrun (`driver/capture.c`). DoD met for
+> the host-replayable substance (convicted replays yield a keystore append + `VERDICT_NOTIFY`;
+> the no-key-leak invariant is tested; the gate runs in the deferred phase, never on the IRP wait
+> path; ENFORCE blocks the originator's next live-context write via the D1 referenced
+> `PEPROCESS`). Memory-scan is primary; the XMM register-grab lane, mmap/section capture,
+> clone/offload `(P,C)`, and a heap-walk scan are **named follow-ons** in `SLICE5_DESIGN.md`. The
+> kernel glue now **compiles + links against the real WDK** (§6); only runtime/VM behavioral
+> validation remains.
+
+1. **Keystore self-protection (Unit 3).** *Boundary:* kernel non-paged-pool residence of the
    authoritative keystore + whitelist, in-kernel keyed MAC (the MAC key never in user mode), and
    the TPM-sealed key + external anchor (the on-disk format and anchor *comparison* already exist
    from Slice 1). *DoD:* an attacker without kernel-code execution cannot read or silently erase
    captured keys; rollback is caught by the anchor; degrades + records posture where TPM/HVCI
-   absent (VII.5). *Deps:* Unit 2 (it produces the keys to store).
-3. **Windows recovery wiring (Unit 4).** *Boundary:* the comm-port `RECOVERY_REQUEST` →
+   absent (VII.5). *Deps:* Unit 2 (done — it produces the keys; takes over the in-kernel store,
+   push lock, and load-seeded MAC key that `driver/capture.c` provisions transiently).
+2. **Windows recovery wiring (Unit 4).** *Boundary:* the comm-port `RECOVERY_REQUEST` →
    kernel-keystore key-material read → the existing `engine/host` recovery core →
    `RECOVERY_DONE`, plus volume enumeration, ReFS/same-volume specifics, large-file streaming,
    and residue clearing. The service relay end is the chassis (done); the **named typed boundary**
@@ -90,13 +116,13 @@ Server 2022; recovery-only Win10 1809 / Server 2019).
    `sar_recover_file` a Win32 atomic-write backing
    (`CreateFile`/`FlushFileBuffers`/`MoveFileEx(MOVEFILE_REPLACE_EXISTING)`) and let the target
    configure on `WIN32`. *DoD:* an operator recovery request recovers real files end-to-end on
-   Windows; no-clobber holds. *Deps:* Units 2 and 3.
-4. **PPL-AM / ELAM / MVI provisioning (Unit 5).** *Boundary:* the ELAM driver, MVI membership,
+   Windows; no-clobber holds. *Deps:* Units 2 (done) and 3.
+3. **PPL-AM / ELAM / MVI provisioning (Unit 5).** *Boundary:* the ELAM driver, MVI membership,
    and PPL-AM service launch that turn comm-port auth Layer B from "queried + recorded" into
    "enforced," and protect the service against injection (VII.4). *DoD:* the service runs PPL-AM
    where the platform supports it; absence still degrades to Layer A + recorded posture. *Deps:*
    none on the others; independently schedulable.
-5. **Battery / recovery coverage closure (small, ongoing).** *Boundary:* the named gaps in the
+4. **Battery / recovery coverage closure (small, ongoing).** *Boundary:* the named gaps in the
    slice docs — Salsa20/XSalsa20 lack an external KAT (self-consistency only); AES-192 register-
    granularity inversion is best-effort; HC-128/SOSEMANUK are confirmed-limit demotions. *DoD:*
    each gap either closed with an independent vector or re-affirmed as a recorded confirmed
@@ -129,24 +155,94 @@ Server 2022; recovery-only Win10 1809 / Server 2019).
   discrimination, ReFS integrity-stream / block-clone pre-image behavior, future non-cached-write
   BypassIO. Listed in `SLICE4_DESIGN.md`.
 
-## 6. WDK-context verification checklist (driver/service are written, NOT compiled)
+## 6. WDK-context verification checklist (driver compiles+links but is UNRUN; service still uncompiled)
 
-Neither Windows tree was compiled here (no WDK on the build host). Before trusting them, compile
-Release x64 against the WDK, run `InfVerif /h` + CodeQL Must-Fix, and confirm these specific DDI
-points the sub-builders flagged as reconstructed-from-memory:
+> **Update (this session): the driver now COMPILES AND LINKS against the real WDK.** A WDK is
+> present (`Windows Kits\10` 26100 km headers + libs + VS2022). All **26 object files** — every
+> `driver/` TU + the borrowed `control/` + `engine/` battery/gate/keystore/sha256 + all 7 ciphers
+> + the freestanding `capture/` core — compile clean with `cl /kernel` against the real
+> `fltKernel.h`/`ntifs.h` at `NTDDI_WIN11_GE` (24H2; only `/W4` noise inside Microsoft's own
+> headers) and **link into `semantics_ar.sys` (≈95 KB), `link` exit 0**. Bugs found and fixed by
+> this build-out:
+> - **(Unit 2)** mixed lookaside API (`NPAGED_LOOKASIDE_LIST` + `…Ex` calls → uniform
+>   `LOOKASIDE_LIST_EX`); undeclared `PsGetThreadTeb` (Phase-2 cross-thread TEB read redesigned to
+>   a Phase-1 `PsGetCurrentThreadTeb` stack snapshot in the originator's own context — better and
+>   DDI-correct).
+> - **(Unit 1 / Slice 4, were blocking the whole driver)** `FLT_REGISTRATION` had 2 extra
+>   initializers — it has exactly 16 members and **no `SUPPORTED_FS_FEATURES_BYPASS_IO` field**
+>   (that macro is an `ntifs.h` feature bit, not a registration member); removing it both compiles
+>   and satisfies the Constitution IV.1.2 "do not declare `SUPPORTED_FS_FEATURES_BYPASS_IO`" (the
+>   FSCTL-handler mediation in `bypassio.c` is unchanged). `PS_PROTECTION` / the
+>   `SYSTEM_CODEINTEGRITY_INFORMATION` / `SYSTEM_ISOLATED_USER_MODE_INFORMATION` structs + their
+>   info-class values + `ZwQuery{System,InformationProcess}` prototypes are **not in the WDK km
+>   headers** (answering the §6 questions below): added as a new `driver/ntsystem.h` from verified
+>   public definitions (`SystemCodeIntegrityInformation`=0x67, `…IsolatedUserMode…`=0xA5,
+>   `CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED`=0x400, `PsProtectedSignerAntimalware`=3, the 16-byte
+>   IUM struct). `NTDDI_VERSION` corrected `NTDDI_WIN10_RS3`→`NTDDI_WIN11_GE` (RS3 violated IX.1
+>   and hid `ExAllocatePool2`/`FSCTL_MANAGE_BYPASS_IO`, used since Slice 4).
+> - **(engine)** `cipher_common.h` MSVC `_rotl/_rotr/_rotl64` needed `#pragma intrinsic` so they
+>   inline instead of emitting CRT calls unresolved under `/NODEFAULTLIB`.
+>
+> **Reproducible build recipe (until a CMake-WDK toolchain or EWDK is wired):** `cl /kernel /GS-`
+> with `INCLUDE = <kit>\km;<kit>\km\crt;<VC+ucrt+shared>`, defines
+> `_AMD64_ AMD64 _WIN64 NTDDI_VERSION=0x0A000010 _WIN32_WINNT=0x0A00 POOL_NX_OPTIN=1`, then
+> `link /DRIVER /SUBSYSTEM:NATIVE,10.00 /ENTRY:DriverEntry /NODEFAULTLIB` against
+> `fltMgr.lib ntoskrnl.lib hal.lib ksecdd.lib` (km\x64).
+>
+> **Caveats that are still NOT proven by a clean compile+link (do not overclaim):** (a) the
+> hand-declared `ntsystem.h` struct *layouts* (esp. the 0x10-byte IUM struct) must be validated at
+> runtime in a VM — a wrong size silently disables HVCI/VBS detection (degrades safe per VII.5, but
+> is not "working"); (b) `driver/capture.c` and `capture/src/capture.c` both yield `capture.obj` —
+> a CMake `MODULE` build needs distinct object names (the direct build used distinct `/Fo`); (c) no
+> INF validation, test-signing, load, or behavioral test was done — those need a VM. Still run
+> `InfVerif /h` + CodeQL Must-Fix and confirm the points below in a VM:
 
-- **BypassIO registration:** whether `SUPPORTED_FS_FEATURES_BYPASS_IO` is the trailing
-  `FLT_REGISTRATION` member at the targeted `FLT_REGISTRATION_VERSION` (vs. a separate call), and
-  the exact `FltVetoBypassIo` signature, against the installed `fltKernel.h` (24H2).
-- **VBS/HVCI detection structs:** `SYSTEM_ISOLATED_USER_MODE_INFORMATION` /
-  `SystemIsolatedUserModeInformation` and `CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED` availability at
-  the targeted `NTDDI_VERSION`.
+- **Capture path (`driver/capture.c`, Unit 2) — the new high-risk surface:**
+  - `FltReadFile` pre-image read at the write pre-op: confirm it does not stall or invert FS
+    locks (paging/main resource) per filesystem and write-type; confirm
+    `FLTFL_IO_OPERATION_DO_NOT_UPDATE_BYTE_OFFSET` semantics and that a cached read returns the
+    pre-image (not the just-written bytes).
+  - `FltAllocateGenericWorkItem`/`FltQueueGenericWorkItem(... DelayedWorkQueue ...)`/
+    `FltFreeGenericWorkItem` signatures, and that the self-managed `EX_RUNDOWN_REF`
+    (acquire-at-submit / release-in-worker / `ExWaitForRundownProtectionRelease` at destroy)
+    composes correctly with `FltUnregisterFilter`'s own rundown wait — destroy ordering in
+    `SarFilterUnload` is capture-before-comm-before-unregister.
+  - Phase-1 stack snapshot: `PsGetCurrentThreadTeb` + `NT_TIB.StackLimit/StackBase`, SEH +
+    `ProbeForRead`, bounded to `SAR_CAPTURE_SCAN_BYTES` (16 KiB) of the originator thread's own
+    stack in requestor context. Validate at runtime that (i) the 16 KiB near `StackLimit` actually
+    holds the just-used key schedule for representative ransomware, and (ii) the snapshot is safe
+    when the pre-op is reached at `APC_LEVEL` (guarded: snapshot only at PASSIVE). Heap-walk scan
+    is the named follow-on for schedules that live off-stack.
+  - `FltSendMessage` with a relative timeout and `NULL` reply for the fire-and-forget
+    `VERDICT_NOTIFY`; reconcile the header convention with `service/commclient.c`.
+  - The engine battery + `capture` core compile **and link** into the `.sys` under
+    `/NODEFAULTLIB` (proven this session — the `_rotl` CRT dependency was the only gap, fixed via
+    `#pragma intrinsic`). `sar_gate_map_t` (8 KiB) and `sar_capture_result_t` are pool-allocated in
+    `SarCaptureWorker`, never on the kernel stack.
+  - **Register-grab lane (follow-on):** `KeSaveExtendedProcessorState` sized via
+    `RtlGetEnabledExtendedFeatures`, IRQL `<= DISPATCH_LEVEL`.
+- **BypassIO registration — ANSWERED + a surfaced Slice-4 defect (Unit 1, not Unit 2).** The
+  26100 `FLT_REGISTRATION` has **exactly 16 members and no trailing `SupportedFeatures`/BypassIO
+  field**, so `SUPPORTED_FS_FEATURES_BYPASS_IO` is **not** a `FLT_REGISTRATION` member — it must be
+  a separate call. `driver/driver.c`'s `g_sar_registration` initializer therefore has one entry
+  too many and fails to compile (`C2078: too many initializers`). **Fix (Unit 1):** drop the
+  trailing `#if … SUPPORTED_FS_FEATURES_BYPASS_IO … #endif` initializer entry and register
+  BypassIO support through its proper separate mechanism; reconcile the `FltVetoBypassIo`
+  signature against `fltKernel.h` (26100). This blocks the full driver link until fixed.
+- **VBS/HVCI detection structs — ANSWERED:** none of `SYSTEM_ISOLATED_USER_MODE_INFORMATION`,
+  `SYSTEM_CODEINTEGRITY_INFORMATION`, their `SYSTEM_INFORMATION_CLASS` values, or
+  `CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED` are in the 26100 km headers; declared in
+  `driver/ntsystem.h` from verified public definitions. **Runtime-validate the IUM struct size
+  (0x10) in a VM** — a mismatch silently fails VBS detection (`returned < sizeof` guard).
 - **TPM presence:** the TBS/`TpmExtractEK`-based proxy in `feature.c` is heuristic — replace with a
   real TBS-presence check if available.
 - **Process-notify enum:** the `PSCREATEPROCESSNOTIFYTYPE` constant passed to
   `PsSetCreateProcessNotifyRoutineEx2`.
-- **`ZwQueryInformationProcess(ProcessProtectionInformation)` → `PS_PROTECTION`:** confirm the info
-  class + struct are exposed to kernel callers in the target headers.
+- **`ZwQueryInformationProcess(ProcessProtectionInformation)` → `PS_PROTECTION` — ANSWERED:**
+  `ProcessProtectionInformation` is in `ntddk.h`, but `PS_PROTECTION` / `PS_PROTECTED_SIGNER` /
+  `ZwQueryInformationProcess` / `PROCESS_QUERY_LIMITED_INFORMATION` are **not** exposed to kernel
+  callers in the 26100 headers; declared in `driver/ntsystem.h`. Runtime-validate that the PPL
+  query succeeds and `PsProtectedSignerAntimalware` is read correctly in a VM.
 - **Handshake signing primitive:** the service uses `NCryptOpenKey`/`NCryptSignHash` (persisted KSP
   key); reconcile the padding (`BCRYPT_PKCS1_PADDING_INFO`) with the driver's `BCryptVerifySignature`
   verify side so both agree on the scheme.
