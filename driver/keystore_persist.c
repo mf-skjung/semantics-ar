@@ -16,8 +16,6 @@ extern PSAR_STATE g_sar_state;
 #define SAR_KS_KEYTMP  L"\\SystemRoot\\System32\\drivers\\SemanticsAr\\mackey.tmp"
 #define SAR_KS_MAX_FILE (64ull * 1024ull * 1024ull)
 
-typedef NTSTATUS (NTAPI *SAR_GENRANDOM_FN)(PVOID, PUCHAR, ULONG, ULONG);
-
 struct _SAR_KEYSTORE {
     PFLT_FILTER filter;
     PSAR_POSTURE posture;
@@ -43,15 +41,7 @@ struct _SAR_KEYSTORE {
 _IRQL_requires_max_(PASSIVE_LEVEL)
 static NTSTATUS SarKsGenMacKey(_Out_writes_bytes_(SEMANTICS_AR_MAC_SIZE) PUCHAR Key)
 {
-    UNICODE_STRING name;
-    SAR_GENRANDOM_FN gen;
-
-    RtlInitUnicodeString(&name, L"BCryptGenRandom");
-    gen = (SAR_GENRANDOM_FN)MmGetSystemRoutineAddress(&name);
-    if (gen == NULL)
-        return STATUS_NOT_SUPPORTED;
-
-    return gen(NULL, Key, SEMANTICS_AR_MAC_SIZE, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    return BCryptGenRandom(NULL, Key, SEMANTICS_AR_MAC_SIZE, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

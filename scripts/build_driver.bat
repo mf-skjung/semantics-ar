@@ -46,7 +46,7 @@ for %%F in (aes des sm4 camellia aria seed stream) do (
 echo === linking ===
 link /nologo /DRIVER /INTEGRITYCHECK /SUBSYSTEM:NATIVE,10.00 /ENTRY:DriverEntry /NODEFAULTLIB ^
   /DEBUG /PDB:"%OUT%\semantics_ar.pdb" /OUT:"%OUT%\semantics_ar.sys" ^
-  "%OUT%\*.obj" fltMgr.lib ntoskrnl.lib hal.lib ksecdd.lib || ( echo LINK FAIL & exit /b 3 )
+  "%OUT%\*.obj" fltMgr.lib ntoskrnl.lib hal.lib ksecdd.lib cng.lib || ( echo LINK FAIL & exit /b 3 )
 
 echo === BUILD OK: %OUT%\semantics_ar.sys ===
 endlocal

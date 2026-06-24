@@ -11,57 +11,6 @@ static const WCHAR g_sar_service_image_allow[] = L"\\semantics_ar_service.exe";
 
 #include "service_pubkey.h"
 
-typedef NTSTATUS (NTAPI *SAR_BCRYPT_GENRANDOM)(BCRYPT_ALG_HANDLE, PUCHAR, ULONG, ULONG);
-typedef NTSTATUS (NTAPI *SAR_BCRYPT_OPEN_ALG)(BCRYPT_ALG_HANDLE *, LPCWSTR, LPCWSTR, ULONG);
-typedef NTSTATUS (NTAPI *SAR_BCRYPT_CLOSE_ALG)(BCRYPT_ALG_HANDLE, ULONG);
-typedef NTSTATUS (NTAPI *SAR_BCRYPT_IMPORT_KEYPAIR)(BCRYPT_ALG_HANDLE, BCRYPT_KEY_HANDLE, LPCWSTR,
-                                                    BCRYPT_KEY_HANDLE *, PUCHAR, ULONG, ULONG);
-typedef NTSTATUS (NTAPI *SAR_BCRYPT_DESTROY_KEY)(BCRYPT_KEY_HANDLE);
-typedef NTSTATUS (NTAPI *SAR_BCRYPT_VERIFY_SIGNATURE)(BCRYPT_KEY_HANDLE, VOID *, PUCHAR, ULONG,
-                                                      PUCHAR, ULONG, ULONG);
-
-typedef struct _SAR_BCRYPT_FNS {
-    SAR_BCRYPT_GENRANDOM gen_random;
-    SAR_BCRYPT_OPEN_ALG open_alg;
-    SAR_BCRYPT_CLOSE_ALG close_alg;
-    SAR_BCRYPT_IMPORT_KEYPAIR import_keypair;
-    SAR_BCRYPT_DESTROY_KEY destroy_key;
-    SAR_BCRYPT_VERIFY_SIGNATURE verify_signature;
-    BOOLEAN resolved;
-} SAR_BCRYPT_FNS;
-
-static SAR_BCRYPT_FNS g_sar_bcrypt;
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static PVOID SarResolveSystemRoutine(_In_ PCWSTR Name)
-{
-    UNICODE_STRING name;
-    RtlInitUnicodeString(&name, Name);
-    return MmGetSystemRoutineAddress(&name);
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static BOOLEAN SarBcryptResolve(VOID)
-{
-    if (g_sar_bcrypt.resolved)
-        return TRUE;
-
-    g_sar_bcrypt.gen_random = (SAR_BCRYPT_GENRANDOM)SarResolveSystemRoutine(L"BCryptGenRandom");
-    g_sar_bcrypt.open_alg = (SAR_BCRYPT_OPEN_ALG)SarResolveSystemRoutine(L"BCryptOpenAlgorithmProvider");
-    g_sar_bcrypt.close_alg = (SAR_BCRYPT_CLOSE_ALG)SarResolveSystemRoutine(L"BCryptCloseAlgorithmProvider");
-    g_sar_bcrypt.import_keypair = (SAR_BCRYPT_IMPORT_KEYPAIR)SarResolveSystemRoutine(L"BCryptImportKeyPair");
-    g_sar_bcrypt.destroy_key = (SAR_BCRYPT_DESTROY_KEY)SarResolveSystemRoutine(L"BCryptDestroyKey");
-    g_sar_bcrypt.verify_signature = (SAR_BCRYPT_VERIFY_SIGNATURE)SarResolveSystemRoutine(L"BCryptVerifySignature");
-
-    if (g_sar_bcrypt.gen_random == NULL || g_sar_bcrypt.open_alg == NULL ||
-        g_sar_bcrypt.close_alg == NULL || g_sar_bcrypt.import_keypair == NULL ||
-        g_sar_bcrypt.destroy_key == NULL || g_sar_bcrypt.verify_signature == NULL)
-        return FALSE;
-
-    g_sar_bcrypt.resolved = TRUE;
-    return TRUE;
-}
-
 _IRQL_requires_max_(PASSIVE_LEVEL)
 static int SarHandshakeVerify(const uint8_t *nonce, uint32_t nonce_len,
                               const uint8_t *signature, uint32_t sig_len, void *ctx)
@@ -73,28 +22,26 @@ static int SarHandshakeVerify(const uint8_t *nonce, uint32_t nonce_len,
 
     UNREFERENCED_PARAMETER(ctx);
 
-    if (!g_sar_bcrypt.resolved)
-        return 0;
     if (nonce == NULL || signature == NULL)
         return 0;
 
-    status = g_sar_bcrypt.open_alg(&alg, BCRYPT_ECDSA_P256_ALGORITHM, NULL, 0);
+    status = BCryptOpenAlgorithmProvider(&alg, BCRYPT_ECDSA_P256_ALGORITHM, NULL, 0);
     if (!NT_SUCCESS(status))
         return 0;
 
-    status = g_sar_bcrypt.import_keypair(alg, NULL, BCRYPT_ECCPUBLIC_BLOB, &key,
-                                         (PUCHAR)g_sar_service_public_key,
-                                         (ULONG)sizeof(g_sar_service_public_key), 0);
+    status = BCryptImportKeyPair(alg, NULL, BCRYPT_ECCPUBLIC_BLOB, &key,
+                                 (PUCHAR)g_sar_service_public_key,
+                                 (ULONG)sizeof(g_sar_service_public_key), 0);
     if (NT_SUCCESS(status)) {
-        status = g_sar_bcrypt.verify_signature(key, NULL,
-                                               (PUCHAR)nonce, nonce_len,
-                                               (PUCHAR)signature, sig_len, 0);
+        status = BCryptVerifySignature(key, NULL,
+                                       (PUCHAR)nonce, nonce_len,
+                                       (PUCHAR)signature, sig_len, 0);
         if (NT_SUCCESS(status))
             result = 1;
-        g_sar_bcrypt.destroy_key(key);
+        BCryptDestroyKey(key);
     }
 
-    g_sar_bcrypt.close_alg(alg, 0);
+    BCryptCloseAlgorithmProvider(alg, 0);
     return result;
 }
 
@@ -184,8 +131,8 @@ static NTSTATUS SarIssueChallenge(_Inout_ PSAR_COMM Comm)
     NTSTATUS status;
     sar_hs_result_t hs;
 
-    status = g_sar_bcrypt.gen_random(NULL, nonce, SAR_HS_NONCE_SIZE,
-                                     BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    status = BCryptGenRandom(NULL, nonce, SAR_HS_NONCE_SIZE,
+                             BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     if (!NT_SUCCESS(status))
         return status;
 
@@ -201,6 +148,17 @@ static NTSTATUS SarIssueChallenge(_Inout_ PSAR_COMM Comm)
 
     return FltSendMessage(Comm->filter, &Comm->client_port, &challenge, sizeof(challenge),
                           NULL, NULL, NULL);
+}
+
+_Function_class_(FLT_GENERIC_WORKITEM_ROUTINE)
+static VOID SarChallengeWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem,
+                               _In_ PVOID FltObject, _In_opt_ PVOID Context)
+{
+    PSAR_COMM comm = (PSAR_COMM)Context;
+    UNREFERENCED_PARAMETER(FltObject);
+    if (comm != NULL)
+        (VOID)SarIssueChallenge(comm);
+    FltFreeGenericWorkItem(FltWorkItem);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -224,9 +182,6 @@ NTSTATUS SarCommConnectNotify(_In_ PFLT_PORT ClientPort,
     if (comm == NULL)
         goto reject;
 
-    if (!SarBcryptResolve())
-        goto reject;
-
     connector_pid = PsGetCurrentProcessId();
 
     status = SarResolveConnectorImage(connector_pid, &image);
@@ -244,10 +199,19 @@ NTSTATUS SarCommConnectNotify(_In_ PFLT_PORT ClientPort,
 
     comm->client_port = ClientPort;
 
-    status = SarIssueChallenge(comm);
-    if (!NT_SUCCESS(status)) {
-        comm->client_port = NULL;
-        goto reject;
+    {
+        PFLT_GENERIC_WORKITEM challenge_wi = FltAllocateGenericWorkItem();
+        if (challenge_wi == NULL) {
+            comm->client_port = NULL;
+            goto reject;
+        }
+        status = FltQueueGenericWorkItem(challenge_wi, comm->filter, SarChallengeWorker,
+                                         DelayedWorkQueue, comm);
+        if (!NT_SUCCESS(status)) {
+            FltFreeGenericWorkItem(challenge_wi);
+            comm->client_port = NULL;
+            goto reject;
+        }
     }
 
     protection = SarQueryConnectorProtection(connector_pid);
