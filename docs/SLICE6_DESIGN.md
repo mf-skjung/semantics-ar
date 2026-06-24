@@ -21,14 +21,17 @@ Delivered in the established two-tier shape:
   (15 checks, `/W4 /WX` clean): round-trip restore, crash-window accept, rollback reject,
   same-generation tamper reject, erasure detect, corrupt detect, wrong-key reject, overflow,
   fresh-start, anchor-establish.
-- **`driver/keystore_persist.{h,c}` + integration — WRITTEN; NOT COMPILED THIS SESSION.** The
+- **`driver/keystore_persist.{h,c}` + integration — COMPILES + LINKS against the real WDK.** The
   kernel glue: a single `SAR_KEYSTORE` object that owns the non-paged record array, push lock,
   MAC key, generation, and anchor; boot-time load/restore; and a debounced background persist.
-  It is written against the documented DDIs and mirrors the existing driver tree's patterns
-  (`ExAllocatePool2`, `EX_PUSH_LOCK`, `Zw*` file I/O, FltMgr), but the WDK toolchain could not be
-  reconstructed in this session's shell (a VC-`ucrt` vs. `km\crt` CRT clash unrelated to the
-  code), so unlike the rest of `driver/` it is **not yet at the "compiles+links" tier**. Compile
-  against the real WDK and the behavioral validation below are the first follow-on items.
+  It compiles clean with `cl /kernel` at `NTDDI_WIN11_GE` (`/W4`, only Microsoft-header macro
+  noise — every `driver/` and `engine/` TU including `keystore_mgr.c` builds), and the full set
+  **links into `semantics_ar.sys` (~102 KB), `link` exit 0**. The build-out fixed one real
+  omission — `engine/src/keystore_mgr.c` was missing from `driver/CMakeLists.txt`, which would
+  have left `sar_ksm_*` unresolved at link — and re-confirmed the §6 object-name caveat
+  (`driver/capture.c` and `capture/src/capture.c` both yield `capture.obj`; the core is given a
+  distinct `/Fo`). What is proven is **compile + link**, not behavior: the runtime validation
+  below still requires a VM.
 
 ## The constitutional correction (VII.1.1 / VII.1.2 / VII.2.1)
 
@@ -150,11 +153,11 @@ matches. They do **not** exercise the Windows file I/O, the boot-reinit load tim
 debounced thread, `KeStackAttachProcess`-free persistence, the SD/ACL, or the self-I/O skip —
 all in the unverified `driver/keystore_persist.c`.
 
-## Open items for the WDK/VM follow-on (do not guess)
+## Open items for the VM follow-on (do not guess)
 
-- Compile `keystore_persist.c` and the edited `capture.c`/`driver.c` against the real WDK with the
-  project's recipe and reconcile any DDI signature drift (`FILE_RENAME_INFORMATION`, `Zw*` file
-  flags, `PsCreateSystemThread`/`PsThreadType`, `IoRegisterBootDriverReinitialization`).
+Compile + link are done (above); everything below is behavioral and needs a VM with
+test-signing / kernel debugging — a genuine environment constraint, not a deferred chore.
+
 - Validate boot timing: that the system volume is readable at the boot-driver-reinitialization
   point on the target matrix, and that a demand-loaded (test) install also reaches a load (the
   reinit callback fires only for boot-start drivers — the test caveat).

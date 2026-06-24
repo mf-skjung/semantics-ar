@@ -63,15 +63,18 @@ proven is **compile + link**, not behavior: it has not been loaded, attached, or
 - `service/` chassis (Slice 4) — still **written but NOT compiled** here (user-mode exe; outside the
   driver build-out). Compile/link-verifying it the way the driver now is, is a small follow-on.
 
-**Written but NOT compiled this session (a tier below the rest of `driver/`):** `driver/keystore_persist.{c,h}`
-(Unit 3-Core kernel glue) and the edits to `driver/capture.c` / `driver/driver.c` / `driver/driver.h`.
-The `SAR_KEYSTORE` object now owns the non-paged record array, push lock, MAC key, generation, and
-anchor; boot-time load runs from an `IoRegisterBootDriverReinitialization` callback; a dedicated
-system thread does debounced atomic persists (tmp + `ZwFlushBuffersFile` + rename); captures are
-gated on `SarKeystoreReady` until the load completes and self-writes to the keystore directory are
-skipped. It is written to the documented DDIs and mirrors existing tree patterns, but the WDK
-toolchain could not be reconstructed in this session's shell (a VC-`ucrt` vs `km\crt` CRT clash
-unrelated to the code). Compiling it with the §6 recipe is the first follow-on. See `SLICE6_DESIGN.md`.
+**Compiles + links against the real WDK (this session):** `driver/keystore_persist.{c,h}` (Unit 3-Core
+kernel glue) and the edits to `driver/capture.c` / `driver/driver.c` / `driver/driver.h`, plus
+`engine/src/keystore_mgr.c` compiled into the `.sys`. The `SAR_KEYSTORE` object owns the non-paged
+record array, push lock, MAC key, generation, and anchor; boot-time load runs from an
+`IoRegisterBootDriverReinitialization` callback; a dedicated system thread does debounced atomic
+persists (tmp + `ZwFlushBuffersFile` + rename); captures are gated on `SarKeystoreReady` until the
+load completes and self-writes to the keystore directory are skipped. Every `driver/`+`engine` TU
+compiles clean (`cl /kernel` `NTDDI_WIN11_GE`, `/W4`, only Microsoft-header noise) and all link into
+`semantics_ar.sys` (~102 KB, `link` exit 0). The build-out fixed one real omission —
+`keystore_mgr.c` was missing from `driver/CMakeLists.txt` (would have left `sar_ksm_*` unresolved) —
+and reconfirmed the §6 `capture.obj` name-collision caveat (the core gets a distinct `/Fo`). Behavior
+is **unrun**: VM validation remains. See `SLICE6_DESIGN.md`.
 
 **Forbidden-concept grep** (`preserve|shadow|journal|evict|saturat|capacity-limit|trusted_pid|
 self_trust|auto_block|access_denied`) is empty over the host-verifiable + freestanding tree and
@@ -124,8 +127,9 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
    posture fields that report "rooted" vs "descended." *DoD:* on a TPM/VBS platform an attacker
    without kernel-code execution cannot read captured keys off disk and cannot forge the store; the
    bare-machine path keeps Core's recorded descent. *Deps:* Unit 3-Core (done); couples to Unit 5
-   (PPL) for the boot-time unseal window. *First step regardless:* compile Unit 3-Core's kernel glue
-   against the real WDK (§6 recipe) and run the VM validations in `SLICE6_DESIGN.md`.
+   (PPL) for the boot-time unseal window. *Remaining for Unit 3-Core itself:* only the VM behavioral
+   validations in `SLICE6_DESIGN.md` (boot-load timing, atomic-write power-loss, self-I/O skip) — it
+   already compiles + links against the real WDK.
 2. **Windows recovery wiring (Unit 4).** *Boundary:* the comm-port `RECOVERY_REQUEST` →
    kernel-keystore key-material read → the existing `engine/host` recovery core →
    `RECOVERY_DONE`, plus volume enumeration, ReFS/same-volume specifics, large-file streaming,
