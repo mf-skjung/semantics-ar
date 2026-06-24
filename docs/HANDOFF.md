@@ -31,12 +31,26 @@ loaded with `fltmc load semantics_ar`: **exit 0, no bugcheck.** `fltmc instances
 VM harness is driven host-side over PowerShell Direct (the guest console is not observed); crash
 detection is automatic (Secure Boot off + `testsigning on` made permanent by removing the Hyper-V
 automatic checkpoint; service forced to demand-start to avoid a boot-loop on a buggy load; bugcheck
-inferred from a `LastBootUpTime` change + the System-log 1001 event + `MEMORY.DMP`). *Still pending
-for full First Light:* the signed-challenge **handshake** — the loaded driver embeds the dev public
-key from `driver/service_pubkey.h`, whose private half is in the host user store, so the guest
-service cannot yet authenticate; the next step provisions a machine key in the guest, rebuilds the
-driver with its public blob, redeploys, and runs the service. Capture/recovery behavior is still
-unrun.
+inferred from a `LastBootUpTime` change + the System-log 1001 event + `MEMORY.DMP`).
+**The signed-challenge handshake now COMPLETES end-to-end** (service reaches `SERVICE_RUNNING`,
+exit 0): the guest service signs the driver's nonce (`NCryptSignHash`, machine KSP key
+`SemanticsArServiceKey`) and the driver verifies it (`BCryptVerifySignature`, embedded matched
+public blob) → version check → `STATUS_REPLY` → run loop. So the full driver↔service trusted
+control plane runs in a live kernel. **Three real runtime bugs were found and fixed to get here**
+(all only observable by running, none caught by compile/link): (1) the driver resolved kernel BCrypt
+via `MmGetSystemRoutineAddress`, which only resolves ntoskrnl/hal exports → always NULL → connect
+refused; fixed to direct BCrypt calls + `cng.lib` (same bug in `keystore_persist.c`). (2) the
+handshake challenge was sent via `FltSendMessage` from inside `ConnectNotify` before the connection
+is established; deferred to a post-connect `FltQueueGenericWorkItem`. (3) the service validated
+received messages against the full receive-buffer capacity, not the header's `message_length`, so
+every driver-pushed message tripped `sar_msg_validate`'s exact-length (OVERSIZED) check; fixed to
+validate against the declared length bounded by capacity. The service opens the key from the
+**machine** store (`NCRYPT_MACHINE_KEY_FLAG`, was missing). *Provisioning/deploy note:*
+`service_pubkey.h` is regenerated per deployment to match the target's machine key; the driver's
+ImagePath was pointed at a writable dir on the test VM (`C:\sar`) so iterative redeploys don't fight
+the TrustedInstaller ACL on `system32\drivers`. **Still unrun: the capture path (the heart) and
+recovery** — the next and central frontier, gated on the C1 heap-scan correction (see §2 CORRECTION
+and §4 item 0).
 
 **Done and host-verified (builds clean `-Werror`/`-Wconversion` on Linux gcc and `/W4 /WX` on
 MSVC; `ctest` green):**
