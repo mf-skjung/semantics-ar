@@ -44,7 +44,8 @@ sar_comm_status_t sar_comm_open_signing_key(sar_comm_client_t *client,
     if (st != ERROR_SUCCESS)
         return SAR_COMM_ERR_KEY;
 
-    st = NCryptOpenKey(provider, &key, key_path, 0, NCRYPT_SILENT_FLAG);
+    st = NCryptOpenKey(provider, &key, key_path, 0,
+                       NCRYPT_MACHINE_KEY_FLAG | NCRYPT_SILENT_FLAG);
     if (st != ERROR_SUCCESS) {
         NCryptFreeObject(provider);
         return SAR_COMM_ERR_KEY;
