@@ -20,6 +20,24 @@ kernel-bound and Win32 code is verified in a WDK/VM context.
 
 ## 2. Current true state
 
+**Done and VM-verified — FIRST LIGHT (live kernel, Win11 24H2 Hyper-V):** the driver — for the
+first time in the project — **loads and runs in a live kernel.** Built reproducibly by
+`scripts/build_driver.bat` (`cl /kernel` against WDK 26100, `semantics_ar.sys` ~127 KB), embedded-
+test-signed + cataloged by `scripts/package_driver.ps1`, installed via `pnputil /add-driver …
+/install` (after trusting the test cert with `certutil -addstore Root/TrustedPublisher`), and
+loaded with `fltmc load semantics_ar`: **exit 0, no bugcheck.** `fltmc instances` confirms
+**universal attach** at altitude 385000 to `C:`, `D:`, `\Device\Mup`, etc. — so `DriverEntry`,
+`FltRegisterFilter`/`FltStartFiltering`, and `InstanceSetup` all execute correctly at runtime. The
+VM harness is driven host-side over PowerShell Direct (the guest console is not observed); crash
+detection is automatic (Secure Boot off + `testsigning on` made permanent by removing the Hyper-V
+automatic checkpoint; service forced to demand-start to avoid a boot-loop on a buggy load; bugcheck
+inferred from a `LastBootUpTime` change + the System-log 1001 event + `MEMORY.DMP`). *Still pending
+for full First Light:* the signed-challenge **handshake** — the loaded driver embeds the dev public
+key from `driver/service_pubkey.h`, whose private half is in the host user store, so the guest
+service cannot yet authenticate; the next step provisions a machine key in the guest, rebuilds the
+driver with its public blob, redeploys, and runs the service. Capture/recovery behavior is still
+unrun.
+
 **Done and host-verified (builds clean `-Werror`/`-Wconversion` on Linux gcc and `/W4 /WX` on
 MSVC; `ctest` green):**
 - `engine/` — ciphers, conviction battery, keystore v2 (MAC chain + anchor compare), recovery
