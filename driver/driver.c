@@ -4,6 +4,7 @@
 #include "feature.h"
 #include "commport.h"
 #include "capture.h"
+#include "keystore_persist.h"
 
 SAR_GLOBALS g_sar;
 PSAR_STATE g_sar_state;
@@ -81,6 +82,11 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
         g_sar.capture = NULL;
     }
 
+    if (g_sar.keystore != NULL) {
+        SarKeystoreDestroy(g_sar.keystore);
+        g_sar.keystore = NULL;
+    }
+
     if (g_sar.comm != NULL) {
         SarCommPortClose(g_sar.comm);
         g_sar.comm = NULL;
@@ -98,6 +104,18 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
     }
 
     return STATUS_SUCCESS;
+}
+
+_Function_class_(DRIVER_REINITIALIZE)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarBootReinit(_In_ PDRIVER_OBJECT DriverObject, _In_opt_ PVOID Context, _In_ ULONG Count)
+{
+    UNREFERENCED_PARAMETER(DriverObject);
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Count);
+
+    if (g_sar.keystore != NULL)
+        SarKeystoreLoad(g_sar.keystore);
 }
 
 static const FLT_REGISTRATION g_sar_registration = {
@@ -172,8 +190,23 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
+    status = SarKeystoreCreate(g_sar.filter, &g_sar.posture, &g_sar.keystore);
+    if (!NT_SUCCESS(status)) {
+        SarCommPortClose(g_sar.comm);
+        g_sar.comm = NULL;
+        SarProcessNotifyUnregister();
+        FltUnregisterFilter(g_sar.filter);
+        g_sar.filter = NULL;
+        SarStateDestroy(g_sar.state);
+        g_sar.state = NULL;
+        g_sar_state = NULL;
+        return status;
+    }
+
     status = SarCaptureCreate(g_sar.filter, &g_sar.capture);
     if (!NT_SUCCESS(status)) {
+        SarKeystoreDestroy(g_sar.keystore);
+        g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();
@@ -189,6 +222,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     if (!NT_SUCCESS(status)) {
         SarCaptureDestroy(g_sar.capture);
         g_sar.capture = NULL;
+        SarKeystoreDestroy(g_sar.keystore);
+        g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();
@@ -199,6 +234,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         g_sar_state = NULL;
         return status;
     }
+
+    IoRegisterBootDriverReinitialization(DriverObject, SarBootReinit, NULL);
 
     return STATUS_SUCCESS;
 }

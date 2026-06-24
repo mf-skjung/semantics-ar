@@ -10,6 +10,7 @@ add_library(semantics_ar_engine STATIC
     src/battery.c
     src/sha256.c
     src/keystore.c
+    src/keystore_mgr.c
     src/recover.c
     src/gate.c)
 
@@ -28,6 +29,8 @@ if(MSVC)
 else()
     target_compile_options(semantics_ar_engine PRIVATE -Wall -Wextra -Werror)
     set_source_files_properties(src/battery.c src/keystore.c src/gate.c
+        PROPERTIES COMPILE_OPTIONS "-Wconversion")
+    set_source_files_properties(src/keystore_mgr.c
         PROPERTIES COMPILE_OPTIONS "-Wconversion")
 endif()
 

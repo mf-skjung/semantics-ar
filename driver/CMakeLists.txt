@@ -13,6 +13,7 @@ set(SAR_DRIVER_SOURCES
     operations.c
     seam.c
     capture.c
+    keystore_persist.c
     commport.c
     state.c
     processnotify.c

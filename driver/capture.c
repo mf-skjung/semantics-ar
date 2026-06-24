@@ -1,27 +1,19 @@
 #include "capture.h"
 #include "state.h"
 #include "commport.h"
+#include "keystore_persist.h"
 
 #include <ntifs.h>
-#include <bcrypt.h>
 
 #include "sar_capture.h"
 
 extern PSAR_STATE g_sar_state;
-
-typedef NTSTATUS (NTAPI *SAR_GENRANDOM_FN)(PVOID, PUCHAR, ULONG, ULONG);
 
 struct _SAR_CAPTURE_CTX {
     PFLT_FILTER filter;
 
     LOOKASIDE_LIST_EX work_pool;
     BOOLEAN work_pool_init;
-
-    EX_PUSH_LOCK keystore_lock;
-    semantics_ar_keystore_record_t *records;
-    ULONG64 record_count;
-    ULONG64 record_capacity;
-    UCHAR mac_key[SEMANTICS_AR_MAC_SIZE];
 
     EX_PUSH_LOCK blocked_lock;
     PEPROCESS *blocked;
@@ -32,6 +24,7 @@ struct _SAR_CAPTURE_CTX {
 
     volatile LONG64 whitelist_skips;
     volatile LONG64 pressure_drops;
+    volatile LONG64 preload_drops;
 };
 
 typedef struct _SAR_CAPTURE_WORK {
@@ -49,20 +42,6 @@ typedef struct _SAR_CAPTURE_WORK {
     UINT16 provenance_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
     UINT64 provenance_offset;
 } SAR_CAPTURE_WORK, *PSAR_CAPTURE_WORK;
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarCaptureSeedMacKey(_Out_writes_bytes_(SEMANTICS_AR_MAC_SIZE) PUCHAR Key)
-{
-    UNICODE_STRING name;
-    SAR_GENRANDOM_FN gen;
-
-    RtlInitUnicodeString(&name, L"BCryptGenRandom");
-    gen = (SAR_GENRANDOM_FN)MmGetSystemRoutineAddress(&name);
-    if (gen == NULL)
-        return STATUS_NOT_SUPPORTED;
-
-    return gen(NULL, Key, SEMANTICS_AR_MAC_SIZE, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-}
 
 _IRQL_requires_max_(APC_LEVEL)
 static BOOLEAN SarCaptureMemberCapturable(_In_ sar_destruct_member_t Member)
@@ -234,17 +213,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 static VOID SarCaptureCommit(_In_ PSAR_CAPTURE_CTX Ctx, _In_ sar_capture_result_t *Result,
                              _In_ PEPROCESS Originator)
 {
-    int rc;
-
-    FltAcquirePushLockExclusive(&Ctx->keystore_lock);
-    rc = sar_keystore_append(Ctx->records, &Ctx->record_count, Ctx->record_capacity,
-                             &Result->record);
-    FltReleasePushLock(&Ctx->keystore_lock);
-
-    if (rc != 1)
+    if (SarKeystoreAppend(g_sar.keystore, &Result->record) != 1)
         return;
 
-    InterlockedIncrement64(&g_sar_state->captured_key_count);
     SarCaptureSendNotify(Ctx, &Result->notify);
 
     if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE)
@@ -285,7 +256,8 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         req.provenance_path = work->provenance_path;
         req.provenance_offset = work->provenance_offset;
 
-        if (sar_capture_run(&req, map, ctx->mac_key, result) == SAR_CAPTURE_CONVICTED)
+        if (sar_capture_run(&req, map, SarKeystoreMacKey(g_sar.keystore), result) ==
+            SAR_CAPTURE_CONVICTED)
             SarCaptureCommit(ctx, result, work->originator_process);
     }
 
@@ -310,6 +282,25 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
 }
 
 _IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarCaptureProvenanceIsOwn(_In_ const UINT16 *Path)
+{
+    static const UINT16 marker[] = { 'S', 'e', 'm', 'a', 'n', 't', 'i', 'c', 's', 'A', 'r' };
+    ULONG i, j;
+
+    for (i = 0; i < SEMANTICS_AR_PROVENANCE_PATH_MAX; i++) {
+        if (Path[i] == 0)
+            break;
+        for (j = 0; j < RTL_NUMBER_OF(marker); j++) {
+            if (i + j >= SEMANTICS_AR_PROVENANCE_PATH_MAX || Path[i + j] != marker[j])
+                break;
+        }
+        if (j == RTL_NUMBER_OF(marker))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
 VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEAM_REQUEST Request)
 {
     PSAR_CAPTURE_WORK work;
@@ -319,6 +310,12 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
     SarSeamWriteSubmit(Request);
 
     if (Ctx == NULL || !SarCaptureMemberCapturable(Request->member)) {
+        SarSeamWriteRelease(Request);
+        return;
+    }
+
+    if (!SarKeystoreReady(g_sar.keystore)) {
+        InterlockedIncrement64(&Ctx->preload_drops);
         SarSeamWriteRelease(Request);
         return;
     }
@@ -368,6 +365,14 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
     work->provenance_offset = work->file_offset;
 
     SarCaptureResolveProvenance(Request->data, work->provenance_path);
+    if (SarCaptureProvenanceIsOwn(work->provenance_path)) {
+        FltFreeGenericWorkItem(item);
+        ExFreeToLookasideListEx(&Ctx->work_pool, work);
+        ExReleaseRundownProtection(&Ctx->rundown);
+        InterlockedDecrement(&Ctx->inflight);
+        SarSeamWriteRelease(Request);
+        return;
+    }
     work->written_len = SarCaptureCopyWritten(Request->data, work->written, SAR_CAPTURE_BUFFER_BYTES);
     work->pre_image_len = SarCaptureReadPreImage(Request->related, Request->write_offset,
                                                  Request->write_length, work->pre_image,
@@ -401,35 +406,17 @@ NTSTATUS SarCaptureCreate(_In_ PFLT_FILTER Filter, _Outptr_ PSAR_CAPTURE_CTX *Ct
         return STATUS_INSUFFICIENT_RESOURCES;
 
     ctx->filter = Filter;
-    ctx->record_count = 0;
-    ctx->record_capacity = SAR_KEYSTORE_CAPACITY;
     ctx->blocked_count = 0;
     ctx->inflight = 0;
     ctx->whitelist_skips = 0;
     ctx->pressure_drops = 0;
-
-    status = SarCaptureSeedMacKey(ctx->mac_key);
-    if (!NT_SUCCESS(status)) {
-        ExFreePoolWithTag(ctx, SAR_POOL_TAG_CAPCTX);
-        return status;
-    }
-
-    ctx->records = (semantics_ar_keystore_record_t *)ExAllocatePool2(
-        POOL_FLAG_NON_PAGED,
-        SAR_KEYSTORE_CAPACITY * sizeof(semantics_ar_keystore_record_t),
-        SAR_POOL_TAG_KEYSTORE);
-    if (ctx->records == NULL) {
-        RtlSecureZeroMemory(ctx->mac_key, sizeof(ctx->mac_key));
-        ExFreePoolWithTag(ctx, SAR_POOL_TAG_CAPCTX);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    ctx->preload_drops = 0;
+    ctx->work_pool_init = FALSE;
 
     ctx->blocked = (PEPROCESS *)ExAllocatePool2(POOL_FLAG_NON_PAGED,
                                                 SAR_BLOCKED_CAPACITY * sizeof(PEPROCESS),
                                                 SAR_POOL_TAG_BLOCKED);
     if (ctx->blocked == NULL) {
-        ExFreePoolWithTag(ctx->records, SAR_POOL_TAG_KEYSTORE);
-        RtlSecureZeroMemory(ctx->mac_key, sizeof(ctx->mac_key));
         ExFreePoolWithTag(ctx, SAR_POOL_TAG_CAPCTX);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -438,14 +425,11 @@ NTSTATUS SarCaptureCreate(_In_ PFLT_FILTER Filter, _Outptr_ PSAR_CAPTURE_CTX *Ct
                                          sizeof(SAR_CAPTURE_WORK), SAR_POOL_TAG_CAPWORK, 0);
     if (!NT_SUCCESS(status)) {
         ExFreePoolWithTag(ctx->blocked, SAR_POOL_TAG_BLOCKED);
-        ExFreePoolWithTag(ctx->records, SAR_POOL_TAG_KEYSTORE);
-        RtlSecureZeroMemory(ctx->mac_key, sizeof(ctx->mac_key));
         ExFreePoolWithTag(ctx, SAR_POOL_TAG_CAPCTX);
         return status;
     }
     ctx->work_pool_init = TRUE;
 
-    FltInitializePushLock(&ctx->keystore_lock);
     FltInitializePushLock(&ctx->blocked_lock);
     ExInitializeRundownProtection(&ctx->rundown);
 
@@ -469,17 +453,10 @@ VOID SarCaptureDestroy(_Inout_ PSAR_CAPTURE_CTX Ctx)
     if (Ctx->work_pool_init)
         ExDeleteLookasideListEx(&Ctx->work_pool);
 
-    FltDeletePushLock(&Ctx->keystore_lock);
     FltDeletePushLock(&Ctx->blocked_lock);
 
-    if (Ctx->records != NULL) {
-        RtlSecureZeroMemory(Ctx->records,
-                            (SIZE_T)(Ctx->record_capacity * sizeof(semantics_ar_keystore_record_t)));
-        ExFreePoolWithTag(Ctx->records, SAR_POOL_TAG_KEYSTORE);
-    }
     if (Ctx->blocked != NULL)
         ExFreePoolWithTag(Ctx->blocked, SAR_POOL_TAG_BLOCKED);
 
-    RtlSecureZeroMemory(Ctx->mac_key, sizeof(Ctx->mac_key));
     ExFreePoolWithTag(Ctx, SAR_POOL_TAG_CAPCTX);
 }

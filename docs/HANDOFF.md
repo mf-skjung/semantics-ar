@@ -32,6 +32,11 @@ MSVC; `ctest` green):**
   invariant. `tests/test_capture.c`, 51 checks (ECB/CBC conviction, scan-buffer-primary path,
   gate skip, no-conviction, invalid inputs, provenance, key_id determinism, no-leak). See
   `SLICE5_DESIGN.md`.
+- `engine/sar_keystore_mgr.{h,c}` — the keystore load/persist policy core (Unit 3-Core): the
+  anchor/generation state machine (crash-window accept vs. rollback/erasure/tamper reject) over
+  the existing serialize/verify. `tests/test_keystore_mgr.c`, 15 checks (round-trip restore,
+  crash window, rollback, same-gen tamper, erasure, corrupt, wrong-key, overflow). See
+  `SLICE6_DESIGN.md`.
 - Contract: `protocol.h` signed-challenge handshake + `STATUS_REPLY`; validator/tests cover
   message types 1–10. The `VERDICT_NOTIFY` projection is now exercised by `test_capture`.
 
@@ -57,6 +62,16 @@ proven is **compile + link**, not behavior: it has not been loaded, attached, or
   `Zw*`) absent from the WDK km headers — **layouts need VM runtime validation** (§6).
 - `service/` chassis (Slice 4) — still **written but NOT compiled** here (user-mode exe; outside the
   driver build-out). Compile/link-verifying it the way the driver now is, is a small follow-on.
+
+**Written but NOT compiled this session (a tier below the rest of `driver/`):** `driver/keystore_persist.{c,h}`
+(Unit 3-Core kernel glue) and the edits to `driver/capture.c` / `driver/driver.c` / `driver/driver.h`.
+The `SAR_KEYSTORE` object now owns the non-paged record array, push lock, MAC key, generation, and
+anchor; boot-time load runs from an `IoRegisterBootDriverReinitialization` callback; a dedicated
+system thread does debounced atomic persists (tmp + `ZwFlushBuffersFile` + rename); captures are
+gated on `SarKeystoreReady` until the load completes and self-writes to the keystore directory are
+skipped. It is written to the documented DDIs and mirrors existing tree patterns, but the WDK
+toolchain could not be reconstructed in this session's shell (a VC-`ucrt` vs `km\crt` CRT clash
+unrelated to the code). Compiling it with the §6 recipe is the first follow-on. See `SLICE6_DESIGN.md`.
 
 **Forbidden-concept grep** (`preserve|shadow|journal|evict|saturat|capacity-limit|trusted_pid|
 self_trust|auto_block|access_denied`) is empty over the host-verifiable + freestanding tree and
@@ -96,13 +111,21 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
 > kernel glue now **compiles + links against the real WDK** (§6); only runtime/VM behavioral
 > validation remains.
 
-1. **Keystore self-protection (Unit 3).** *Boundary:* kernel non-paged-pool residence of the
-   authoritative keystore + whitelist, in-kernel keyed MAC (the MAC key never in user mode), and
-   the TPM-sealed key + external anchor (the on-disk format and anchor *comparison* already exist
-   from Slice 1). *DoD:* an attacker without kernel-code execution cannot read or silently erase
-   captured keys; rollback is caught by the anchor; degrades + records posture where TPM/HVCI
-   absent (VII.5). *Deps:* Unit 2 (done — it produces the keys; takes over the in-kernel store,
-   push lock, and load-seeded MAC key that `driver/capture.c` provisions transiently).
+1. **Keystore self-protection — Unit 3-Core: DONE (host core verified; kernel glue written,
+   uncompiled).** Cross-reboot survival now exists on every platform: the keystore + MAC key +
+   external anchor persist to disk, are verified and restored at boot, and rollback/erasure/tamper
+   are caught by the anchor state machine. The constitutional premise was corrected: a Windows
+   kernel driver has no TPM access, so VII.1.1/VII.1.2/VII.2.1 were rewritten (sealed-key unseal is
+   the PPL service's job; on-disk confidentiality and MAC-key secrecy descend and are recorded
+   where no TPM/VBS seal exists — VII.5). See `SLICE6_DESIGN.md`.
+   *Remaining — Unit 3-Hardening (VM-bound, raises the recorded descent to hardware-rooted):*
+   service-side TBS unseal of a TPM-sealed MAC key + IOCTL delivery to the kernel + application-PCR
+   cap; a TPM-NV-counter or VBS-enclave anchor; on-disk AEAD encryption of the records; and the
+   posture fields that report "rooted" vs "descended." *DoD:* on a TPM/VBS platform an attacker
+   without kernel-code execution cannot read captured keys off disk and cannot forge the store; the
+   bare-machine path keeps Core's recorded descent. *Deps:* Unit 3-Core (done); couples to Unit 5
+   (PPL) for the boot-time unseal window. *First step regardless:* compile Unit 3-Core's kernel glue
+   against the real WDK (§6 recipe) and run the VM validations in `SLICE6_DESIGN.md`.
 2. **Windows recovery wiring (Unit 4).** *Boundary:* the comm-port `RECOVERY_REQUEST` →
    kernel-keystore key-material read → the existing `engine/host` recovery core →
    `RECOVERY_DONE`, plus volume enumeration, ReFS/same-volume specifics, large-file streaming,

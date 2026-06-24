@@ -489,25 +489,45 @@ the descent is recorded, never silently assumed.
 
 ### VII.1 Keystore secrecy, integrity, and persistence
 **[DECISION] VII.1.1.** The authoritative keystore and the whitelist live in the
-minifilter's **kernel non-paged pool**, inaccessible from user mode (even SYSTEM /
-`SeDebugPrivilege`) without kernel-code execution. The on-disk keystore (needed
-because recovery may occur after the attack or after reboot) is sealed with a keyed
-MAC computed and verified **in kernel**; the MAC key never exists in user mode. The
-keystore is append-oriented and tamper-evident so that an attacker cannot silently
-erase captured keys.
+minifilter's **kernel non-paged pool**, which a user-mode actor — even SYSTEM — cannot
+read without kernel-code execution, by the CPU's user/kernel privilege boundary
+(VII.2). The on-disk keystore (needed because recovery may occur after the attack or
+after reboot) is **integrity-sealed with a keyed MAC computed and verified in kernel**,
+is append-oriented, and is tamper-evident so that any edit, reorder, truncation, or
+rollback of captured keys is detected on load (the external anchor of VII.1.2 closes
+rollback). **Confidentiality of the on-disk copy is exactly the strength of the
+platform seal:** where the platform seals the key (VII.1.2) the records are encrypted
+under that sealed key and an attacker without kernel-code execution cannot read
+captured keys; where the platform cannot seal, the on-disk copy is integrity-protected
+but its confidentiality descends to the kernel-line boundary and the descent is
+recorded (VII.5). The live in-kernel copy is confidential by the privilege boundary
+regardless. The MAC key is held in kernel pool; it exists in user mode only inside the
+single bounded boot-time unsealing window of VII.1.2, and where the platform cannot
+seal it its persisted secrecy descends to that same boundary and is recorded.
 
-**[DECISION] VII.1.2.** Where the platform provides it, the kernel MAC / keystore key
-is **TPM-sealed** under a PCR policy, unsealed once at early boot by the boot-start
-driver, after which the gating PCR is extended so no later code can re-unseal in that
-boot session. Where a usable TPM stack is absent, the regression terminates at the
-highest residence the platform allows and the system records that the hardware-rooted
-guarantee is not claimed there (VII.5).
+**[DECISION] VII.1.2.** The seal is rooted in the platform, never synthesized in
+software. A Windows kernel driver has no TPM access — the TPM is reached only through
+user-mode TBS — so where the platform provides a TPM the MAC / keystore key is
+**TPM-sealed under a PCR policy and unsealed once at boot by the PPL-protected
+service**, which delivers it to the kernel over the authenticated comm channel
+(VII.3) and zeroizes its user-mode copy immediately; the gating application-PCR is then
+extended so no later code can re-unseal it in that boot session. Where a VBS enclave is
+present it may hold the sealing key in VTL1 in place of that service window. The
+external rollback anchor (`{generation, head_mac}`) is held apart from the keystore
+file — in a TPM monotonic-counter NV index where available, else in the sealed key
+blob. Where neither a TPM nor a VBS enclave is present, the regression terminates at
+the highest residence the platform allows and the system records that the
+hardware-rooted guarantee is not claimed there (VII.5).
 
 ### VII.2 Kernel-pool secrecy precondition
 **[DECISION] VII.2.1.** Reading the minifilter's pool from user mode requires
-kernel-code execution. This holds at full strength with HVCI active; where HVCI is
-absent on a supported OS the boundary descends (VII.5) and is recorded — it is not
-silently weakened and it is not synthesized in software.
+kernel-code execution — this is the CPU's user/kernel privilege boundary and holds
+whether or not HVCI is present. HVCI's role is upstream: by blocking unsigned and
+vulnerable kernel code it makes *obtaining* that kernel-code execution harder, keeping
+the attacker inside the in-scope user-mode zone (Part VIII). Where HVCI is absent on a
+supported OS the pool's secrecy against a user-mode attacker is unchanged, but the ease
+of escalating past the kernel line rises; that descent is recorded (VII.5), not
+silently weakened and not synthesized in software.
 
 ### VII.3 The observation point stays attached and authentic
 **[DECISION] VII.3.1.** The minifilter loads boot-start at an appropriate altitude,
