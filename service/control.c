@@ -1,6 +1,7 @@
 #include "control.h"
 
 #include <string.h>
+#include <sddl.h>
 
 #include "semantics_ar/protocol.h"
 
@@ -132,13 +133,14 @@ static DWORD WINAPI sar_control_thread(LPVOID param)
 {
     sar_control_listener_t *self = (sar_control_listener_t *)param;
     SECURITY_ATTRIBUTES sa;
-    SECURITY_DESCRIPTOR sd;
+    PSECURITY_DESCRIPTOR sd = NULL;
 
-    InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
-    SetSecurityDescriptorDacl(&sd, FALSE, NULL, FALSE);
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &sd, NULL))
+        return 0;
     memset(&sa, 0, sizeof(sa));
     sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = &sd;
+    sa.lpSecurityDescriptor = sd;
     sa.bInheritHandle = FALSE;
 
     while (InterlockedCompareExchange(&self->running, 1, 1) == 1) {
@@ -163,6 +165,7 @@ static DWORD WINAPI sar_control_thread(LPVOID param)
         CloseHandle(pipe);
     }
 
+    LocalFree(sd);
     return 0;
 }
 

@@ -34,22 +34,25 @@ else()
         PROPERTIES COMPILE_OPTIONS "-Wconversion")
 endif()
 
-if(NOT WIN32)
-    add_library(semantics_ar_recovery_host STATIC
-        host/recover_file.c)
+add_library(semantics_ar_recovery_host STATIC
+    host/recover_file.c)
 
-    target_include_directories(semantics_ar_recovery_host PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/host"
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../common/include")
+target_include_directories(semantics_ar_recovery_host PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/host"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../common/include")
 
-    target_link_libraries(semantics_ar_recovery_host PUBLIC semantics_ar_engine)
+target_link_libraries(semantics_ar_recovery_host PUBLIC semantics_ar_engine)
 
+set_target_properties(semantics_ar_recovery_host PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON)
+
+if(MSVC)
+    target_compile_definitions(semantics_ar_recovery_host PRIVATE
+        _UNICODE UNICODE WIN32_LEAN_AND_MEAN)
+    target_compile_options(semantics_ar_recovery_host PRIVATE /W4 /WX)
+else()
     target_compile_definitions(semantics_ar_recovery_host PRIVATE
         _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
-
-    set_target_properties(semantics_ar_recovery_host PROPERTIES
-        C_STANDARD 11 C_STANDARD_REQUIRED ON)
-
     target_compile_options(semantics_ar_recovery_host PRIVATE -Wall -Wextra -Werror)
 endif()

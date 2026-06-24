@@ -6,8 +6,6 @@
 
 #include "semantics_ar/protocol.h"
 
-#define SAR_COMM_PORT_NAME L"\\SemanticsArPort"
-
 typedef enum {
     SAR_COMM_OK = 0,
     SAR_COMM_ERR_CONNECT = 1,

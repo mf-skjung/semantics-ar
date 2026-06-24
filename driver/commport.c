@@ -9,7 +9,14 @@ extern PSAR_STATE g_sar_state;
 static const WCHAR g_sar_service_image_allow[] = L"\\semantics_ar_service.exe";
 
 static const UCHAR g_sar_service_public_key[] = {
-    0x52, 0x53, 0x41, 0x31, 0x00, 0x00, 0x00, 0x00,
+    0x45, 0x43, 0x53, 0x31, 0x20, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
@@ -80,20 +87,17 @@ static int SarHandshakeVerify(const uint8_t *nonce, uint32_t nonce_len,
     if (nonce == NULL || signature == NULL)
         return 0;
 
-    status = g_sar_bcrypt.open_alg(&alg, BCRYPT_RSA_ALGORITHM, NULL, 0);
+    status = g_sar_bcrypt.open_alg(&alg, BCRYPT_ECDSA_P256_ALGORITHM, NULL, 0);
     if (!NT_SUCCESS(status))
         return 0;
 
-    status = g_sar_bcrypt.import_keypair(alg, NULL, BCRYPT_RSAPUBLIC_BLOB, &key,
+    status = g_sar_bcrypt.import_keypair(alg, NULL, BCRYPT_ECCPUBLIC_BLOB, &key,
                                          (PUCHAR)g_sar_service_public_key,
                                          (ULONG)sizeof(g_sar_service_public_key), 0);
     if (NT_SUCCESS(status)) {
-        BCRYPT_PKCS1_PADDING_INFO padding;
-        padding.pszAlgId = BCRYPT_SHA256_ALGORITHM;
-        status = g_sar_bcrypt.verify_signature(key, &padding,
+        status = g_sar_bcrypt.verify_signature(key, NULL,
                                                (PUCHAR)nonce, nonce_len,
-                                               (PUCHAR)signature, sig_len,
-                                               BCRYPT_PAD_PKCS1);
+                                               (PUCHAR)signature, sig_len, 0);
         if (NT_SUCCESS(status))
             result = 1;
         g_sar_bcrypt.destroy_key(key);

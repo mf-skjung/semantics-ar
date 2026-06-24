@@ -1,7 +1,6 @@
 #include "commclient.h"
 
 #include <fltUser.h>
-#include <bcrypt.h>
 #include <ncrypt.h>
 #include <string.h>
 
@@ -81,7 +80,6 @@ static sar_comm_status_t sar_comm_recv_message(sar_comm_client_t *client,
 {
     sar_filter_message_t msg;
     HRESULT hr;
-    DWORD   bodyLen;
     uint32_t type;
 
     if (capacity > SAR_COMM_RECV_BUFFER)
@@ -94,11 +92,7 @@ static sar_comm_status_t sar_comm_recv_message(sar_comm_client_t *client,
     if (FAILED(hr))
         return SAR_COMM_ERR_TRANSPORT;
 
-    bodyLen = msg.fltHeader.ReplyLength;
-    if (bodyLen == 0 || bodyLen > capacity)
-        bodyLen = capacity;
-
-    if (sar_msg_validate(msg.payload, bodyLen, &type) != SAR_MSG_OK)
+    if (sar_msg_validate(msg.payload, capacity, &type) != SAR_MSG_OK)
         return SAR_COMM_ERR_PROTOCOL;
 
     {
@@ -171,35 +165,11 @@ static sar_comm_status_t sar_comm_sign_nonce(sar_comm_client_t *client,
                                              uint8_t *sig, uint32_t sig_cap,
                                              uint32_t *out_sig_len)
 {
-    BCRYPT_ALG_HANDLE alg = NULL;
-    BCRYPT_HASH_HANDLE hash = NULL;
-    NTSTATUS bs;
-    uint8_t digest[32];
     SECURITY_STATUS ss;
     DWORD produced = 0;
 
-    bs = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0);
-    if (bs != STATUS_SUCCESS)
-        return SAR_COMM_ERR_HANDSHAKE;
-
-    bs = BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0);
-    if (bs != STATUS_SUCCESS) {
-        BCryptCloseAlgorithmProvider(alg, 0);
-        return SAR_COMM_ERR_HANDSHAKE;
-    }
-
-    bs = BCryptHashData(hash, (PUCHAR)nonce, nonce_len, 0);
-    if (bs == STATUS_SUCCESS)
-        bs = BCryptFinishHash(hash, digest, sizeof(digest), 0);
-
-    BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(alg, 0);
-
-    if (bs != STATUS_SUCCESS)
-        return SAR_COMM_ERR_HANDSHAKE;
-
     ss = NCryptSignHash((NCRYPT_KEY_HANDLE)client->sign_key, NULL,
-                        digest, sizeof(digest),
+                        (PBYTE)nonce, nonce_len,
                         sig, sig_cap, &produced, NCRYPT_SILENT_FLAG);
     if (ss != ERROR_SUCCESS || produced == 0 || produced > sig_cap)
         return SAR_COMM_ERR_HANDSHAKE;

@@ -121,6 +121,8 @@ static void WINAPI sar_service_main(DWORD argc, LPWSTR *argv)
     memset(&g_service.comm, 0, sizeof(g_service.comm));
     g_service.comm.port = INVALID_HANDLE_VALUE;
 
+    sar_set_status(SERVICE_RUNNING, NO_ERROR, 0);
+
     cs = sar_comm_open_signing_key(&g_service.comm, SAR_SIGNING_KEY_NAME);
     if (cs != SAR_COMM_OK) {
         sar_set_status(SERVICE_STOPPED, ERROR_NO_SUCH_PRIVILEGE, 0);
@@ -149,8 +151,6 @@ static void WINAPI sar_service_main(DWORD argc, LPWSTR *argv)
     g_service.recovery.resolve_ctx = NULL;
 
     g_service.control_thread = sar_control_listener_start(&g_service.comm);
-
-    sar_set_status(SERVICE_RUNNING, NO_ERROR, 0);
 
     {
         sar_comm_dispatch_t dispatch;

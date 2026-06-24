@@ -109,7 +109,7 @@ int main(void)
 
     printf("[base64-armored ciphertext over text -> still fires (hard floor ~0.938)]\n");
     {
-        static const uint8_t b64[64] =
+        static const uint8_t b64[65] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         fill_text(orig, 256);
         fill_alphabet(wrote, 256, 0xB64B, b64, 64);
@@ -120,7 +120,7 @@ int main(void)
 
     printf("[realistic hex-armored ciphertext over text -> still fires (only de-Bruijn corner misses)]\n");
     {
-        static const uint8_t hex[16] = "0123456789abcdef";
+        static const uint8_t hex[17] = "0123456789abcdef";
         fill_text(orig, 256);
         fill_alphabet(wrote, 256, 0x4EE7, hex, 16);
         sar_gate_block_counts(&scratch, orig, wrote, 256, &nq, &nc);

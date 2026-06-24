@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — Unit 2 capture + driver compile/link session (2026-06-24)
+# Handoff — semantics-ar Windows realization — Unit 6 service build + recovery-backend + contract reconciliation (2026-06-24)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
@@ -60,8 +60,22 @@ proven is **compile + link**, not behavior: it has not been loaded, attached, or
 - `driver/ntsystem.h` (this session): driver-declared semi-documented system structs/enums/prototypes
   (`PS_PROTECTION`, `SYSTEM_CODEINTEGRITY_INFORMATION`, `SYSTEM_ISOLATED_USER_MODE_INFORMATION`,
   `Zw*`) absent from the WDK km headers — **layouts need VM runtime validation** (§6).
-- `service/` chassis (Slice 4) — still **written but NOT compiled** here (user-mode exe; outside the
-  driver build-out). Compile/link-verifying it the way the driver now is, is a small follow-on.
+**Done and host/compile-verified this session (Unit 6 — service build + recovery backend + driver↔service
+contract reconciliation):**
+- `service/` (user-mode exe) now **COMPILES + LINKS** clean (`/W4 /WX`, VS2022 x64, `semantics_ar_service.exe`
+  ~73 KB) against the real Win32/CNG/WinTrust/fltlib SDK — the entire user-mode half had never been through a
+  compiler before. Built via CMake (`build_win`), which configures `engine`+`control`+`capture`+`service`+`tests`
+  on Windows (the `driver/` subdir self-skips when the WDK is not found by CMake; the driver is built by the
+  standalone `cl /kernel` recipe in §6).
+- `engine/host/recover_file.c` gained a **Win32 atomic-write backend** (the HANDOFF §4.2 engine prerequisite);
+  `semantics_ar_recovery_host` now configures and builds on Windows. `tests/test_recover` is now enabled on
+  Windows and **passes** (`ctest` 7/7 green on Windows incl. the no-clobber writeback over real files) — this is
+  the host-verified, end-to-end exercise of the Win32 `ReplaceFileW` recovery path.
+- The driver was **re-verified** (`cl /kernel` `COMPILE_OK`/`LINK_OK`) after the signing-scheme reconciliation
+  below.
+- The recovery **resolver** (`sar_recovery_resolver_fn`) remains a **declining stub** by design — wiring it to
+  the kernel keystore-read is Unit 4 (below). This is the only intentional open seam in `service/`; it never
+  fabricates keys.
 
 **Compiles + links against the real WDK (this session):** `driver/keystore_persist.{c,h}` (Unit 3-Core
 kernel glue) and the edits to `driver/capture.c` / `driver/driver.c` / `driver/driver.h`, plus
@@ -102,6 +116,45 @@ the **second mandated `access_denied`** (V.1 ENFORCE block); and the **rejected*
 pre-screen — IV.2.3; in-kernel process termination — scope/philosophy). The driver build-out's
 cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
 
+**Unit 6 decisions (external-validated against primary Microsoft sources; not derivable from code):**
+- **Handshake = ECDSA-P256 over the raw 32-byte nonce, no hash, no padding.** The build-out found the
+  handshake could *never* have authenticated as written: the driver verified RSA-PKCS1 over the *raw* nonce
+  while the service signed PKCS-less (`NCryptSignHash`, `pPaddingInfo=NULL`) over `SHA-256(nonce)` — both a
+  scheme mismatch *and* an input mismatch (the driver never hashed). Resolved to ECDSA-P256 because the service
+  was already padding-less (the documented ECDSA shape) and ECDSA removes the padding agreement point entirely
+  and shrinks the compiled-in public key. The 32-byte nonce is used directly as the signed value on both sides
+  (a high-entropy single-use challenge needs no pre-hash). Driver verify side switched to
+  `BCRYPT_ECDSA_P256_ALGORITHM` + `BCRYPT_ECCPUBLIC_BLOB` + NULL padding; the compiled-in key is an ECC-P256
+  public-blob **placeholder** (provisioned at deployment, like the prior RSA placeholder).
+- **Win32 recovery writeback** = write temp in the same dir → `FlushFileBuffers` → **`ReplaceFileW`** (NULL
+  backup honours no-preservation; preserves the original's DACL/timestamps/object-id/ADS) with a
+  **`SetFileInformationByHandle(FileRenameInfoEx, REPLACE_IF_EXISTS|POSIX_SEMANTICS)` fallback** when the target
+  is held open (e.g. by the still-running ransomware) — POSIX-semantics rename wins that race. The POSIX
+  `fsync(parent-dir)` step was **dropped on Windows** (no equivalent; a directory `FlushFileBuffers` is
+  undefined and fails on SMB — rename durability rides NTFS journaling). `REPLACEFILE_WRITE_THROUGH` is
+  documented "not supported," so it is not used.
+- **Identity verification hardening** (`service/identity.c`): hash + Authenticode trust are now bound to a
+  **single locked handle** (`FILE_SHARE_READ` only → denies write/delete/rename for the eval window) to close
+  the TOCTOU between hashing/verifying and the path-based signer lookup; revocation is **cache-only**
+  (`WTD_CACHE_ONLY_URL_RETRIEVAL` + `WTD_REVOKE_WHOLECHAIN`) to avoid a network stall on the create hot path;
+  the signer name is read via the explicit `CERT_NAME_ATTR_TYPE`+`szOID_COMMON_NAME` (deterministic, vs the
+  `SIMPLE_DISPLAY` fallback chain). **Content hash stays the plain file SHA-256** (not the Authenticode PE
+  hash): for a narrow, exact-match, revocable exemption a tighter "any byte change re-verifies" binding is
+  preferable; re-sign stability is an anti-feature here. *Recorded hardening not taken (content-hash already
+  neutralizes it, so it does not escape Constitution 0.3): pinning issuer + leaf SHA-256 thumbprint instead of
+  the subject string — a future option if the identity tuple is ever widened.*
+- **NCryptSignHash deadlock avoidance**: the service reports `SERVICE_RUNNING` **before** opening the signing
+  key / connecting / running the handshake, because `NCryptSignHash` must not be called from the
+  StartService/ServiceMain path while the SCM start-lock is held (primary-source Remark). The crypto now runs
+  after the lock is released.
+- **Operator control pipe DACL** (`service/control.c`) tightened from a **NULL DACL (every local process)** to
+  SYSTEM + Administrators only (`D:P(A;;GA;;;SY)(A;;GA;;;BA)`) — the pipe drives mode/whitelist, so an open DACL
+  was an authority hole.
+- **Port name single-sourced** to `protocol.h` (`SAR_COMM_PORT_NAME`), removing the driver/service duplicates.
+- Service receive path no longer mis-reads `FILTER_MESSAGE_HEADER.ReplyLength` as the inbound payload length
+  (`ReplyLength` is the *expected reply* size, zero for fire-and-forget) — inbound length now comes from the
+  app header via `sar_msg_validate`.
+
 ## 4. Remaining work (ordered; each: boundary / definition-of-done / deps)
 
 > **Unit 2 (Capture path) is DONE this session** — freestanding core host-verified
@@ -136,14 +189,18 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
    and residue clearing. The service relay end is the chassis (done); the **named typed boundary**
    where kernel key material feeds the recovery core is `sar_recovery_resolver_fn` /
    `sar_recovery_input_t` in `service/recovery.h` (the service installs a declining stub until the
-   kernel keystore-read path is wired — it never fabricates keys). **Link prerequisite (engine
-   change):** `semantics_ar_recovery_host` is declared only under `if(NOT WIN32)` in
-   `engine/CMakeLists.txt` because `host/recover_file.c` uses POSIX `open`/`mkstemp`/`fsync`; the
-   service links it on Windows, so this unit (or a small engine sub-task) must give
-   `sar_recover_file` a Win32 atomic-write backing
-   (`CreateFile`/`FlushFileBuffers`/`MoveFileEx(MOVEFILE_REPLACE_EXISTING)`) and let the target
-   configure on `WIN32`. *DoD:* an operator recovery request recovers real files end-to-end on
-   Windows; no-clobber holds. *Deps:* Units 2 (done) and 3.
+   kernel keystore-read path is wired — it never fabricates keys). **Engine prerequisite — DONE
+   (Unit 6):** `sar_recover_file` now has a Win32 atomic-write backing (`ReplaceFileW` + POSIX-rename
+   fallback) and `semantics_ar_recovery_host` builds on Windows, host-verified by `test_recover`.
+   **Remaining for Unit 4:** a comm-port/IOCTL message carrying `key_id` → an in-kernel keystore-read
+   that returns the key material (algorithm/mode/iv/params, never plaintext over the wire unless the
+   Slice-1 contract is revisited — note the current `RECOVERY_REQUEST` carries only `key_id`, so the
+   key material must reach the service's resolver by a defined path), the resolver replacing the
+   stub, plus volume enumeration, ReFS/same-volume specifics, large-file **streaming** (the Win32
+   backend currently reads the whole file into memory, adequate for the host test, a named streaming
+   follow-on for multi-GB), and residue clearing. *DoD:* an operator recovery request recovers real
+   files end-to-end on Windows; no-clobber holds. *Deps:* Units 2 (done), 3 (Core done), and the
+   Unit 6 service build (done).
 3. **PPL-AM / ELAM / MVI provisioning (Unit 5).** *Boundary:* the ELAM driver, MVI membership,
    and PPL-AM service launch that turn comm-port auth Layer B from "queried + recorded" into
    "enforced," and protect the service against injection (VII.4). *DoD:* the service runs PPL-AM
@@ -276,5 +333,16 @@ cross-cutting fixes (FLT_REGISTRATION, `ntsystem.h`, NTDDI, `_rotl`) are in §6.
 - **Comm-port reply framing:** reconcile the `FilterGetMessage`/`FilterSendMessage` /
   `FILTER_MESSAGE_HEADER` reply-buffer convention between `service/commclient.c` and
   `driver/commport.c` (whether our header is inline vs. behind the FltMgr reply header).
-- **Port name** is single-valued (`L"\\SemanticsArPort"`) but duplicated in `driver/commport.h`
-  and `service/commclient.h`; they currently match — keep them in sync (or hoist to `protocol.h`).
+- **Port name** is now single-sourced in `common/.../protocol.h` (`SAR_COMM_PORT_NAME`); the
+  driver/service duplicates were removed (Unit 6).
+- **Service runtime validation (Unit 6 compiles+links + host-verified recovery core, but the live
+  Win32 behavior is UNRUN — needs a VM with the driver loaded):** SCM start → `SERVICE_RUNNING`
+  transition (with the deadlock-avoidance reorder); `FilterConnectCommunicationPort` to the live
+  filter port; the ECDSA-P256 signed-challenge handshake against the driver over a real port (with a
+  **real provisioned key pair** replacing the placeholder public-key blob in `driver/commport.c` and
+  a matching KSP private key named `SemanticsArServiceKey`); the `FilterGetMessage`/`FilterSendMessage`
+  framing against the live driver (Direction-A request = raw payload, Direction-B notify = app header
+  after `FILTER_MESSAGE_HEADER`); the operator pipe with the restricted DACL; and end-to-end recovery
+  on a real volume (the `ReplaceFileW`/`FileRenameInfoEx` writeback under power-loss and target-held-open
+  conditions). PPL-AM launch (`ChangeServiceConfig2(SERVICE_CONFIG_LAUNCH_PROTECTED)`) compiles but is
+  inert until the ELAM/signing unit (Unit 5).

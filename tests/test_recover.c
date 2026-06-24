@@ -11,7 +11,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <process.h>
+#define sar_getpid _getpid
+#else
 #include <unistd.h>
+#define sar_getpid getpid
+#endif
 
 static void hex(const char *s, uint8_t *out, size_t n) {
     for (size_t i = 0; i < n; i++) {
@@ -487,7 +493,7 @@ static void no_clobber(void) {
     ref_cbc(&bc, iv, pt, ct, L);
 
     char path[128];
-    snprintf(path, sizeof path, "sar_noclobber_%d.bin", (int)getpid());
+    snprintf(path, sizeof path, "sar_noclobber_%d.bin", (int)sar_getpid());
     FILE *f = fopen(path, "wb");
     fwrite(ct, 1, L, f);
     fclose(f);
@@ -513,7 +519,7 @@ static void no_clobber(void) {
     CHECK(st == SAR_RECOVER_OK && recovered,
           "correct key: forward relation holds, file recovered on disk");
 
-    unlink(path);
+    remove(path);
 }
 
 static void absorbed_kats(void) {

@@ -27,20 +27,18 @@ static void sar_copy_wide(uint16_t *dst, uint32_t cap, const wchar_t *src)
     dst[i] = 0;
 }
 
-static sar_identity_verdict_t sar_hash_file(const wchar_t *image_path,
-                                            uint8_t *out_hash)
+static int sar_hash_handle(HANDLE file, uint8_t *out_hash)
 {
-    HANDLE file;
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE hash = NULL;
     NTSTATUS bs;
-    sar_identity_verdict_t verdict = SAR_IDENTITY_VERDICT_HASH_FAILED;
     uint8_t *chunk = NULL;
+    int ok = 0;
+    LARGE_INTEGER zero;
 
-    file = CreateFileW(image_path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file == INVALID_HANDLE_VALUE)
-        return SAR_IDENTITY_VERDICT_PATH_FAILED;
+    zero.QuadPart = 0;
+    if (!SetFilePointerEx(file, zero, NULL, FILE_BEGIN))
+        return 0;
 
     bs = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0);
     if (bs != STATUS_SUCCESS)
@@ -67,7 +65,7 @@ static sar_identity_verdict_t sar_hash_file(const wchar_t *image_path,
 
     bs = BCryptFinishHash(hash, out_hash, SEMANTICS_AR_CONTENT_HASH_SIZE, 0);
     if (bs == STATUS_SUCCESS)
-        verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        ok = 1;
 
 done:
     if (chunk)
@@ -76,34 +74,38 @@ done:
         BCryptDestroyHash(hash);
     if (alg)
         BCryptCloseAlgorithmProvider(alg, 0);
-    CloseHandle(file);
-    return verdict;
+    return ok;
 }
 
-static int sar_trust_verify(const wchar_t *image_path)
+static int sar_trust_verify(const wchar_t *image_path, HANDLE file)
 {
     WINTRUST_FILE_INFO fileInfo;
     WINTRUST_DATA      data;
     GUID               action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
     LONG               result;
+    LARGE_INTEGER      zero;
+
+    zero.QuadPart = 0;
+    (void)SetFilePointerEx(file, zero, NULL, FILE_BEGIN);
 
     memset(&fileInfo, 0, sizeof(fileInfo));
     fileInfo.cbStruct = sizeof(fileInfo);
     fileInfo.pcwszFilePath = image_path;
+    fileInfo.hFile = file;
 
     memset(&data, 0, sizeof(data));
     data.cbStruct = sizeof(data);
     data.dwUIChoice = WTD_UI_NONE;
-    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
     data.dwUnionChoice = WTD_CHOICE_FILE;
     data.pFile = &fileInfo;
     data.dwStateAction = WTD_STATEACTION_VERIFY;
-    data.dwProvFlags = WTD_SAFER_FLAG | WTD_REVOCATION_CHECK_NONE;
+    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_DISABLE_MD2_MD4;
 
     result = WinVerifyTrust(NULL, &action, &data);
 
     data.dwStateAction = WTD_STATEACTION_CLOSE;
-    WinVerifyTrust(NULL, &action, &data);
+    (void)WinVerifyTrust(NULL, &action, &data);
 
     return result == ERROR_SUCCESS;
 }
@@ -149,14 +151,14 @@ static int sar_signer_subject(const wchar_t *image_path, uint16_t *subject,
     if (!cert)
         goto done;
 
-    chars = CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL,
-                               NULL, 0);
+    chars = CertGetNameStringW(cert, CERT_NAME_ATTR_TYPE, 0,
+                               (void *)szOID_COMMON_NAME, NULL, 0);
     if (chars > 1) {
         wchar_t *name = (wchar_t *)HeapAlloc(GetProcessHeap(), 0,
                                              chars * sizeof(wchar_t));
         if (name) {
-            if (CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL,
-                                   name, chars) > 1) {
+            if (CertGetNameStringW(cert, CERT_NAME_ATTR_TYPE, 0,
+                                   (void *)szOID_COMMON_NAME, name, chars) > 1) {
                 sar_copy_wide(subject, subject_cap, name);
                 ok = 1;
             }
@@ -179,7 +181,7 @@ done:
 sar_identity_verdict_t sar_identity_evaluate(const wchar_t *image_path,
                                              sar_identity_eval_t *out)
 {
-    sar_identity_verdict_t verdict;
+    HANDLE file;
 
     if (!image_path || !out)
         return SAR_IDENTITY_VERDICT_ERROR;
@@ -190,23 +192,33 @@ sar_identity_verdict_t sar_identity_evaluate(const wchar_t *image_path,
     sar_copy_wide(out->identity.image_path, SEMANTICS_AR_PROTO_PATH_MAX,
                   image_path);
 
-    verdict = sar_hash_file(image_path, out->identity.content_hash);
-    if (verdict != SAR_IDENTITY_VERDICT_VERIFIED) {
-        out->verdict = verdict;
-        return verdict;
+    file = CreateFileW(image_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        out->verdict = SAR_IDENTITY_VERDICT_PATH_FAILED;
+        return out->verdict;
     }
 
-    if (!sar_trust_verify(image_path)) {
+    if (!sar_hash_handle(file, out->identity.content_hash)) {
+        CloseHandle(file);
+        out->verdict = SAR_IDENTITY_VERDICT_HASH_FAILED;
+        return out->verdict;
+    }
+
+    if (!sar_trust_verify(image_path, file)) {
+        CloseHandle(file);
         out->verdict = SAR_IDENTITY_VERDICT_UNSIGNED;
         return out->verdict;
     }
 
     if (!sar_signer_subject(image_path, out->identity.cert_subject,
                             SEMANTICS_AR_PROTO_SUBJECT_MAX)) {
+        CloseHandle(file);
         out->verdict = SAR_IDENTITY_VERDICT_UNSIGNED;
         return out->verdict;
     }
 
+    CloseHandle(file);
     out->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
     return out->verdict;
 }

@@ -4,8 +4,7 @@
 #include <fltKernel.h>
 
 #include "driver.h"
-
-#define SAR_COMM_PORT_NAME L"\\SemanticsArPort"
+#include "semantics_ar/protocol.h"
 
 typedef struct _SAR_COMM {
     PFLT_FILTER filter;
