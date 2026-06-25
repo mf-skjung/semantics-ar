@@ -79,4 +79,17 @@ NTSTATUS NTAPI ZwQueryInformationProcess(HANDLE ProcessHandle,
                                          ULONG ProcessInformationLength,
                                          PULONG ReturnLength);
 
+NTKERNELAPI NTSTATUS NTAPI PsAcquireProcessExitSynchronization(PEPROCESS Process);
+
+NTKERNELAPI VOID NTAPI PsReleaseProcessExitSynchronization(PEPROCESS Process);
+
+typedef struct _SAR_PROCESS_BASIC_INFORMATION {
+    NTSTATUS ExitStatus;
+    PVOID PebBaseAddress;
+    ULONG_PTR AffinityMask;
+    LONG BasePriority;
+    ULONG_PTR UniqueProcessId;
+    ULONG_PTR InheritedFromUniqueProcessId;
+} SAR_PROCESS_BASIC_INFORMATION;
+
 #endif

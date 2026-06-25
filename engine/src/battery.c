@@ -10,11 +10,13 @@
 #include "../ciphers/stream.h"
 
 static int candidate_viable(const uint8_t *d) {
-    uint8_t flags[256];
-    sar_memset(flags, 0, 256);
     uint32_t unique = 0;
-    for (int i = 0; i < 16; i++)
-        if (!flags[d[i]]) { flags[d[i]] = 1; unique++; }
+    for (int i = 0; i < 16; i++) {
+        int dup = 0;
+        for (int j = 0; j < i; j++)
+            if (d[j] == d[i]) { dup = 1; break; }
+        if (!dup) unique++;
+    }
     if (unique < 4) return 0;
     for (int i = 1; i < 16; i++)
         if (d[i] != d[0]) return 1;
@@ -328,10 +330,34 @@ static int try_rc4_shortkey(const uint8_t *key, const uint8_t *pt, const uint8_t
     return 0;
 }
 
+static int aes_schedule_scan(const uint8_t *buf, size_t buf_len, const uint8_t *pt,
+                             const uint8_t *ct, uint32_t sample_size, uint64_t file_offset,
+                             sar_verdict_t *v) {
+    static const uint32_t klen[3] = { 16, 24, 32 };
+    static const uint32_t slen[3] = { 176, 208, 240 };
+    static const uint32_t alg[3] = { SAR_ALG_AES_128, SAR_ALG_AES_192, SAR_ALG_AES_256 };
+
+    for (size_t off = 0; off + 176 <= buf_len; off++) {
+        for (int k = 0; k < 3; k++) {
+            if (off + slen[k] > buf_len) continue;
+            if (!aes_schedule_is_valid(buf + off, klen[k])) continue;
+            if (aes_try_master(buf + off, klen[k], pt, ct, sample_size, file_offset,
+                               alg[k], v))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+#define SAR_SCAN_BRUTE_CAP 65536u
+
 static int scan_battery(const uint8_t *buf, size_t buf_len, const uint8_t *pt,
                         const uint8_t *ct, uint32_t sample_size, uint64_t file_offset,
                         sar_verdict_t *v) {
-    for (size_t off = 0; off + 256 <= buf_len; off++) {
+    size_t brute = buf_len < SAR_SCAN_BRUTE_CAP ? buf_len : SAR_SCAN_BRUTE_CAP;
+    if (aes_schedule_scan(buf, buf_len, pt, ct, sample_size, file_offset, v))
+        return 1;
+    for (size_t off = 0; off + 256 <= brute; off++) {
         if (is_rc4_sbox(buf + off)) {
             if (off + 258 <= buf_len) {
                 if (rc4_verify_state(buf + off, buf[off + 256], buf[off + 257],
@@ -346,16 +372,16 @@ static int scan_battery(const uint8_t *buf, size_t buf_len, const uint8_t *pt,
             }
         }
     }
-    for (size_t off = 0; off + 16 <= buf_len; off += 16) {
+    for (size_t off = 0; off + 16 <= brute; off += 16) {
         if (!candidate_viable(buf + off)) continue;
         if (try_block_single(buf + off, pt, ct, sample_size, file_offset, v))
             return 1;
-        if (off + 32 <= buf_len && candidate_viable(buf + off + 16)) {
+        if (off + 32 <= brute && candidate_viable(buf + off + 16)) {
             if (try_block_pair(buf + off, buf + off + 16, pt, ct, sample_size,
                                file_offset, v))
                 return 1;
         }
-        if (off + 64 <= buf_len) {
+        if (off + 64 <= brute) {
             if (aes256_xts_window(buf + off, pt, ct, sample_size, file_offset, v))
                 return 1;
         }

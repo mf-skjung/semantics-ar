@@ -15,6 +15,8 @@ int  aes_decrypt_block(void *ctx, const uint8_t *in, uint8_t *out);
 int aes_master_from_window(uint32_t key_len, const uint8_t *window,
                            int base_block, uint8_t *master_out);
 
+int aes_schedule_is_valid(const uint8_t *schedule, uint32_t key_len);
+
 void aes_word_byteswap(uint8_t *dst, const uint8_t *src, uint32_t len);
 
 #endif

@@ -118,6 +118,35 @@ static VOID SarBootReinit(_In_ PDRIVER_OBJECT DriverObject, _In_opt_ PVOID Conte
         SarKeystoreLoad(g_sar.keystore);
 }
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static BOOLEAN SarDriverIsPostBootStart(_In_ PUNICODE_STRING RegistryPath)
+{
+    OBJECT_ATTRIBUTES oa;
+    HANDLE key = NULL;
+    UNICODE_STRING name;
+    UCHAR buf[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+    ULONG ret = 0;
+    ULONG start = 0;
+    BOOLEAN post_boot = FALSE;
+
+    InitializeObjectAttributes(&oa, RegistryPath, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL, NULL);
+    if (!NT_SUCCESS(ZwOpenKey(&key, KEY_READ, &oa)))
+        return FALSE;
+
+    RtlInitUnicodeString(&name, L"Start");
+    if (NT_SUCCESS(ZwQueryValueKey(key, &name, KeyValuePartialInformation, info, sizeof(buf),
+                                   &ret)) &&
+        info->Type == REG_DWORD && info->DataLength == sizeof(ULONG)) {
+        RtlCopyMemory(&start, info->Data, sizeof(ULONG));
+        post_boot = (start >= SERVICE_AUTO_START);
+    }
+
+    ZwClose(key);
+    return post_boot;
+}
+
 static const FLT_REGISTRATION g_sar_registration = {
     sizeof(FLT_REGISTRATION),
     FLT_REGISTRATION_VERSION,
@@ -141,8 +170,6 @@ _Use_decl_annotations_
 NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
     NTSTATUS status;
-
-    UNREFERENCED_PARAMETER(RegistryPath);
 
     RtlZeroMemory(&g_sar, sizeof(g_sar));
     g_sar.driver_object = DriverObject;
@@ -235,7 +262,10 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
-    IoRegisterBootDriverReinitialization(DriverObject, SarBootReinit, NULL);
+    if (SarDriverIsPostBootStart(RegistryPath))
+        SarKeystoreLoad(g_sar.keystore);
+    else
+        IoRegisterBootDriverReinitialization(DriverObject, SarBootReinit, NULL);
 
     return STATUS_SUCCESS;
 }

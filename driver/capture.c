@@ -2,6 +2,7 @@
 #include "state.h"
 #include "commport.h"
 #include "keystore_persist.h"
+#include "ntsystem.h"
 
 #include <ntifs.h>
 
@@ -36,9 +37,9 @@ typedef struct _SAR_CAPTURE_WORK {
     ULONG pre_image_len;
     ULONG written_len;
     ULONG scan_len;
+    PUCHAR scan;
     UCHAR pre_image[SAR_CAPTURE_BUFFER_BYTES];
     UCHAR written[SAR_CAPTURE_BUFFER_BYTES];
-    UCHAR scan[SAR_CAPTURE_SCAN_BYTES];
     UINT16 provenance_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
     UINT64 provenance_offset;
 } SAR_CAPTURE_WORK, *PSAR_CAPTURE_WORK;
@@ -124,33 +125,90 @@ static ULONG SarCaptureReadPreImage(_In_ PCFLT_RELATED_OBJECTS FltObjects,
     return read;
 }
 
-_IRQL_requires_max_(APC_LEVEL)
-static ULONG SarCaptureSnapshotStack(_Out_writes_bytes_(Cap) PUCHAR Buf, _In_ ULONG Cap)
+#define SAR_PEB_NUMBEROFHEAPS 0xE8
+#define SAR_PEB_PROCESSHEAPS  0xF0
+
+_IRQL_requires_(PASSIVE_LEVEL)
+static ULONG SarCaptureCopyResident(_In_ ULONG_PTR Base, _In_ ULONG_PTR Size,
+                                    _Out_writes_bytes_(Cap) PUCHAR Buf, _In_ ULONG Cap)
 {
-    PNT_TIB tib;
-    ULONG copied = 0;
+    ULONG_PTR p;
+    ULONG total = 0;
 
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
-        return 0;
+    for (p = Base; p < Base + Size && total < Cap; p += PAGE_SIZE) {
+        ULONG want = (Cap - total < PAGE_SIZE) ? (Cap - total) : PAGE_SIZE;
 
-    tib = (PNT_TIB)PsGetCurrentThreadTeb();
-    if (tib == NULL)
-        return 0;
+        if (!MmIsAddressValid((PVOID)p))
+            continue;
+
+        __try {
+            RtlCopyMemory(Buf + total, (PVOID)p, want);
+            total += want;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            /* page raced out between probe and copy; skip it */
+        }
+    }
+    return total;
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+static ULONG SarCaptureSnapshotHeap(_In_ HANDLE ProcessHandle, _In_ ULONG_PTR HeapBase,
+                                    _Out_writes_bytes_(Cap) PUCHAR Buf, _In_ ULONG Cap)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    ULONG_PTR addr = HeapBase;
+    ULONG total = 0;
+    SIZE_T ret;
+
+    while (total < Cap &&
+           NT_SUCCESS(ZwQueryVirtualMemory(ProcessHandle, (PVOID)addr, MemoryBasicInformation,
+                                           &mbi, sizeof(mbi), &ret))) {
+        ULONG_PTR base = (ULONG_PTR)mbi.BaseAddress;
+        ULONG_PTR size = (ULONG_PTR)mbi.RegionSize;
+        ULONG_PTR next = base + size;
+
+        if (size == 0 || next <= addr)
+            break;
+        if (mbi.State != MEM_COMMIT || mbi.Type != MEM_PRIVATE ||
+            (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) == 0 ||
+            (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+            break;
+
+        total += SarCaptureCopyResident(base, size, Buf + total, Cap - total);
+        addr = next;
+    }
+    return total;
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+static ULONG SarCaptureSnapshotHeaps(_In_ HANDLE ProcessHandle, _In_ PVOID Peb,
+                                     _Out_writes_bytes_(Cap) PUCHAR Buf, _In_ ULONG Cap)
+{
+    ULONG total = 0;
 
     __try {
-        PUCHAR base = (PUCHAR)tib->StackBase;
-        PUCHAR limit = (PUCHAR)tib->StackLimit;
-        if (limit != NULL && base > limit) {
-            ULONG_PTR span = (ULONG_PTR)(base - limit);
-            ULONG want = span < Cap ? (ULONG)span : Cap;
-            ProbeForRead(limit, want, 1);
-            RtlCopyMemory(Buf, limit, want);
-            copied = want;
+        ULONG num = *(ULONG *)((PUCHAR)Peb + SAR_PEB_NUMBEROFHEAPS);
+        PVOID *heaps = *(PVOID **)((PUCHAR)Peb + SAR_PEB_PROCESSHEAPS);
+        ULONG i;
+
+        if (heaps == NULL)
+            return 0;
+        if (num > SAR_CAPTURE_HEAP_MAX)
+            num = SAR_CAPTURE_HEAP_MAX;
+
+        for (i = 0; i < num && total < Cap; i++) {
+            ULONG_PTR base = (ULONG_PTR)heaps[i];
+            ULONG remain = Cap - total;
+            ULONG perheap = remain < SAR_CAPTURE_HEAP_PER_CAP ? remain : SAR_CAPTURE_HEAP_PER_CAP;
+
+            if (base == 0)
+                continue;
+            total += SarCaptureSnapshotHeap(ProcessHandle, base, Buf + total, perheap);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        copied = 0;
+        /* PEB layout mismatch or unreadable: degrade to a miss, never crash */
     }
-    return copied;
+    return total;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -245,6 +303,30 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         ULONG sample = work->pre_image_len < work->written_len ?
                        work->pre_image_len : work->written_len;
 
+        work->scan = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
+                                             SAR_POOL_TAG_SNAPSHOT);
+        if (work->scan != NULL) {
+            HANDLE hproc;
+            if (NT_SUCCESS(ObOpenObjectByPointer(work->originator_process, OBJ_KERNEL_HANDLE, NULL,
+                                                 0, *PsProcessType, KernelMode, &hproc))) {
+                if (NT_SUCCESS(PsAcquireProcessExitSynchronization(work->originator_process))) {
+                    KAPC_STATE apc;
+                    SAR_PROCESS_BASIC_INFORMATION pbi;
+                    ULONG pret = 0;
+
+                    KeStackAttachProcess(work->originator_process, &apc);
+                    if (NT_SUCCESS(ZwQueryInformationProcess(hproc, ProcessBasicInformation, &pbi,
+                                                             sizeof(pbi), &pret)) &&
+                        pbi.PebBaseAddress != NULL)
+                        work->scan_len = SarCaptureSnapshotHeaps(hproc, pbi.PebBaseAddress,
+                                                                 work->scan, SAR_CAPTURE_HEAP_BUDGET);
+                    KeUnstackDetachProcess(&apc);
+                    PsReleaseProcessExitSynchronization(work->originator_process);
+                }
+                ZwClose(hproc);
+            }
+        }
+
         req.plaintext = work->pre_image;
         req.ciphertext = work->written;
         req.sample_size = sample;
@@ -270,7 +352,10 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
 
     RtlSecureZeroMemory(work->pre_image, sizeof(work->pre_image));
     RtlSecureZeroMemory(work->written, sizeof(work->written));
-    RtlSecureZeroMemory(work->scan, sizeof(work->scan));
+    if (work->scan != NULL) {
+        RtlSecureZeroMemory(work->scan, work->scan_len);
+        ExFreePoolWithTag(work->scan, SAR_POOL_TAG_SNAPSHOT);
+    }
 
     ObDereferenceObject(work->originator_thread);
     ObDereferenceObject(work->originator_process);
@@ -377,7 +462,9 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
     work->pre_image_len = SarCaptureReadPreImage(Request->related, Request->write_offset,
                                                  Request->write_length, work->pre_image,
                                                  SAR_CAPTURE_BUFFER_BYTES);
-    work->scan_len = SarCaptureSnapshotStack(work->scan, SAR_CAPTURE_SCAN_BYTES);
+
+    work->scan = NULL;
+    work->scan_len = 0;
 
     Request->originator_process = NULL;
     Request->originator_thread = NULL;

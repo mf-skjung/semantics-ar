@@ -155,19 +155,56 @@ correctness; the bring-up prerequisites that block ever loading the product):**
   down-level package with a down-level InfVerif. **First Light should run on Win11 24H2** (the committed
   INF matches it and is InfVerif-clean); the down-level matrix + this INF resolution is its own unit.
 
-**[CORRECTION — capture region; supersedes SLICE5's stack-primary choice; established by primary
-sources this session]** The Phase-1 stack snapshot (`driver/capture.c` `SarCaptureSnapshotStack`,
-16 KiB at `StackLimit`) is the **wrong place to scan for the dominant case.** MS CNG keeps the AES
-key schedule in a **heap-allocated key object reused across every write** (`BCryptGenerateSymmetricKey`
-`pbKeyObject`; the "Encrypting Data with CNG" sample `HeapAlloc`s it), as do OpenSSL EVP and Crypto++;
-`StackLimit` is the low/deep stack frontier, and a popped encrypt frame surviving there is an
-unreliable heuristic. The capture must scan the originator's **committed-private / heap regions
-(bounded)**, which is what every memory-forensics tool (aeskeyfind, Volatility) does. This is **not a
-Constitution change** (II.3.1 already anchors the key to the "writing process's *memory*", II.3.2
-lists the memory scan) and **not an engine change** (`scan_battery` already slides over any buffer and
-`aes_window_battery` already inverts a round-key schedule to the master — host-verified). It is a
-kernel-glue correction (what region to hand the engine), VM-bound, and is the substance of the
-remaining capture unit (§4.2 below). SLICE5 named heap-walk a follow-on; it is now **primary**.
+**[CAPTURE — VM-VERIFIED end-to-end this session (live Win11 24H2, demand-loaded); design corrected by the
+live kernel.** A controlled CNG encryptor (`BCryptGenerateSymmetricKey` AES-256-CBC, in-place 48 KB
+overwrite, key held live ~15 s then destroyed) is captured end-to-end: driver loads + attaches (no
+bugcheck), a deferred worker attaches to the still-live writer and snapshots its memory, the structural AES
+detector finds the schedule, the forward `(P,C)` proof convicts, and `keystore.bin` grows. Proven live: the
+structural detector, the `KeStackAttachProcess`+`ZwQueryVirtualMemory(handle)`+`MmIsAddressValid` resident
+copy, and the keystore append/persist.
+
+**TWO design corrections the live kernel FORCED (both now in code):**
+- **Memory capture must run OFF the IRP.** The first design snapshotted SYNCHRONOUSLY in the write pre-op;
+  it intermittently HARD-HUNG the kernel (FS/memory-manager re-entrancy from `ZwQueryVirtualMemory` inside
+  the write IRP — no dump, force-reboot). Reverted to a **deferred worker** that attaches to the still-live
+  writer under `PsAcquireProcessExitSynchronization`+`KeStackAttachProcess` and enumerates via an explicit
+  process handle — off the IRP, holding no FS resource, so it cannot deadlock. This vindicates the
+  Constitution's original II.3.2 ("memory scan only after the IRP is released"); the zeroization defense
+  weakens to best-effort (prompt worker; tight key-destroy/exit = VIII.2).
+- **The flat byte-budget snapshot is WRONG (coverage vs cost, proven by live A/B).** Snapshotting the first
+  N bytes of committed-private from address 0: 1 MiB MISSES the heap (ASLR → key high → no capture); 4 MiB
+  (≈ whole small process) COVERS it but a no-key MISS then scans the whole region — catastrophic on the slow
+  VM (hard-hung before; ~15-30 s after a brute-force 64 KiB cap + `candidate_viable` removal). **The real fix
+  is heap-targeting** (snapshot only the PEB `ProcessHeaps` regions — small, contains the key); §4 item 0(b),
+  now precisely scoped. `SAR_CAPTURE_HEAP_BUDGET` is 4 MiB (captures, NOT production-ready) pending it.
+
+Bring-up fix also required: the keystore-ready gate never opened on a **demand-loaded** driver
+(`IoRegisterBootDriverReinitialization` fires only for boot-start) → read the service `Start` in
+`DriverEntry`, call `SarKeystoreLoad` directly when post-boot. **Test caveat: the VM is very
+slow/underpowered with NO kernel debugger, so hard-hangs leave no dump and live iteration is costly — set up
+KDNET before deeper capture debugging.** Driver is DbgPrint-silent; VM observation is `keystore.bin`.]**
+
+**[CAPTURE REGION + ZEROIZATION DEFENSE — IMPLEMENTED + VM-VERIFIED this session]**
+The Phase-1 stack snapshot was the wrong region for the dominant case: MS CNG keeps the AES key
+schedule in a **heap-allocated key object reused across every write** (`BCryptGenerateSymmetricKey`
+`pbKeyObject`), and the writer can `BCryptDestroyKey`-zeroize it (FIPS-confirmed prompt zeroization)
+the instant the producing write returns. Resolution (now in code, after the live kernel rejected a
+synchronous-in-IRP snapshot — see the VM-verified note above): a **deferred worker** attaches to the
+still-live writer (`PsAcquireProcessExitSynchronization` + `KeStackAttachProcess`) and snapshots its
+committed-private regions via an explicit process handle (`driver/capture.c` `SarCaptureSnapshotHeap`:
+`ObOpenObjectByPointer` → `ZwQueryVirtualMemory(handle)`, `MmIsAddressValid` resident filter, SEH copy into
+a `SAR_CAPTURE_HEAP_BUDGET` paged buffer); the analysis runs on the frozen bytes. Off the IRP, so no FS
+re-entrancy. The flat byte-budget is a known coverage/cost flaw → heap-targeting is the fix (§4 item 0(b)).
+To make the structural scan tractable the engine
+gained a **cheap AES key-schedule structural detector** (`aes_schedule_is_valid` + `aes_schedule_scan`,
+aeskeyfind recurrence over 176/208/240 B at any byte offset, single round-key→master inversion, then
+the existing forward `(P,C)` proof convicts) — host-verified by `tests/test_schedule.c` (11 checks,
+including capture of a schedule planted at a 16-unaligned offset that the old 16-stepped scan misses).
+This **did require a Constitution amendment** (II.3 snapshot-vs-scan + key-live timing; II.4.1
+structural location; II.4.2 per-key cumulative-N; VIII.2 structureless-key budget + key-destruction
+cases) and an **engine change** (the detector) — the earlier "not a Constitution/engine change" framing
+was wrong: ChaCha/raw-master keys have no structure (located only by bounded `(P,C)` trial, VIII.2),
+and full-heap AES coverage needs the cheap detector. VM validation remains (§4 item 0, §6).
 
 **Forbidden-concept grep** (`preserve|shadow|journal|evict|saturat|capacity-limit|trusted_pid|
 self_trust|auto_block|access_denied`) is empty over the host-verifiable + freestanding tree and
@@ -284,11 +321,37 @@ pass; not derivable from code):**
    attaches to a volume (`fltmc`), and completes the now-real signed-challenge handshake with the
    service. *DoD:* `fltmc filters` shows the filter; the service authenticates over the port (KD
    evidence). *Deps:* the user provides the VM + (ideally) PowerShell Direct; see §5 prep notes.
-   **Capture-region correction (the heart, §2 CORRECTION):** rework `driver/capture.c` Phase 2 to
-   scan the originator's committed-private/heap regions (bounded) under `KeStackAttachProcess`
-   instead of the 16 KiB stack slice; feed those bytes to the already-host-verified engine scan.
-   *DoD:* in the VM, a controlled CNG-based encryptor's key is captured and the file recovers.
-   *Deps:* First Light. The freestanding engine and the projection need no change.
+   **Capture-region + zeroization defense (the heart): IMPLEMENTED (compile+link + host-verified
+   engine), VM validation remaining.** The synchronous resident-only heap snapshot and the engine
+   structural detector are in code (§2). The remaining work is purely VM-empirical, and these are the
+   measurements literature cannot supply (settle them in the VM, do not re-research):
+   (a) **CNG plaintext-schedule residency — RESOLVED (measured this session, user-mode, no VM).** A probe
+   (`BCryptGenerateSymmetricKey`+`BCryptEncrypt`, AES-256, ECB) showed `BCRYPT_OBJECT_LENGTH=654` and the
+   **full 240-byte forward AES-256 expanded schedule resident at offset 128** of the key object (validated
+   by `aes_schedule_is_valid` at threshold 0; standard FIPS forward layout, not byteswapped, not
+   Key-Locker-hidden), with the bare master also at offset 92. So `aes_schedule_scan` is live for the
+   dominant CNG case — the single fact the structural detector rides on is confirmed. (AES-128/192 keep
+   the identical key-object mechanism; only the 256 case was measured.)
+   (b) **snapshot region selection — heap-targeting IMPLEMENTED (compile+link-verified), VM-validate next.**
+   Live A/B proved the flat byte-budget is wrong (1 MiB misses the ASLR-high heap → no capture; 4 MiB covers
+   but a no-key MISS scans the whole region → catastrophically slow on the weak VM). Frontier research
+   confirmed the fix is methodologically correct, not a guess: KeyReaper (DIMVA 2025) copies HEAP SEGMENTS only
+   + structural key-schedule detection — exactly our design; PEB `NumberOfHeaps`@0xE8 / `ProcessHeaps`@0xF0
+   (x64) are stable since NT 3.51. Now in code (`driver/capture.c`): the worker (attached) reads the PEB via
+   `ZwQueryInformationProcess(ProcessBasicInformation).PebBaseAddress` (documented, avoids `PsGetProcessPeb`),
+   SEH-reads `NumberOfHeaps`/`ProcessHeaps`, and snapshots each heap base's contiguous committed-private span
+   (per-heap cap `SAR_CAPTURE_HEAP_PER_CAP` 1 MiB, total `SAR_CAPTURE_HEAP_BUDGET` 4 MiB, ≤`SAR_CAPTURE_HEAP_MAX`
+   64 heaps); a wrong PEB offset degrades to a miss (SEH), never a crash. *VM-validate:* a CNG encryptor's key
+   is captured at reasonable cost. **Residual to confirm in the VM:** whether CNG's `pbKeyObject=NULL`
+   allocation lands in a PEB-enumerable heap (research 2-1 that PEB lists DLL-private heaps, likely yes) or a
+   direct `VirtualAlloc` (then PEB-heap targeting misses it — measure, and only then widen).
+   (c) **`MmIsAddressValid` resident-only behavior — VERIFIED.** The capture ran on the live write path with no
+   bugcheck and no observable hang, i.e. no fatal paging re-entrancy on the filtered volume.
+   (d) **`ZwQueryVirtualMemory` runtime — VERIFIED.** The `ZwCurrentProcess()` enumeration at the cached-write
+   pre-op surfaced the originator's regions; the key was found and convicted.
+   *DoD: capture half DONE* (CNG key captured despite per-write `BCryptDestroyKey`). *Remaining: recovery* —
+   drive `SAR_CTL_OP_RECOVER` for the captured key_id+path and confirm the file is restored to plaintext
+   (validates Unit 4 end-to-end in the live kernel). *Deps:* a control-pipe client.
 1. **Keystore self-protection — Unit 3-Core: DONE (host core verified; kernel glue written,
    uncompiled).** Cross-reboot survival now exists on every platform: the keystore + MAC key +
    external anchor persist to disk, are verified and restored at boot, and rollback/erasure/tamper
@@ -451,12 +514,16 @@ pass; not derivable from code):**
     (acquire-at-submit / release-in-worker / `ExWaitForRundownProtectionRelease` at destroy)
     composes correctly with `FltUnregisterFilter`'s own rundown wait — destroy ordering in
     `SarFilterUnload` is capture-before-comm-before-unregister.
-  - Phase-1 stack snapshot: `PsGetCurrentThreadTeb` + `NT_TIB.StackLimit/StackBase`, SEH +
-    `ProbeForRead`, bounded to `SAR_CAPTURE_SCAN_BYTES` (16 KiB) of the originator thread's own
-    stack in requestor context. Validate at runtime that (i) the 16 KiB near `StackLimit` actually
-    holds the just-used key schedule for representative ransomware, and (ii) the snapshot is safe
-    when the pre-op is reached at `APC_LEVEL` (guarded: snapshot only at PASSIVE). Heap-walk scan
-    is the named follow-on for schedules that live off-stack.
+  - Synchronous heap snapshot (`SarCaptureSnapshotHeap`, replaces the old stack snapshot):
+    `ZwQueryVirtualMemory(ZwCurrentProcess(), …, MemoryBasicInformation, …)` enumeration of
+    committed-private RW regions, `MmIsAddressValid` per-page resident filter, SEH-guarded
+    `RtlCopyMemory` into a `SAR_CAPTURE_HEAP_BUDGET` (256 KiB) paged buffer, gated to PASSIVE,
+    taken in the originator thread context at the pre-op (no `KeStackAttachProcess`). Validate at
+    runtime that (i) `MmIsAddressValid`+SEH never pages a valid-but-paged-out page in (no FS
+    re-entrancy on the filtered volume), (ii) the low-address-first 256 KiB actually contains the
+    CNG key object for representative ransomware (else raise the budget), and (iii) the synchronous
+    snapshot latency added to the write path is acceptable. The deferred worker runs the engine
+    structural detector + battery on the frozen buffer.
   - `FltSendMessage` with a relative timeout and `NULL` reply for the fire-and-forget
     `VERDICT_NOTIFY`; reconcile the header convention with `service/commclient.c`.
   - The engine battery + `capture` core compile **and link** into the `.sys` under

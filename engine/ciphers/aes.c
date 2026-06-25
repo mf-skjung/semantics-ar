@@ -186,6 +186,34 @@ int aes_master_from_window(uint32_t key_len, const uint8_t *window,
     return 1;
 }
 
+int aes_schedule_is_valid(const uint8_t *schedule, uint32_t key_len) {
+    uint32_t nk = key_len / 4;
+    if (nk != 4 && nk != 6 && nk != 8)
+        return 0;
+
+    uint32_t total = 4u * (uint32_t)((int)nk + 6 + 1);
+    for (uint32_t i = nk; i < total; i++) {
+        uint8_t t[4];
+        sar_memcpy(t, schedule + (i - 1) * 4, 4);
+        if (i % nk == 0) {
+            uint8_t r = t[0];
+            t[0] = (uint8_t)(SBOX[t[1]] ^ RCON[i / nk]);
+            t[1] = SBOX[t[2]];
+            t[2] = SBOX[t[3]];
+            t[3] = SBOX[r];
+        } else if (nk > 6 && i % nk == 4) {
+            t[0] = SBOX[t[0]]; t[1] = SBOX[t[1]];
+            t[2] = SBOX[t[2]]; t[3] = SBOX[t[3]];
+        }
+        for (int j = 0; j < 4; j++) {
+            uint8_t expected = (uint8_t)(schedule[(i - nk) * 4 + j] ^ t[j]);
+            if (schedule[i * 4 + j] != expected)
+                return 0;
+        }
+    }
+    return 1;
+}
+
 void aes_word_byteswap(uint8_t *dst, const uint8_t *src, uint32_t len) {
     for (uint32_t i = 0; i + 4 <= len; i += 4) {
         dst[i + 0] = src[i + 3];

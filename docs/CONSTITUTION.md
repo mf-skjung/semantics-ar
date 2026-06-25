@@ -151,45 +151,78 @@ directly, with no extra machinery:
 > the forward relation is the verdict.
 
 ### II.3 When the Oracle runs
-**[DECISION] II.3.1 — At the write IRP, where the key is hottest.**
-The Oracle attempts capture at the write that produces ciphertext, because that is
-the only moment the key is guaranteed live in the writing process. The causal order
-`read → encrypt → write` guarantees the key is resident at the write.
+**[DECISION] II.3.1 — Anchored to the write, captured from the writer's live address space.**
+The Oracle's capture target is the write that produces ciphertext, because the causal order
+`read → encrypt → write` guarantees the key is resident in the writing process's memory at
+that write. Its residence is the writing process's committed-private memory — for the dominant
+case a heap key object (e.g. CNG's `BCryptGenerateSymmetricKey` object) that holds the expanded
+key schedule and is reused across writes — not its stack and not its registers, which hold the
+key only transiently. The capture reads that memory; the write tells the Oracle which process,
+and when, to read it.
 
-**[INVARIANT] II.3.2 — The conviction round-trip never blocks the IRP.**
-Capture and verification must not hold a write IRP across a user-mode round-trip or
-a faulting memory scan. The permitted shape is:
+**[INVARIANT] II.3.2 — The memory capture runs off the IRP; nothing scans the writer's memory from the write path.**
+Enumerating or reading the writer's address space from inside the filesystem write IRP can
+re-enter the filesystem and the memory manager and deadlock; the capture must never do it
+there. The permitted shape:
 
-1. **Register-first capture** (XMM / `FXSAVE`) may run during a *short* synchronous
-   hold: it is kernel-saved, fault-free, no user paging, no filesystem re-entrancy.
-2. **Memory-scan fallback** runs **only after the IRP is released**, outside any
-   held state. A colder key there is accepted best-effort.
-3. **The cipher-verification battery** (AES family incl. XTS, plus ChaCha/Salsa,
-   3DES, SM4, Camellia, ARIA, SEED, etc.) runs **offline** on captured candidates
-   and the in-message plaintext/ciphertext sample. It needs no live process.
+1. **Deferred snapshot.** Once the write IRP is released, a worker attaches to the still-live
+   writer's address space — under process-exit synchronization — and copies the bounded
+   committed-private regions of its **heaps** into a kernel buffer, touching resident pages only.
+   The heaps are the correct target, not the whole address space: the key object resides in a
+   heap, so the heap list (enumerated from the process control block) gives coverage at a fraction
+   of the cost of a flat whole-address-space copy. This runs as promptly as the worker can be
+   scheduled, off the IRP, holding no filesystem resource, so it cannot deadlock against the write.
+2. **Analysis on the frozen bytes.** The structural key-schedule scan, the cipher battery, and
+   the forward (`P`,`C`) proof run on the copied buffer — never on live process memory and never
+   on the IRP — so destruction of the live key after the snapshot cannot defeat them.
+3. **Optional synchronous register grab.** Only the register file (XMM / `FXSAVE`) — kernel-saved,
+   fault-free, no memory enumeration, no re-entrancy — may be taken during a short synchronous
+   hold; it resists key destruction and process exit but is low-yield because registers are
+   transient.
+4. **The cipher-verification battery** (AES family incl. XTS, plus ChaCha/Salsa, 3DES, SM4,
+   Camellia, ARIA, SEED, etc.) is offline on the snapshot and the in-message plaintext/ciphertext
+   sample. It needs no live process.
 
-> This ordering is the reason no timing, deadlock, or scan-fault can damage the
-> system: nothing data-bearing is held across it. There is nothing to lose by
-> releasing early, because there is no preservation to protect (Part III).
+> Because the snapshot is a prompt off-IRP copy and the analysis runs on frozen bytes, no timing,
+> deadlock, or scan-fault can reach the IRP. The cost is the honest one: a writer that destroys the
+> key or exits before the deferred snapshot is scheduled is not captured by the memory path (VIII.2).
+> The worker's promptness keeps that window small, and the register grab covers the part of it that
+> matters most.
 
 ### II.4 Conviction-rate levers
-**[DECISION] II.4.1 — Round-key inversion.**
-The AES key schedule is invertible. During AES-NI encryption the round keys are
-present in XMM; any captured round key inverts to the original key. Treat each
-captured 16-byte register value as both a candidate original key and a candidate
-round key at each schedule position. This is the dominant lever for AES-NI families;
-declining to invert is a code limitation, not a fundamental limit.
+**[DECISION] II.4.1 — Structural location and round-key inversion.**
+The AES key schedule is self-identifying and invertible, and this is the dominant lever
+for the AES-NI families. Self-identifying: an expanded schedule resident in memory
+satisfies the key-expansion recurrence, so it is located over a whole snapshot cheaply,
+at any byte offset, with no plaintext or ciphertext — the structural scan that makes a
+large memory region tractable instead of a blind per-offset trial. Invertible: any one
+captured round key reconstructs the master (the S-box, `RotWord`, and `Rcon` steps are
+all reversible), so a single correct round key suffices, and a 16-byte register or
+schedule fragment is treated as both a candidate master and a candidate round key at each
+schedule position. Location is `(P,C)`-free; conviction is still the forward proof
+(II.2.1), never key-in-hand. Declining to scan structurally or to invert is a code
+limitation, not a fundamental limit. Keys with no such structure — stream-cipher and raw
+block-cipher master keys (ChaCha/Salsa, and a bare AES master not accompanied by its
+schedule) — are indistinguishable from random in memory and are located only by bounded
+`(P,C)` trial over the snapshot; a key whose location falls outside that bounded trial
+reduces to the confirmed limit (VIII.2).
 
 **[DECISION] II.4.2 — cumulative-N.**
-A campaign encrypts N = hundreds to thousands of files; each write is an independent
-capture opportunity. For any single-write capture probability `p > 0`, the chance of
-at least one capture across N is `1 − (1−p)^N → 1` rapidly.
+Each capture-eligible write is an independent capture opportunity for the key it uses.
+For a single-write capture probability `p > 0`, the chance of at least one capture across
+`N` writes under that key is `1 − (1−p)^N → 1` rapidly. The relevant `N` is **per key**:
+where a campaign reuses one key across many files, `N` is the whole campaign's writes and
+capture is near-certain; under per-file keying — the dominant hybrid-envelope shape, where
+each file gets a fresh symmetric key wrapped by the attacker's asymmetric key — `N` is the
+capture-eligible writes of *that file*, so a file written by very few writes has
+correspondingly fewer chances.
 
 > **cumulative-N is redefined from the old design and this redefinition is
 > load-bearing:** it is *not* the accumulation of backups. It is the accumulation of
 > (a) capture opportunities and (b) captured keys in the keystore. A key caught at
-> *any one* write recovers *every* file encrypted under it, including files written
-> before the catch. This is precisely why a single missed write costs nothing: the
+> *any one* of its writes recovers *every* file encrypted under that key — the whole set
+> under key reuse, that one file under per-file keying — including data written before the
+> catch. This is why a single missed write costs nothing within a key's write set: the
 > recovery asset is the key, not a per-file backup.
 
 ### II.5 The keystore
@@ -605,6 +638,16 @@ reduce here and are **not** new open problems:
   delays or denies the conviction *accelerator*, not capture itself — the key is in the
   writing process's memory and is captured there. Where it does deny capture, it
   reduces to this boundary.
+- **Structureless keys outside the bounded trial**: stream-cipher and raw block-cipher
+  master keys carry no schedule structure (II.4.1), so they are located only by bounded
+  `(P,C)` trial over the snapshot; a key whose memory location falls outside that budget
+  on every capture-eligible write is a miss. The structural scan removes this cost for the
+  AES-schedule case but not for structureless keys.
+- **Key destroyed, or process exited, before the deferred snapshot runs**: the memory capture
+  is a prompt off-IRP snapshot (II.3.2), not an in-IRP one; a writer that frees and zeroes the
+  key — or exits — before that snapshot is scheduled leaves nothing for it. The worker's
+  promptness and the synchronous register grab shrink this window; whatever still falls outside
+  it reduces here.
 
 > **Rationale.** This is the honest edge of a key-capture defense, and it is the
 > ratified premise of the whole system (Part I): the Oracle is the protection, and where
@@ -665,11 +708,14 @@ An implementation is constitutional iff all hold.
 - [ ] Protection is key capture; no mechanism protects data when the Oracle fails (I.1).
 - [ ] Conviction is forward-only (`Encrypt_K(destroyed original) == written`); the
       reverse never convicts; the system cannot convict its own recovery (II.2).
-- [ ] The Oracle runs at the write IRP; register-first capture may use a short hold; the
-      memory scan is deferred post-release; the cipher battery is offline; the round-trip
-      never blocks the IRP on a user-mode wait (II.3).
-- [ ] Round-key inversion is implemented; cumulative-N is capture-opportunity + keystore
-      accumulation, never backup accumulation (II.4).
+- [ ] The Oracle anchors capture to the write but reads the writer's memory off the IRP: a
+      prompt deferred worker attaches to the still-live writer (under exit synchronization) and
+      copies bounded resident committed-private pages; the structural scan, cipher battery, and
+      forward proof run on the frozen snapshot; nothing enumerates or scans the writer's memory
+      from inside the write IRP (II.3).
+- [ ] Structural key-schedule location and round-key inversion are implemented; conviction
+      stays the forward proof, never key-in-hand; cumulative-N is per-key capture-opportunity
+      + keystore accumulation, never backup accumulation (II.4).
 
 **Recovery (Part III)**
 - [ ] No original is preserved as a recovery source; recovery is decryption of the
