@@ -185,6 +185,12 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
     sar_recovery_key_from_record(&record, &rk);
     rs = sar_recover_buffer(&rk, NULL, ct, pt, (uint64_t)len);
     RtlSecureZeroMemory(&rk, sizeof(rk));
+
+    if (rs == SAR_RECOVER_OK) {
+        sar_recovery_verify_t verify;
+        sar_recovery_verify_from_record(&record, &verify);
+        rs = sar_recover_verify(pt, (uint64_t)len, &verify);
+    }
     RtlSecureZeroMemory(&record, sizeof(record));
 
     if (rs != SAR_RECOVER_OK) {

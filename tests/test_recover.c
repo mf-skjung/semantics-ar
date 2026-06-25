@@ -1,6 +1,7 @@
 #include "test_util.h"
 #include "sar_recover.h"
 #include "sar_recover_file.h"
+#include "sar_keystore.h"
 #include "aes.h"
 #include "des.h"
 #include "sm4.h"
@@ -498,26 +499,30 @@ static void no_clobber(void) {
     fwrite(ct, 1, L, f);
     fclose(f);
 
-    sar_recovery_sample_t sample = { 0, pt, ct, 64 };
+    sar_recovery_verify_t verify;
+    memset(&verify, 0, sizeof verify);
+    verify.sample_offset = 0;
+    verify.sample_length = 64;
+    sar_sample_tag(pt, 64, verify.sample_tag);
 
     sar_recovery_key_t rkB; memset(&rkB, 0, sizeof rkB);
     rkB.algorithm = SAR_ALG_AES_128; rkB.mode = SAR_MODE_CBC;
     rkB.key_length = 16; memcpy(rkB.key, keyB, 16);
     memcpy(rkB.iv, iv, 16); rkB.iv_length = 16;
     sar_recover_file_result_t res;
-    sar_recover_status_t st = sar_recover_file(path, &rkB, NULL, &sample, &res);
+    sar_recover_status_t st = sar_recover_file(path, &rkB, NULL, &verify, &res);
     int unchanged = (read_file_bytes(path, disk, L) == 0) && (memcmp(disk, ct, L) == 0);
     CHECK(st == SAR_RECOVER_DECLINED_MISMATCH && unchanged,
-          "wrong key: forward relation fails, file left byte-for-byte intact");
+          "wrong key: decrypted sample fails the verification tag, file left byte-for-byte intact");
 
     sar_recovery_key_t rkA; memset(&rkA, 0, sizeof rkA);
     rkA.algorithm = SAR_ALG_AES_128; rkA.mode = SAR_MODE_CBC;
     rkA.key_length = 16; memcpy(rkA.key, keyA, 16);
     memcpy(rkA.iv, iv, 16); rkA.iv_length = 16;
-    st = sar_recover_file(path, &rkA, NULL, &sample, &res);
+    st = sar_recover_file(path, &rkA, NULL, &verify, &res);
     int recovered = (read_file_bytes(path, disk, L) == 0) && (memcmp(disk, pt, L) == 0);
     CHECK(st == SAR_RECOVER_OK && recovered,
-          "correct key: forward relation holds, file recovered on disk");
+          "correct key: decrypted sample matches the verification tag, file recovered on disk");
 
     remove(path);
 }

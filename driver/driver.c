@@ -23,6 +23,10 @@ FLT_PREOP_CALLBACK_STATUS SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
 FLT_PREOP_CALLBACK_STATUS SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
                                                   _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                                   _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+FLT_POSTOP_CALLBACK_STATUS SarPostRead(_Inout_ PFLT_CALLBACK_DATA Data,
+                                       _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                       _In_opt_ PVOID CompletionContext,
+                                       _In_ FLT_POST_OPERATION_FLAGS Flags);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarBypassIoResolve(_Inout_ PSAR_POSTURE Posture);
@@ -35,6 +39,7 @@ static VOID SarStreamContextCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_
 }
 
 static const FLT_OPERATION_REGISTRATION g_sar_operations[] = {
+    { IRP_MJ_READ, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, NULL, SarPostRead },
     { IRP_MJ_WRITE, 0, SarPreWrite, NULL },
     { IRP_MJ_SET_INFORMATION, 0, SarPreSetInformation, NULL },
     { IRP_MJ_FILE_SYSTEM_CONTROL, 0, SarPreFsControl, NULL },

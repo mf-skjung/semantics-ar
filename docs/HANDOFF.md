@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — Unit 4 recovery wiring (kernel-side decrypt, optimal split) (2026-06-24)
+# Handoff — semantics-ar Windows realization — Recovery round-trip PROVEN in a live kernel (2026-06-25)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
@@ -19,6 +19,97 @@ with a user-owned creation-time whitelist. Host-verifiable logic stays freestand
 kernel-bound and Win32 code is verified in a WDK/VM context.
 
 ## 2. Current true state
+
+**[CONSTITUTION PART I — capture→recovery — PROVEN END-TO-END IN A LIVE KERNEL this session (VM-VERIFIED).**
+The chain's central claim is now demonstrated on the live VM, not just asserted:
+- **Capture conviction works** and was never broken: with a clean keystore a single CNG-AES-256 encryption by
+  `test_encryptor.exe` yields `keystore.bin 0 → 802 B` (one record). The earlier `convict=0` reading was a
+  *diagnostic-counter placement* artifact (the temp counter sat *after* `SarKeystoreAppend`, which returns 0 on
+  a duplicate key_id; `test_encryptor` uses a fixed key, so a pre-existing keystore deduped the append). Moving
+  the probe ahead of the dedup showed `convict=1` even when the keystore stayed `802 → 802` — conviction had
+  been succeeding all along.
+- **Recovery round-trip PASS:** `sarctl list` shows `key_id ↔ \Device\HarddiskVolumeN\sar\<file>`; `sarctl recover
+  <key_id> <path>` → kernel decrypt + tag-verify → `.sarrectmp` → service atomic replace → **recovered file
+  SHA-256 == golden** (the pre-encryption original), exact byte-for-byte.
+- **Verify-before-replace (III.4) PASS:** `recover` against a never-encrypted file decrypts to garbage, the tag
+  mismatches → `recover result=-8` (decline), the target is left **byte-for-byte intact**, no `.sarrectmp`
+  leftover. The invariant is enforced *in the kernel* (`SarRecoveryExecute`: `sar_recover_verify` gates the
+  `SarRecWriteTemp`).
+- **Chronic FS deadlock — ROOT CAUSE FIXED and proven gone.** The deadlock that recurred across implementers was
+  the capture path doing a *synchronous in-IRP `FltReadFile` of the very file being written* to obtain `P`. The
+  fix is **read-correlation**: `SarPostRead` samples the originator's own head read into the per-stream context;
+  `SarSubmitWrite` correlates it to the write by offset; the write path performs **zero file I/O**. FS HEALTH OK
+  across the prior wedge pattern (in-place overwrite + read), repeatedly.
+- **Constitution III.2.1 CORRECTED** (evidence-gated, per the standing rule). The old clause "`P` is the old bytes
+  read at the write IRP before release" was the erroneous *HOW* behind the deadlock; it now states `P` is sourced
+  from the originator's own read (read-correlation), never read at the write IRP, with the deadlock rationale and
+  the confirmed-limit fallback (a write whose plaintext was never observed → no Oracle attempt, VIII.2).
+- **Diagnostic instrumentation REMOVED.** The temporary `g_sar_diag_*` counters + `SarDiagWriteRegistry`
+  (`HKLM\SOFTWARE\SemanticsArDiag`) used to localize the `convict=0` artifact are fully deleted from
+  `driver.{c,h}`, `capture.c`, `commport.c`, `operations.c`; the orphaned registry key is cleaned on the VM.
+  Driver rebuilds clean (`cl /kernel`), ctest 9/9, and a post-removal regression on the VM re-proved
+  capture (`0 → 802`) + round-trip (recovered == golden) + FS HEALTH OK.
+]**
+
+**[RECOVERY-VERIFICATION INVARIANT — DONE and HOST-VERIFIED earlier (ctest 9/9, MSVC `/W4 /WX`
+clean).** Constitution III.4 now mandates *verify-before-replace*: recovery checks the decrypted
+result against a capture-time **verification tag** before replacing a file; any mismatch declines and
+leaves the target byte-for-byte intact. Realized at the engine/format layer, the dependency floor the
+kernel round-trip builds on:
+- Keystore record format **v2→v3** (`keystore_format.h`): each record carries `sample_offset`,
+  `sample_length`, and a 32-byte `sample_tag` = SHA-256 of a bounded sample (≤`SEMANTICS_AR_SAMPLE_TAG_MAX`
+  = 64 B) of the *original* `P` taken from the Oracle's input at the convicting write. The tag is a check
+  value, not a recovery source (III.1.1) and is covered by the record's keyed MAC (tamper test added).
+- The tag is computed **inside the freestanding core** (`sar_keystore_record_init` via new `sar_sample_tag`,
+  fed by `sar_capture_run` from `req->plaintext`/`sample_size`/`file_offset`) — so the **driver capture path
+  needs no change**; it gets the tag for free on its next compile.
+- New engine primitive `sar_recover_verify(pt, file_size, &verify)` + `sar_recovery_verify_from_record`
+  (`recover.c`): hashes the decrypted sample window at `sample_offset` and constant-time-compares to the
+  stored tag → `SAR_RECOVER_OK` or `SAR_RECOVER_DECLINED_MISMATCH`; a zero-length anchor declines (never an
+  unverifiable replace).
+- Host `sar_recover_file` verification **switched from forward-relation `(P,C)` to tag-based** (the real
+  recovery has no `P`; the forward path was a test-only proxy) and the check now gates the *replace* (runs
+  after decrypt, before writeback). `test_recover` `no_clobber` rewritten to the tag mechanism: wrong key →
+  garbage → tag mismatch → `DECLINED_MISMATCH` + file intact; correct key → match → recovered.
+- **Dead-code cleanup forced by the switch:** `sar_recover_confirm` (now uncalled) removed, and
+  `forward_relation`'s `strict_iv` parameter + its two `!strict_iv` adjacent-block branches removed (only
+  `sar_recover_locate_iv` uses `forward_relation`, always strict). No behavior change to IV-location.
+- **Research-grounded (deep-research, two passes, MSRC + WDK primary sources):** kernel-decryption (III.1.2)
+  was challenged and **upheld** — MSRC Servicing Criteria: the *Kernel* boundary is serviced, *PPL* is not
+  ("Intent to service? No"), so kernel-pool secrecy is strictly stronger than a PPL service against a
+  non-admin attacker; the Resiliency-Initiative "move out of kernel" signal is about always-on EDR sensors,
+  not bounded on-demand recovery. Verify-before-replace is the universal safety property across PayBreak
+  (libmagic), Redemption (transactional commit), Rhea (format validation); we use a cryptographic tag,
+  stronger than those heuristics.
+- **Open generalization (deferred):** under *key reuse* the keystore dedups by key_id, keeping one file's
+  anchor; mandatory verification then declines sibling files (no per-file anchor) — a tension with II.4.2's
+  whole-set-recovery. Resolution is to retain a per-file recovery anchor (provenance+tag+offset) per
+  captured file even under a shared key (couples to the recovery catalog, §4). Dominant per-file keying is
+  fully covered now.
+]**
+
+**[Recovery round-trip — DONE and VM-VERIFIED this session (see the Part I block at the top of §2).** DoD met:
+capture a CNG-encrypted file → `sarctl list` shows key_id↔path → `sarctl recover` → file restored to plaintext,
+SHA-256 == golden; verify-before-replace declines a tag mismatch with the target intact. Per-item status:
+- **(a) `driver/recovery.c` file I/O — DONE via `Zw*`, and the `Flt*` switch is NOT required (evidence).** The
+  research deadlock concern was specific to an *in-IRP same-file* read (the capture path, fixed by
+  read-correlation). `SarRecoveryExecute` runs as a **standalone PASSIVE operation on the service's request
+  thread, not nested in any IRP**, so `ZwCreateFile`/`ZwReadFile`/`ZwWriteFile` (OBJ_KERNEL_HANDLE,
+  `FILE_SYNCHRONOUS_IO_NONALERT`) complete cleanly — round-trip PASS + FS HEALTH OK prove it. `sar_recover_verify`
+  gates `SarRecWriteTemp` (III.4). *Optional hardening, not correctness:* `Flt*`-with-own-instance would avoid our
+  own filter re-capturing the recovery read/write (currently benign — the temp write bails on no correlated `P`).
+- **(b) `driver/commport.c` buffer hardening — the live paths run fault-free** (handshake + `RECOVERY_EXEC`
+  exercised live, `SarCommMessageNotify` SEH-wrapped). Full `IS_ALIGNED` audit of every `OutputBuffer` write
+  per the MiniSpy pattern is still worth a dedicated pass but no fault has surfaced.
+- **(c) Catalog + operator tool — DONE functionally, with a known design deviation to revisit.** `SAR_CTL_OP_LIST`
+  + `tools/sarctl` (`list`/`recover`/`mode`) work end-to-end. **But the catalog source is the VERDICT_NOTIFY
+  shadow** (`service/control.c g_catalog`, fed by `sar_on_verdict`), *not* the keystore-backed `CATALOG_QUERY`
+  the DoD specified. Consequence: the **keystore persists across service restart but the catalog does not** — after
+  a service restart `list` is empty until a fresh conviction, even though the key is still recoverable by key_id.
+  The robust design (driver enumerates the keystore under the push lock shared, projecting non-secret metadata)
+  remains the right target. Recovery-by-key_id itself reads the persisted keystore and is unaffected.
+- **(d) Per-file recovery anchor under key reuse** (the II.4.2 generalization above) — still open, couples to (c).
+*Verification:* the user's admin-PowerShell→relay VM loop.]**
 
 **Done and VM-verified — FIRST LIGHT (live kernel, Win11 24H2 Hyper-V):** the driver — for the
 first time in the project — **loads and runs in a live kernel.** Built reproducibly by

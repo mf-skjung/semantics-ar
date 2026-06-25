@@ -7,6 +7,7 @@
 #include <ntifs.h>
 
 #include "sar_capture.h"
+#include "aes.h"
 
 extern PSAR_STATE g_sar_state;
 
@@ -34,6 +35,7 @@ typedef struct _SAR_CAPTURE_WORK {
     PEPROCESS originator_process;
     PETHREAD originator_thread;
     UINT64 file_offset;
+    ULONG write_length;
     ULONG pre_image_len;
     ULONG written_len;
     ULONG scan_len;
@@ -107,22 +109,6 @@ static ULONG SarCaptureCopyWritten(_In_ PFLT_CALLBACK_DATA Data,
         return 0;
     }
     return copy;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static ULONG SarCaptureReadPreImage(_In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                    _In_ LARGE_INTEGER Offset, _In_ ULONG WriteLen,
-                                    _Out_writes_bytes_(Cap) PUCHAR Buf, _In_ ULONG Cap)
-{
-    NTSTATUS status;
-    ULONG want = (WriteLen != 0 && WriteLen < Cap) ? WriteLen : Cap;
-    ULONG read = 0;
-
-    status = FltReadFile(FltObjects->Instance, FltObjects->FileObject, &Offset, want, Buf,
-                         FLTFL_IO_OPERATION_DO_NOT_UPDATE_BYTE_OFFSET, &read, NULL, NULL);
-    if (!NT_SUCCESS(status))
-        return 0;
-    return read;
 }
 
 #define SAR_PEB_NUMBEROFHEAPS 0xE8
@@ -302,9 +288,13 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         sar_capture_request_t req;
         ULONG sample = work->pre_image_len < work->written_len ?
                        work->pre_image_len : work->written_len;
+        sar_gate_result_t gate;
 
-        work->scan = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
-                                             SAR_POOL_TAG_SNAPSHOT);
+        sar_gate_classify(map, work->pre_image, work->written, sample, &gate);
+        if (gate.candidate) {
+            work->scan = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
+                                                 SAR_POOL_TAG_SNAPSHOT);
+        }
         if (work->scan != NULL) {
             HANDLE hproc;
             if (NT_SUCCESS(ObOpenObjectByPointer(work->originator_process, OBJ_KERNEL_HANDLE, NULL,
@@ -339,8 +329,9 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         req.provenance_offset = work->provenance_offset;
 
         if (sar_capture_run(&req, map, SarKeystoreMacKey(g_sar.keystore), result) ==
-            SAR_CAPTURE_CONVICTED)
+            SAR_CAPTURE_CONVICTED) {
             SarCaptureCommit(ctx, result, work->originator_process);
+        }
     }
 
     if (map != NULL)
@@ -412,6 +403,11 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
         return;
     }
 
+    if (Request->pre_image_len < SAR_CANDIDATE_SIZE) {
+        SarSeamWriteRelease(Request);
+        return;
+    }
+
     if (InterlockedIncrement(&Ctx->inflight) > SAR_CAPTURE_INFLIGHT_CAP) {
         InterlockedDecrement(&Ctx->inflight);
         InterlockedIncrement64(&Ctx->pressure_drops);
@@ -447,6 +443,7 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
     work->originator_process = Request->originator_process;
     work->originator_thread = Request->originator_thread;
     work->file_offset = (UINT64)Request->write_offset.QuadPart;
+    work->write_length = Request->write_length;
     work->provenance_offset = work->file_offset;
 
     SarCaptureResolveProvenance(Request->data, work->provenance_path);
@@ -459,9 +456,9 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
         return;
     }
     work->written_len = SarCaptureCopyWritten(Request->data, work->written, SAR_CAPTURE_BUFFER_BYTES);
-    work->pre_image_len = SarCaptureReadPreImage(Request->related, Request->write_offset,
-                                                 Request->write_length, work->pre_image,
-                                                 SAR_CAPTURE_BUFFER_BYTES);
+    work->pre_image_len = Request->pre_image_len < SAR_CAPTURE_BUFFER_BYTES ?
+                          Request->pre_image_len : SAR_CAPTURE_BUFFER_BYTES;
+    RtlCopyMemory(work->pre_image, Request->pre_image, work->pre_image_len);
 
     work->scan = NULL;
     work->scan_len = 0;

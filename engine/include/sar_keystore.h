@@ -30,11 +30,17 @@ void sar_keystore_key_id(const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
                          uint32_t key_length, const uint8_t *key_bytes,
                          uint8_t out_id[SEMANTICS_AR_KEY_ID_SIZE]);
 
+void sar_sample_tag(const uint8_t *data, uint32_t len,
+                    uint8_t out[SEMANTICS_AR_MAC_SIZE]);
+
 void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
                               const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
                               const sar_verdict_t *verdict,
                               const uint16_t *provenance_path,
-                              uint64_t provenance_offset);
+                              uint64_t provenance_offset,
+                              const uint8_t *sample,
+                              uint32_t sample_len,
+                              uint64_t sample_offset);
 
 int sar_keystore_append(semantics_ar_keystore_record_t *records,
                         uint64_t *count, uint64_t capacity,

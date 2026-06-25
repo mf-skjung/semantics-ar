@@ -274,7 +274,7 @@ static uint64_t count_encrypted(const sar_geometry_t *geom, uint64_t file_size) 
 sar_recover_status_t sar_recover_file(const char *path,
                                       const sar_recovery_key_t *rk,
                                       const sar_geometry_t *geom,
-                                      const sar_recovery_sample_t *confirm_sample,
+                                      const sar_recovery_verify_t *verify,
                                       sar_recover_file_result_t *out) {
     sar_recover_file_result_t res;
     res.status = SAR_RECOVER_INVALID;
@@ -284,12 +284,6 @@ sar_recover_status_t sar_recover_file(const char *path,
     if (!path || !rk) {
         if (out) *out = res;
         return SAR_RECOVER_INVALID;
-    }
-
-    if (confirm_sample && !sar_recover_confirm(rk, confirm_sample)) {
-        res.status = SAR_RECOVER_DECLINED_MISMATCH;
-        if (out) *out = res;
-        return res.status;
     }
 
     uint8_t *ct = NULL;
@@ -322,6 +316,16 @@ sar_recover_status_t sar_recover_file(const char *path,
         res.status = st;
         if (out) *out = res;
         return res.status;
+    }
+
+    if (verify) {
+        sar_recover_status_t vst = sar_recover_verify(pt, size, verify);
+        if (vst != SAR_RECOVER_OK) {
+            free(ct); free(pt);
+            res.status = vst;
+            if (out) *out = res;
+            return res.status;
+        }
     }
 
     if (sar_write_replace(path, pt, size) != 0) {

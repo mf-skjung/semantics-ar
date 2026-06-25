@@ -126,6 +126,14 @@ static void test_ecb_convict_and_projection(void)
             nonzero_id = 1;
     CHECK(nonzero_id);
 
+    {
+        uint8_t expect[SEMANTICS_AR_MAC_SIZE];
+        sar_sample_tag(p, SEMANTICS_AR_SAMPLE_TAG_MAX, expect);
+        CHECK(res.record.sample_length == SEMANTICS_AR_SAMPLE_TAG_MAX);
+        CHECK(res.record.sample_offset == 0);
+        CHECK(memcmp(res.record.sample_tag, expect, SEMANTICS_AR_MAC_SIZE) == 0);
+    }
+
     CHECK(!key_in_buffer(&res.notify, sizeof(res.notify), g_key, 16));
     CHECK(!key_in_buffer(&res.notify, sizeof(res.notify), g_key, 8));
 }

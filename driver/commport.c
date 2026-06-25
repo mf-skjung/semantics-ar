@@ -338,12 +338,14 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
     PSAR_COMM comm = (PSAR_COMM)PortCookie;
     sar_msg_status_t mv;
     uint32_t type = 0;
-    NTSTATUS status;
+    NTSTATUS status = STATUS_INVALID_PARAMETER;
 
     *ReturnOutputBufferLength = 0;
 
     if (comm == NULL || InputBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    __try {
 
     mv = sar_msg_validate((const uint8_t *)InputBuffer, InputBufferLength, &type);
     if (mv != SAR_MSG_OK) {
@@ -396,6 +398,12 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
         InterlockedIncrement64(&comm->tamper_counter);
         status = STATUS_INVALID_PARAMETER;
         break;
+    }
+
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        InterlockedIncrement64(&comm->tamper_counter);
+        *ReturnOutputBufferLength = 0;
+        return STATUS_INVALID_PARAMETER;
     }
 
     return status;

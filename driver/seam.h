@@ -9,6 +9,9 @@
 
 typedef struct _SAR_STREAM_CONTEXT {
     volatile LONG flags;
+    volatile LONG read_length;
+    UINT64        read_offset;
+    UCHAR         read_sample[SAR_CAPTURE_BUFFER_BYTES];
 } SAR_STREAM_CONTEXT, *PSAR_STREAM_CONTEXT;
 
 typedef struct _SAR_CAPTURE_BUFFER {
@@ -34,6 +37,8 @@ typedef struct _SAR_WRITE_SEAM_REQUEST {
     ULONG irp_flags;
     LARGE_INTEGER write_offset;
     ULONG write_length;
+    ULONG pre_image_len;
+    UCHAR pre_image[SAR_CAPTURE_BUFFER_BYTES];
     SAR_CONTINUATION continuation;
     PSAR_CAPTURE_BUFFER capture_buffer;
 } SAR_WRITE_SEAM_REQUEST, *PSAR_WRITE_SEAM_REQUEST;

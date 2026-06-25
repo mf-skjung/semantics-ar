@@ -228,7 +228,11 @@ correspondingly fewer chances.
 ### II.5 The keystore
 **[DECISION] II.5.1 — The keystore is the system's sole persistent recovery asset.**
 Captured keys (with the algorithm and parameters needed to use them) are written to
-a keystore. Its size is proportional to the number of distinct captured keys; under
+a keystore. Each record carries, alongside the key, a **verification tag** — a one-way
+hash of a sample of the original taken from the Oracle's input at the write that
+convicted (III.2) — so a recovery can confirm it has reconstructed the true original
+before it replaces a file (III.4); the tag is a check value, never a preserved original
+(III.1.1). Its size is proportional to the number of distinct captured keys; under
 per-file keying, up to one record per encrypted file — thousands to hundreds of
 thousands of records, megabytes in scale; the on-disk format is append-oriented and
 must scale to many records. It is the new center of gravity: if it
@@ -263,7 +267,9 @@ The communication port therefore carries, for recovery, only the key identifier,
 target path, and a status; never key material and never plaintext. No recovery step
 relaxes the privilege boundary of VII.1.1, and the atomic replacement preserves the
 target's security descriptor, alternate streams, object identifier, and creation time so
-recovery restores the file, not merely its bytes.
+recovery restores the file, not merely its bytes. The kernel checks the decrypted result
+against the capture-time verification tag (III.4) before it produces the temporary file,
+so a wrong key, geometry, or key↔target pairing never reaches the atomic replacement.
 
 > **Why this is the consistent endpoint, not a cost-saving shortcut.** A preserved
 > original could only save one case a captured key cannot: a file whose key was
@@ -278,10 +284,18 @@ recovery restores the file, not merely its bytes.
 **[DECISION] III.2.1 — The only transient artifact is the Oracle's input, in
 memory.**
 To attempt the forward proof, the Oracle needs a sample of the original (`P`) and
-the written bytes (`C`). For an in-place overwrite, `P` is the old bytes read at the
-write IRP before release; `C` is the write buffer. A single block suffices to verify
-a key. This sample lives in memory only, for the span of the proof attempt. It is
-**not** a backup, has no recovery role, and is never persisted.
+the written bytes (`C`). `C` is the write buffer. `P` is the matching plaintext as it
+stood before the write, and it is sourced from the originator's *own* read of those
+bytes — sampled at the read seam into a per-stream buffer and correlated to the write
+by stream and offset — never by reading the file at the write IRP. A synchronous read
+of the same stream from within its own write re-enters the cache and memory manager
+under locks already held and wedges the volume; the originator's read is the honest,
+hazard-free source, because a writer that overwrites a file in place must first read
+the plaintext it destroys. A write whose plaintext was never observed yields no Oracle
+attempt — a missed attempt inside the confirmed limit (VIII.2), never a read forced
+onto the IRP. A single block suffices to verify a key. This sample lives in memory
+only, for the span of the proof attempt. It is **not** a backup, has no recovery role,
+and is never persisted.
 
 **[DECISION] III.2.2 — Under pressure, drop the sample; do not spill or hold.**
 At attack throughput the in-memory Oracle-input queue is bounded by a fixed cap.
@@ -296,6 +310,26 @@ is no preservation guarantee to keep.
 are the reverse direction (II.2.1) and therefore cannot convict the system of
 encryption. No self-trust identity flag is needed or used for this; if one were used
 it would re-introduce the identity dependence Part VI forbids.
+
+### III.4 Recovery is verified before it replaces
+**[INVARIANT] III.4.1 — No replacement without a passing verification.**
+Recovery decrypts the on-disk ciphertext with the captured key and, before it replaces
+the target, checks the decrypted result against the **verification tag** recorded at
+capture (II.5): the one-way hash of the decrypted sample must equal the recorded tag.
+The replacement proceeds only on a match; on any mismatch the recovery declines and the
+target is left byte-for-byte intact. A wrong key, a wrong cipher or mode, a wrong
+geometry, or a wrong key↔target pairing all fail this check, so recovery can never
+overwrite a file with a result it cannot confirm is the original. This is the recovery
+direction's analogue of the Oracle's forward proof: conviction never trusts a key in
+hand (II.2.2), and recovery never trusts a decryption in hand.
+
+The tag is a hash of a bounded original sample, never the sample itself — a check value
+with no recovery role, and not a preserved original (III.1.1). It rides in the keystore
+record and is covered by that record's keyed MAC (VII.1.1), and the Oracle captures one
+for each file it observes, so each file recovers against its own anchor. Where recovery
+is directed at a target for which no verification anchor was captured, it declines rather
+than perform an unverifiable destructive replace — the same honest edge as the confirmed
+limit (VIII.2): the system replaces only what it can prove it is restoring.
 
 ---
 
@@ -723,6 +757,8 @@ An implementation is constitutional iff all hold.
 - [ ] Recovery decrypts in kernel; neither the captured key nor the recovered plaintext is
       exported to user mode; the port carries only key_id + target path + status, and the
       writeback is a metadata-preserving atomic replace (III.1.2).
+- [ ] Recovery verifies the decrypted result against the capture-time verification tag
+      before replacing the target; any mismatch declines and leaves the file intact (III.4).
 - [ ] The only transient is the in-memory Oracle input; under pressure it is dropped (a
       missed attempt, confirmed limit), never spilled to disk and never held on the IRP
       (III.2).

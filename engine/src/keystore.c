@@ -20,11 +20,23 @@ void sar_keystore_key_id(const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
     sar_secure_zero(msg, sizeof(msg));
 }
 
+void sar_sample_tag(const uint8_t *data, uint32_t len,
+                    uint8_t out[SEMANTICS_AR_MAC_SIZE]) {
+    sar_sha256_ctx_t ctx;
+    sar_sha256_init(&ctx);
+    if (data && len)
+        sar_sha256_update(&ctx, data, len);
+    sar_sha256_final(&ctx, out);
+}
+
 void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
                               const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
                               const sar_verdict_t *verdict,
                               const uint16_t *provenance_path,
-                              uint64_t provenance_offset) {
+                              uint64_t provenance_offset,
+                              const uint8_t *sample,
+                              uint32_t sample_len,
+                              uint64_t sample_offset) {
     sar_memset(rec, 0, sizeof(*rec));
     rec->algorithm = verdict->algorithm;
     rec->mode = verdict->mode;
@@ -44,6 +56,13 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
             rec->provenance_path[i] = provenance_path[i];
             if (provenance_path[i] == 0) break;
         }
+    }
+    rec->sample_offset = sample_offset;
+    if (sample && sample_len > 0) {
+        uint32_t sl = sample_len > SEMANTICS_AR_SAMPLE_TAG_MAX
+                          ? SEMANTICS_AR_SAMPLE_TAG_MAX : sample_len;
+        rec->sample_length = sl;
+        sar_sample_tag(sample, sl, rec->sample_tag);
     }
     sar_keystore_key_id(mac_key, rec->algorithm, rec->mode,
                         rec->key_length, rec->key_bytes, rec->key_id);

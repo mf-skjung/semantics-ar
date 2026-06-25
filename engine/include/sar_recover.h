@@ -37,6 +37,12 @@ typedef struct {
     uint32_t       length;
 } sar_recovery_sample_t;
 
+typedef struct {
+    uint64_t sample_offset;
+    uint32_t sample_length;
+    uint8_t  sample_tag[SEMANTICS_AR_MAC_SIZE];
+} sar_recovery_verify_t;
+
 #define SAR_GEOM_FULL     0
 #define SAR_GEOM_HEAD     1
 #define SAR_GEOM_STRIDE   2
@@ -73,15 +79,18 @@ void sar_recovery_key_from_record(const semantics_ar_keystore_record_t *rec,
 
 void sar_recovery_key_from_verdict(const sar_verdict_t *v, sar_recovery_key_t *out);
 
+void sar_recovery_verify_from_record(const semantics_ar_keystore_record_t *rec,
+                                     sar_recovery_verify_t *out);
+
+sar_recover_status_t sar_recover_verify(const uint8_t *pt, uint64_t file_size,
+                                        const sar_recovery_verify_t *v);
+
 int sar_geometry_expand(const sar_geometry_t *geom, uint64_t file_size,
                         sar_range_t *out, uint32_t cap, uint32_t *out_count);
 
 int sar_geometry_from_family(sar_geometry_mapper_fn mapper,
                              const uint8_t *family_blob, uint32_t blob_len,
                              uint64_t file_size, sar_geometry_t *out);
-
-int sar_recover_confirm(const sar_recovery_key_t *rk,
-                        const sar_recovery_sample_t *sample);
 
 int sar_recover_locate_iv(sar_recovery_key_t *rk,
                           const uint8_t *file, uint64_t file_size,

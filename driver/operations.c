@@ -98,6 +98,7 @@ static PSAR_STREAM_CONTEXT SarGetStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObj
         return NULL;
 
     context->flags = 0;
+    context->read_length = 0;
 
     status = FltSetStreamContext(FltObjects->Instance, FltObjects->FileObject,
                                  FLT_SET_CONTEXT_KEEP_IF_EXISTS, context, NULL);
@@ -161,7 +162,75 @@ static VOID SarSubmitWrite(_In_ PFLT_CALLBACK_DATA Data,
     request.write_offset = Offset;
     request.write_length = Length;
 
+    {
+        PSAR_STREAM_CONTEXT sc = NULL;
+        if (NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                           (PFLT_CONTEXT *)&sc))) {
+            ULONG n = (ULONG)sc->read_length;
+            if (n > 0 && sc->read_offset == (UINT64)Offset.QuadPart) {
+                if (n > SAR_CAPTURE_BUFFER_BYTES)
+                    n = SAR_CAPTURE_BUFFER_BYTES;
+                RtlCopyMemory(request.pre_image, sc->read_sample, n);
+                request.pre_image_len = n;
+            }
+            FltReleaseContext(sc);
+        }
+    }
+
     SarCaptureSubmitWrite(g_sar.capture, &request);
+}
+
+FLT_POSTOP_CALLBACK_STATUS
+SarPostRead(_Inout_ PFLT_CALLBACK_DATA Data,
+            _In_ PCFLT_RELATED_OBJECTS FltObjects,
+            _In_opt_ PVOID CompletionContext,
+            _In_ FLT_POST_OPERATION_FLAGS Flags)
+{
+    PSAR_STREAM_CONTEXT context;
+    PVOID src;
+    ULONG got;
+    ULONG copy;
+
+    UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    if (Data->Iopb == NULL || !NT_SUCCESS(Data->IoStatus.Status))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    got = (ULONG)Data->IoStatus.Information;
+    if (got == 0)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    if (Data->Iopb->Parameters.Read.ByteOffset.QuadPart != 0)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    if (Data->Iopb->Parameters.Read.MdlAddress != NULL)
+        src = MmGetSystemAddressForMdlSafe(Data->Iopb->Parameters.Read.MdlAddress,
+                                           NormalPagePriority | MdlMappingNoExecute);
+    else
+        src = Data->Iopb->Parameters.Read.ReadBuffer;
+    if (src == NULL)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    context = SarGetStreamContext(FltObjects);
+    if (context == NULL)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    copy = got < SAR_CAPTURE_BUFFER_BYTES ? got : SAR_CAPTURE_BUFFER_BYTES;
+    context->read_length = 0;
+    __try {
+        RtlCopyMemory(context->read_sample, src, copy);
+        context->read_offset = (UINT64)Data->Iopb->Parameters.Read.ByteOffset.QuadPart;
+        context->read_length = (LONG)copy;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        context->read_length = 0;
+    }
+
+    FltReleaseContext(context);
+    return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
 FLT_PREOP_CALLBACK_STATUS

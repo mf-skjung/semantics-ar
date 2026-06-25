@@ -13,6 +13,37 @@ typedef struct {
 
 static sar_control_listener_t g_control_listener;
 
+#define SAR_CATALOG_CAP 1024u
+static sar_catalog_entry_t g_catalog[SAR_CATALOG_CAP];
+static uint32_t g_catalog_count;
+static SRWLOCK g_catalog_lock = SRWLOCK_INIT;
+
+void sar_control_catalog_add(const semantics_ar_verdict_notify_t *notify)
+{
+    uint32_t i;
+
+    if (!notify)
+        return;
+
+    AcquireSRWLockExclusive(&g_catalog_lock);
+    for (i = 0; i < g_catalog_count; i++) {
+        if (memcmp(g_catalog[i].key_id, notify->key_id,
+                   SEMANTICS_AR_KEY_ID_SIZE) == 0) {
+            ReleaseSRWLockExclusive(&g_catalog_lock);
+            return;
+        }
+    }
+    if (g_catalog_count < SAR_CATALOG_CAP) {
+        sar_catalog_entry_t *e = &g_catalog[g_catalog_count++];
+        memcpy(e->key_id, notify->key_id, SEMANTICS_AR_KEY_ID_SIZE);
+        e->algorithm = notify->algorithm;
+        e->mode = notify->mode;
+        memcpy(e->provenance_path, notify->provenance_path,
+               sizeof(e->provenance_path));
+    }
+    ReleaseSRWLockExclusive(&g_catalog_lock);
+}
+
 sar_comm_status_t sar_control_send_mode(sar_comm_client_t *client,
                                         uint32_t mode)
 {
@@ -112,6 +143,23 @@ int sar_control_apply(sar_comm_client_t *client,
         reply->result = sar_recovery_run(client, cmd->key_id, path, &bytes);
         reply->verdict = (reply->result == 0) ? SAR_IDENTITY_VERDICT_VERIFIED
                                               : SAR_IDENTITY_VERDICT_ERROR;
+        break;
+    }
+
+    case SAR_CTL_OP_LIST: {
+        uint32_t start = cmd->mode;
+        uint32_t n = 0;
+
+        AcquireSRWLockShared(&g_catalog_lock);
+        reply->total = g_catalog_count;
+        while (start + n < g_catalog_count && n < SAR_CTL_LIST_PAGE) {
+            reply->entries[n] = g_catalog[start + n];
+            n++;
+        }
+        reply->returned = n;
+        ReleaseSRWLockShared(&g_catalog_lock);
+        reply->result = 0;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
         break;
     }
 

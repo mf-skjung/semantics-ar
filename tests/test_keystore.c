@@ -41,10 +41,22 @@ int main(void) {
     make_verdict(&vb, SAR_ALG_AES_256, 0x20);
     make_verdict(&vc, SAR_ALG_SM4, 0x30);
 
+    uint8_t sample[64];
+    for (int i = 0; i < 64; i++) sample[i] = (uint8_t)(0x80 + i);
+
     semantics_ar_keystore_record_t ra, rb, rc;
-    sar_keystore_record_init(&ra, K, &va, NULL, 100);
-    sar_keystore_record_init(&rb, K, &vb, NULL, 200);
-    sar_keystore_record_init(&rc, K, &vc, NULL, 300);
+    sar_keystore_record_init(&ra, K, &va, NULL, 100, sample, sizeof sample, 0x1000);
+    sar_keystore_record_init(&rb, K, &vb, NULL, 200, NULL, 0, 0);
+    sar_keystore_record_init(&rc, K, &vc, NULL, 300, NULL, 0, 0);
+
+    {
+        uint8_t expect[SEMANTICS_AR_MAC_SIZE];
+        sar_sample_tag(sample, sizeof sample, expect);
+        CHECK(ra.sample_length == 64 && ra.sample_offset == 0x1000 &&
+              memcmp(ra.sample_tag, expect, SEMANTICS_AR_MAC_SIZE) == 0 &&
+              rb.sample_length == 0,
+              "record carries verification tag of the original sample; absent sample -> no tag");
+    }
 
     int r1 = sar_keystore_append(records, &count, 8, &ra);
     int r2 = sar_keystore_append(records, &count, 8, &ra);
@@ -108,7 +120,17 @@ int main(void) {
         memcpy(t, buf, need);
         t[hdr_sz + iv_off] ^= 0x01;
         int rv = sar_keystore_verify(t, need, K, &anchor, NULL);
-        CHECK(rv == SAR_KS_RECORD_MAC, "(v) v2 IV-field edit detected (MAC covers IV)");
+        CHECK(rv == SAR_KS_RECORD_MAC, "(v) IV-field edit detected (MAC covers IV)");
+        free(t);
+    }
+    {
+        size_t tag_off = offsetof(semantics_ar_keystore_record_t, sample_tag);
+        uint8_t *t = (uint8_t *)malloc(need);
+        memcpy(t, buf, need);
+        t[hdr_sz + tag_off] ^= 0x01;
+        int rv = sar_keystore_verify(t, need, K, &anchor, NULL);
+        CHECK(rv == SAR_KS_RECORD_MAC,
+              "(vii) verification-tag edit detected (MAC covers the recovery tag)");
         free(t);
     }
     {
@@ -119,7 +141,7 @@ int main(void) {
         h.protocol_version = 1;
         memcpy(t, &h, sizeof(h));
         int rv = sar_keystore_verify(t, need, K, &anchor, NULL);
-        CHECK(rv == SAR_KS_BAD_VERSION, "(vi) non-v2 protocol_version rejected (no silent misparse)");
+        CHECK(rv == SAR_KS_BAD_VERSION, "(vi) non-current protocol_version rejected (no silent misparse)");
         free(t);
     }
     {

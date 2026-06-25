@@ -1,4 +1,5 @@
 #include "sar_recover.h"
+#include "sar_keystore.h"
 #include "modes.h"
 #include "ctr_layout.h"
 #include "eng_mem.h"
@@ -268,6 +269,30 @@ void sar_recovery_key_from_record(const semantics_ar_keystore_record_t *rec,
     out->ctr_layout_tag = rec->ctr_layout_tag;
 }
 
+void sar_recovery_verify_from_record(const semantics_ar_keystore_record_t *rec,
+                                     sar_recovery_verify_t *out) {
+    sar_memset(out, 0, sizeof(*out));
+    out->sample_offset = rec->sample_offset;
+    out->sample_length = rec->sample_length;
+    sar_memcpy(out->sample_tag, rec->sample_tag, SEMANTICS_AR_MAC_SIZE);
+}
+
+sar_recover_status_t sar_recover_verify(const uint8_t *pt, uint64_t file_size,
+                                        const sar_recovery_verify_t *v) {
+    uint8_t tag[SEMANTICS_AR_MAC_SIZE];
+    if (!pt || !v)
+        return SAR_RECOVER_INVALID;
+    if (v->sample_length == 0)
+        return SAR_RECOVER_DECLINED_MISMATCH;
+    if (v->sample_offset > file_size ||
+        file_size - v->sample_offset < v->sample_length)
+        return SAR_RECOVER_DECLINED_MISMATCH;
+    sar_sample_tag(pt + v->sample_offset, v->sample_length, tag);
+    if (!sar_ct_equal(tag, v->sample_tag, SEMANTICS_AR_MAC_SIZE))
+        return SAR_RECOVER_DECLINED_MISMATCH;
+    return SAR_RECOVER_OK;
+}
+
 void sar_recovery_key_from_verdict(const sar_verdict_t *v, sar_recovery_key_t *out) {
     sar_memset(out, 0, sizeof(*out));
     out->algorithm = v->algorithm;
@@ -355,8 +380,7 @@ int sar_geometry_from_family(sar_geometry_mapper_fn mapper,
     return mapper(family_blob, blob_len, file_size, out);
 }
 
-static int forward_relation(const sar_recovery_key_t *rk, const sar_recovery_sample_t *s,
-                            int strict_iv) {
+static int forward_relation(const sar_recovery_key_t *rk, const sar_recovery_sample_t *s) {
     const uint8_t *P = s->plaintext, *C = s->ciphertext;
     uint32_t n = s->length;
     uint64_t so = s->file_offset;
@@ -428,23 +452,11 @@ static int forward_relation(const sar_recovery_key_t *rk, const sar_recovery_sam
                     for (uint32_t i = 0; i < bs; i++) if (e[i] != C[i]) return 0;
                     return 1;
                 }
-                if (!strict_iv && n >= 2 * bs) {
-                    uint8_t tmp[16];
-                    for (uint32_t i = 0; i < bs; i++) tmp[i] = (uint8_t)(P[bs + i] ^ C[i]);
-                    bc.encrypt(bc.ctx, tmp, e);
-                    for (uint32_t i = 0; i < bs; i++) if (e[i] != C[bs + i]) return 0;
-                    return 1;
-                }
                 return 0;
             case SAR_MODE_CFB:
                 if (so == 0 && rk->iv_length >= bs) {
                     bc.encrypt(bc.ctx, rk->iv, ks);
                     for (uint32_t i = 0; i < bs; i++) if ((uint8_t)(P[i] ^ ks[i]) != C[i]) return 0;
-                    return 1;
-                }
-                if (!strict_iv && n >= 2 * bs) {
-                    bc.encrypt(bc.ctx, C, ks);
-                    for (uint32_t i = 0; i < bs; i++) if ((uint8_t)(P[bs + i] ^ ks[i]) != C[bs + i]) return 0;
                     return 1;
                 }
                 return 0;
@@ -476,11 +488,6 @@ static int forward_relation(const sar_recovery_key_t *rk, const sar_recovery_sam
     return 0;
 }
 
-int sar_recover_confirm(const sar_recovery_key_t *rk, const sar_recovery_sample_t *sample) {
-    if (!rk || !sample || !sample->plaintext || !sample->ciphertext) return 0;
-    return forward_relation(rk, sample, 0);
-}
-
 int sar_recover_locate_iv(sar_recovery_key_t *rk, const uint8_t *file, uint64_t file_size,
                           const sar_recovery_sample_t *sample) {
     static const uint8_t widths[4] = { 8, 12, 16, 24 };
@@ -506,9 +513,9 @@ int sar_recover_locate_iv(sar_recovery_key_t *rk, const uint8_t *file, uint64_t 
                 if (cand.mode == SAR_MODE_CTR) {
                     for (uint8_t t = 1; t <= SAR_CTR_LAYOUT_COUNT; t++) {
                         cand.ctr_layout_tag = t;
-                        if (forward_relation(&cand, sample, 1)) { *rk = cand; return 1; }
+                        if (forward_relation(&cand, sample)) { *rk = cand; return 1; }
                     }
-                } else if (forward_relation(&cand, sample, 1)) {
+                } else if (forward_relation(&cand, sample)) {
                     *rk = cand; return 1;
                 }
             }

@@ -13,6 +13,9 @@
 #define SAR_CTL_OP_WHITELIST_ADD     2u
 #define SAR_CTL_OP_WHITELIST_REMOVE  3u
 #define SAR_CTL_OP_RECOVER           4u
+#define SAR_CTL_OP_LIST              5u
+
+#define SAR_CTL_LIST_PAGE            8u
 
 #pragma pack(push, 1)
 
@@ -24,8 +27,18 @@ typedef struct {
 } sar_control_command_t;
 
 typedef struct {
-    int32_t  result;
-    uint32_t verdict;
+    uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
+    uint32_t algorithm;
+    uint32_t mode;
+    uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+} sar_catalog_entry_t;
+
+typedef struct {
+    int32_t            result;
+    uint32_t           verdict;
+    uint32_t           total;
+    uint32_t           returned;
+    sar_catalog_entry_t entries[SAR_CTL_LIST_PAGE];
 } sar_control_reply_t;
 
 #pragma pack(pop)
@@ -40,6 +53,8 @@ sar_comm_status_t sar_control_send_whitelist(sar_comm_client_t *client,
 int sar_control_apply(sar_comm_client_t *client,
                       const sar_control_command_t *cmd,
                       sar_control_reply_t *reply);
+
+void sar_control_catalog_add(const semantics_ar_verdict_notify_t *notify);
 
 HANDLE sar_control_listener_start(sar_comm_client_t *client);
 
