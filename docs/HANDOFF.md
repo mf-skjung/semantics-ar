@@ -409,6 +409,38 @@ pass; not derivable from code):**
    each gap either closed with an independent vector or re-affirmed as a recorded confirmed
    limit. *Deps:* none.
 
+5. **Periodic memory sampling of flagged encryptors — the robustness complement (research-validated;
+   future unit; supersedes the rejected crypto-API-escrow idea).** *Boundary:* in addition to the
+   write-IRP capture, periodically sample a flagged encryptor's memory to catch the symmetric key
+   during its live ENCRYPTION window — closing the "wipe the key before the write" evasion (II.3.2 /
+   VIII.2) and catching short-lived per-file keys the write-grab can miss. Frontier research validated
+   this as a genuine, unfilled gap: every prior key-extraction system (KeyReaper DIMVA 2025, ShieldFS
+   CryptoFinder, the USC/Napier/MSU forensic tools) does a SINGLE event/suspicion-triggered grab, none
+   a cadence-driven sampler; the premise holds (>90% per-file Salsa20 key/nonce recovered from the
+   live window and used to decrypt victim files without the master key); and the AES key schedule is a
+   distinct ~100%-detectable structure (our `aes_schedule_scan` IS the CryptoFinder equivalent).
+   **Why this, not crypto-API escrow:** no user-mode API hooking and no per-process injection, and —
+   decisively — it survives the process-splitting evasion that collapses per-process behavioral
+   classifiers from 98.6% to 0% (Naked Sun, ACNS 2020), because our flag is the **identity-independent
+   gate** (D∧T per destructive write), which aggregates the cross-process effect (vindicates VI.1);
+   escrow is bypassed outright by statically-linked/custom crypto, which memory sampling still catches.
+   *Optimal design (concretized):* **(Phase 1, buildable on what exists)** the gate itself is the flag
+   (a process's first D∧T-passing destructive write; on splitting, sample all recent D∧T originators —
+   we already hold the referenced `PEPROCESS`); cadence is paced by **write-progress, not wall-clock**
+   — sample every K destructive writes / K bytes destroyed (per ShieldFS's data-span ticks), so it
+   auto-scales with attack throughput; the sample reuses the existing heap-targeted snapshot + structural
+   detector under a periodic trigger. **(Phase 2, optimization)** a recently-DIRTIED-page delta scan
+   (PTE Dirty bit / PFN modified / working-set age) so each sample scans only the delta where a fresh
+   key schedule lands — no prior art does this; it is the genuine contribution. *DoD:* pre-write-wipe
+   degraded from total evasion to partial/none at bounded cost. *Two empirical gates (VM-measure; no
+   literature settles them):* (a) **cadence numbers** — realistic per-file encryption-window T_enc for
+   KB-MB files vs feasible sample interval T_s; build the renewal/coverage model, measure the catch
+   probability across an N-file campaign. (b) **delta mechanism** — whether a freshly-derived schedule
+   reliably lands in a kernel-observable dirtied page, and whether per-process dirty-bit enumeration/clear
+   is sound in kernel (undocumented/fragile — the load-bearing risk). *Residual (small, VIII.2):* tiny
+   files zeroed faster than the sample interval; AES-NI/Key-Locker register-resident or non-precomputed
+   schedules; enclaves. *Deps:* the capture path (item 0); independently schedulable after it.
+
 ## 5. Traps & non-obvious context
 
 - **Never `FLT_PREOP_SYNCHRONIZE` an async write** — it deadlocks the modified-page writer. The
