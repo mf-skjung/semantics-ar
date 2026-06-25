@@ -81,11 +81,14 @@ kernel round-trip builds on:
   not bounded on-demand recovery. Verify-before-replace is the universal safety property across PayBreak
   (libmagic), Redemption (transactional commit), Rhea (format validation); we use a cryptographic tag,
   stronger than those heuristics.
-- **Open generalization (deferred):** under *key reuse* the keystore dedups by key_id, keeping one file's
-  anchor; mandatory verification then declines sibling files (no per-file anchor) — a tension with II.4.2's
-  whole-set-recovery. Resolution is to retain a per-file recovery anchor (provenance+tag+offset) per
-  captured file even under a shared key (couples to the recovery catalog, §4). Dominant per-file keying is
-  fully covered now.
+- **Key-reuse whole-set recovery — RESOLVED (host-verified, driver compile+link-verified).** The append
+  dedup collapsed sibling files under a reused key into one record (one anchor), so mandatory verification
+  (III.4) declined every sibling — a real *recovery-correctness* hole, not just enumeration. Fix:
+  `sar_keystore_append` now dedups by **(key_id, provenance_path)**, so the keystore holds **one record per
+  encrypted file** (Constitution II.5.1's literal model — the old key_id-only dedup was the bug). Recovery
+  decrypts with the key, then `SarKeystoreVerifyAnchor` scans the key's records and accepts on the first
+  matching tag (no path-canonicalization needed; per-file keying is O(1)). Constitution II.5.1 corrected to
+  state the (key, file) record and per-file anchors under reuse.
 ]**
 
 **[Recovery round-trip — DONE and VM-VERIFIED this session (see the Part I block at the top of §2).** DoD met:
@@ -101,14 +104,18 @@ SHA-256 == golden; verify-before-replace declines a tag mismatch with the target
 - **(b) `driver/commport.c` buffer hardening — the live paths run fault-free** (handshake + `RECOVERY_EXEC`
   exercised live, `SarCommMessageNotify` SEH-wrapped). Full `IS_ALIGNED` audit of every `OutputBuffer` write
   per the MiniSpy pattern is still worth a dedicated pass but no fault has surfaced.
-- **(c) Catalog + operator tool — DONE functionally, with a known design deviation to revisit.** `SAR_CTL_OP_LIST`
-  + `tools/sarctl` (`list`/`recover`/`mode`) work end-to-end. **But the catalog source is the VERDICT_NOTIFY
-  shadow** (`service/control.c g_catalog`, fed by `sar_on_verdict`), *not* the keystore-backed `CATALOG_QUERY`
-  the DoD specified. Consequence: the **keystore persists across service restart but the catalog does not** — after
-  a service restart `list` is empty until a fresh conviction, even though the key is still recoverable by key_id.
-  The robust design (driver enumerates the keystore under the push lock shared, projecting non-secret metadata)
-  remains the right target. Recovery-by-key_id itself reads the persisted keystore and is unaffected.
-- **(d) Per-file recovery anchor under key reuse** (the II.4.2 generalization above) — still open, couples to (c).
+- **(c) Catalog + operator tool — DONE, keystore-backed (host + driver compile-verified).** The
+  VERDICT_NOTIFY shadow (`service/control.c g_catalog`) is **removed**; `SAR_CTL_OP_LIST` now drives the new
+  authenticated `CATALOG_QUERY`/`CATALOG_REPLY` (protocol types 11/12, handshake-gated). The driver enumerates
+  the keystore under the push lock **shared** (`SarKeystoreProject`, one record/index → one entry) and projects
+  only the non-secret tuple {key_id, algorithm, mode, provenance_offset, provenance_path} — never key_bytes/iv/
+  sample_tag. Single-entry-per-reply keeps the reply (~596 B) inside the existing 1024-B transport with no
+  buffer/stack change; the service pages `index=0,1,…` until `valid==0`. **The catalog now survives service
+  restart and reboot** (it reads the persisted keystore), closing the restart-empties-the-list defect. The
+  projection is the same tuple VERDICT_NOTIFY already pushed, so no new boundary crossing (Constitution III.1.3
+  added to govern enumeration). `tools/sarctl` unchanged.
+- **(d) Per-file recovery anchor under key reuse — DONE** (see the key-reuse RESOLVED note above; the catalog is
+  now one entry per captured file, so a reused key's whole recoverable set is enumerable and recoverable).
 *Verification:* the user's admin-PowerShell→relay VM loop.]**
 
 **Done and VM-verified — FIRST LIGHT (live kernel, Win11 24H2 Hyper-V):** the driver — for the
@@ -478,10 +485,7 @@ pass; not derivable from code):**
    `SAR_RECOVERY_MAX_BYTES` (64 MiB) cap; files over it return `SAR_RECOVER_DECLINED_TOO_LARGE` (no
    silent truncation). Constant-memory streaming needs a resumable engine decrypt (CBC/CFB chain across
    chunk boundaries — `sar_recover_buffer` references `ct[o-bs]`). *DoD:* multi-GB recovery in bounded
-   memory. (b) **intermittent-encryption geometry** — recovery defaults to `SAR_GEOM_FULL` (the record
-   stores no geometry); a full-file decrypt of an intermittently-encrypted file corrupts the plaintext
-   regions, so per-family geometry (or per-write range capture) is required for those families. *DoD:*
-   intermittent files recover without corrupting cleartext spans. (c) **recovery verification before
+   memory. (b) **intermittent/partial-encryption geometry - DONE & VM-VERIFIED.** The record carries `provenance_length` (the convicting write's range); append dedups by `(key_id, provenance_path, provenance_offset)` so the keystore holds one record per encrypted region (whole-file = one region); recovery decrypts each region with `sar_recover_range` into an order-safe work buffer, verifies each region's tag, and writes back only verified regions - every other byte byte-identical. Family-agnostic (ranges = the actual convicting writes, not a per-family mapper; research: families/configs/keystream too varied + per-chunk nonce mutation e.g. Gentlemen). VM: `partial_encryptor` head-only victim3.txt -> keystore 0->810 (1 region), tail stays plaintext, recover -> whole file == golden. Host `test_recover` adds `recover_range_api`; Constitution II.5.1/III.1.2/III.4/VIII.2 generalized to regions. (c) **recovery verification before
    swap** — applying a wrong key/geometry yields a garbage temp; the core trusts the operator's
    key_id↔target pairing (safe for the proven provenance file). Persist a hash of the capture-time
    original sample `P` (a verification tag, not a recovery source → not preservation under III.1) in the
@@ -504,7 +508,7 @@ pass; not derivable from code):**
    future unit; supersedes the rejected crypto-API-escrow idea).** *Boundary:* in addition to the
    write-IRP capture, periodically sample a flagged encryptor's memory to catch the symmetric key
    during its live ENCRYPTION window — closing the "wipe the key before the write" evasion (II.3.2 /
-   VIII.2) and catching short-lived per-file keys the write-grab can miss. Frontier research validated
+   VIII.2) and catching short-lived per-file keys the write-grab can miss. **[LOAD-TEST EVIDENCE 2026-06-26 re-scopes this follow-up; the gap is narrower than first thought.]** A graduated VM load/stress test (scratchpad ransom_sim.c + splitter.c, full-file AES-256-CBC, hold=0) established: (i) STABILITY is excellent — no deadlock/hang/bugcheck, FS healthy, paged-pool peak +42MB at 500 files x 8 threads; (ii) in ENFORCE (the protective mode) net permanent data loss = 0 in ALL realistic scenarios — single fast process is blocked after ~2 files, and process-splitting (1/10/50/250 procs -> prevented 99.8/97/39/33%) evades the per-process block but NOT capture: Captured >= Damaged at every split level, so every damaged file stays recoverable (empirically vindicates VI.1); (iii) counterintuitively, splitting RAISES capture (single fast proc churns its heap -> write-grab misses, AUDIT 500=6.6%; split procs have low per-heap churn -> capture ~100%), so the attacker trades block-evasion for higher recoverability. So this unit's REAL residual narrows to two corners: (a) the extreme edge of a process doing ONE write then exiting in us (faster than the deferred snapshot) or wiping the key pre-snapshot (VIII.2), and (b) AUDIT-mode coverage where a single high-churn process loses keys the write-grab missed (no block to save it). Periodic memory sampling targets exactly (a)+(b) by catching the key during the live encryption window independent of write-grab timing. **Pre-write-wipe now MEASURED (2026-06-26, scratchpad/wipe_encryptor.c): a deliberate attacker that zeroes the key (BCryptDestroyKey + SecureZeroMemory of key object + raw key) BEFORE writing the ciphertext reduces the write-grab to 0% capture (AUDIT N=20/100), and in ENFORCE yields 0 prevented / 100 damaged / 0 captured = TOTAL compromise (no conviction -> no block -> no recovery); the process was kept alive 15s so the worker attached a LIVE process and still found nothing, isolating wipe from exit. So corner (a) is real and total, not hypothetical — and it is exactly the VIII.2 confirmed-limit, already declared by Part I. HONEST BOUND on the fix: periodic sampling's catch scales with the encryption-window DURATION — effective for reused keys + large files (MB-GB, the real ransomware target, long live window), near the irreducible floor for per-file + immediate-wipe + tiny files (us window); it degrades total->partial evasion, NOT to zero. It is defense-in-depth vs a sophisticated attacker (most ransomware write-then-free, which the write-grab already catches at 100% low-churn).** Frontier research validated
    this as a genuine, unfilled gap: every prior key-extraction system (KeyReaper DIMVA 2025, ShieldFS
    CryptoFinder, the USC/Napier/MSU forensic tools) does a SINGLE event/suspicion-triggered grab, none
    a cadence-driven sampler; the premise holds (>90% per-file Salsa20 key/nonce recovered from the

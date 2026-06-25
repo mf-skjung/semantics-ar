@@ -558,14 +558,51 @@ static sar_recover_status_t precheck(const sar_recovery_key_t *rk) {
     }
 }
 
+static sar_recover_status_t recover_ranges_into(const sar_recovery_key_t *rk,
+                                                const sar_range_t *ranges, uint32_t nr,
+                                                uint32_t policy,
+                                                const uint8_t *ct, uint8_t *pt,
+                                                uint64_t file_size) {
+    sar_recover_status_t pc = precheck(rk);
+    if (pc != SAR_RECOVER_OK) return pc;
+
+    cipher_slot_t s1, s2;
+    block_cipher_ctx_t bc, bc1, bc2;
+
+    if (rk->mode == SAR_MODE_XTS) {
+        if (!make_xts(&s1, &s2, rk->algorithm, rk->key, rk->key_length, &bc1, &bc2))
+            return SAR_RECOVER_DECLINED_KEY;
+    } else if (is_block_alg(rk->algorithm)) {
+        if (!make_block(&s1, rk->algorithm, rk->key, rk->key_length, &bc))
+            return SAR_RECOVER_DECLINED_KEY;
+    }
+
+    for (uint32_t r = 0; r < nr; r++) {
+        uint64_t start = ranges[r].offset, length = ranges[r].length;
+        if (start > file_size || file_size - start < length) continue;
+        switch (rk->mode) {
+            case SAR_MODE_ECB: rec_ecb(&bc, ct, pt, start, length); break;
+            case SAR_MODE_CBC: rec_cbc(&bc, rk, policy, ct, pt, start, length); break;
+            case SAR_MODE_CFB: rec_cfb(&bc, rk, policy, ct, pt, start, length); break;
+            case SAR_MODE_OFB: rec_ofb(&bc, rk, policy, ct, pt, start, length); break;
+            case SAR_MODE_CTR: rec_ctr(&bc, rk, policy, ct, pt, start, length); break;
+            case SAR_MODE_XTS: rec_xts(&bc1, &bc2, rk->mode_params, ct, pt, start, length); break;
+            case SAR_MODE_STREAM:
+                if (rk->algorithm == SAR_ALG_RC4) rec_rc4(rk, policy, ct, pt, start, length);
+                else rec_stream(rk, policy, ct, pt, start, length);
+                break;
+            default: break;
+        }
+    }
+
+    return SAR_RECOVER_OK;
+}
+
 sar_recover_status_t sar_recover_buffer(const sar_recovery_key_t *rk,
                                         const sar_geometry_t *geom,
                                         const uint8_t *ct, uint8_t *pt,
                                         uint64_t file_size) {
     if (!rk || !ct || !pt) return SAR_RECOVER_INVALID;
-
-    sar_recover_status_t pc = precheck(rk);
-    if (pc != SAR_RECOVER_OK) return pc;
 
     static sar_range_t ranges[SAR_MAX_RANGES];
     sar_geometry_t full;
@@ -585,33 +622,17 @@ sar_recover_status_t sar_recover_buffer(const sar_recovery_key_t *rk,
 
     for (uint64_t i = 0; i < file_size; i++) pt[i] = ct[i];
 
-    cipher_slot_t s1, s2;
-    block_cipher_ctx_t bc, bc1, bc2;
+    return recover_ranges_into(rk, ranges, nr, policy, ct, pt, file_size);
+}
 
-    if (rk->mode == SAR_MODE_XTS) {
-        if (!make_xts(&s1, &s2, rk->algorithm, rk->key, rk->key_length, &bc1, &bc2))
-            return SAR_RECOVER_DECLINED_KEY;
-    } else if (is_block_alg(rk->algorithm)) {
-        if (!make_block(&s1, rk->algorithm, rk->key, rk->key_length, &bc))
-            return SAR_RECOVER_DECLINED_KEY;
-    }
-
-    for (uint32_t r = 0; r < nr; r++) {
-        uint64_t start = ranges[r].offset, length = ranges[r].length;
-        switch (rk->mode) {
-            case SAR_MODE_ECB: rec_ecb(&bc, ct, pt, start, length); break;
-            case SAR_MODE_CBC: rec_cbc(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_CFB: rec_cfb(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_OFB: rec_ofb(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_CTR: rec_ctr(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_XTS: rec_xts(&bc1, &bc2, rk->mode_params, ct, pt, start, length); break;
-            case SAR_MODE_STREAM:
-                if (rk->algorithm == SAR_ALG_RC4) rec_rc4(rk, policy, ct, pt, start, length);
-                else rec_stream(rk, policy, ct, pt, start, length);
-                break;
-            default: break;
-        }
-    }
-
-    return SAR_RECOVER_OK;
+sar_recover_status_t sar_recover_range(const sar_recovery_key_t *rk,
+                                       const uint8_t *ct, uint8_t *pt,
+                                       uint64_t file_size,
+                                       uint64_t range_offset, uint64_t range_length) {
+    sar_range_t range;
+    if (!rk || !ct || !pt) return SAR_RECOVER_INVALID;
+    if (range_length == 0) return SAR_RECOVER_OK;
+    range.offset = range_offset;
+    range.length = range_length;
+    return recover_ranges_into(rk, &range, 1, SAR_CTR_CONTINUOUS, ct, pt, file_size);
 }

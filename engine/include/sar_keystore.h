@@ -38,6 +38,7 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
                               const sar_verdict_t *verdict,
                               const uint16_t *provenance_path,
                               uint64_t provenance_offset,
+                              uint64_t provenance_length,
                               const uint8_t *sample,
                               uint32_t sample_len,
                               uint64_t sample_offset);

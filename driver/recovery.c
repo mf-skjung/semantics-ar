@@ -128,16 +128,22 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
                        _Out_ UINT64 *BytesRecovered)
 {
-    semantics_ar_keystore_record_t record;
+    semantics_ar_keystore_record_t *record = NULL;
     sar_recovery_key_t rk;
+    sar_recovery_verify_t verify;
     PWCHAR target;
     PWCHAR temp;
     PUCHAR ct = NULL;
     PUCHAR pt = NULL;
+    PUCHAR work = NULL;
     SIZE_T len = 0;
     NTSTATUS status;
-    sar_recover_status_t rs;
     int result;
+    ULONG64 index;
+    ULONG64 total = 0;
+    int matched = 0;
+    int applied = 0;
+    UINT64 recovered = 0;
 
     *BytesRecovered = 0;
 
@@ -155,9 +161,11 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
         return SAR_RECOVER_INVALID;
     }
 
-    if (!SarKeystoreLookup(g_sar.keystore, Request->key_id, &record)) {
+    record = (semantics_ar_keystore_record_t *)ExAllocatePool2(
+        POOL_FLAG_PAGED, sizeof(*record), SAR_POOL_TAG_RECOVER);
+    if (record == NULL) {
         ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
-        return SAR_RECOVER_DECLINED_NO_KEY_ID;
+        return SAR_RECOVER_INVALID;
     }
 
     status = SarRecReadTarget(target, &ct, &len);
@@ -177,24 +185,49 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
     }
 
     pt = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, len, SAR_POOL_TAG_RECOVER);
-    if (pt == NULL) {
+    work = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, len, SAR_POOL_TAG_RECOVER);
+    if (pt == NULL || work == NULL) {
         result = SAR_RECOVER_INVALID;
         goto cleanup;
     }
+    RtlCopyMemory(pt, ct, len);
 
-    sar_recovery_key_from_record(&record, &rk);
-    rs = sar_recover_buffer(&rk, NULL, ct, pt, (uint64_t)len);
-    RtlSecureZeroMemory(&rk, sizeof(rk));
+    for (index = 0; SarKeystoreRecordAt(g_sar.keystore, index, record, &total); index++) {
+        UINT64 off;
+        UINT64 rlen;
 
-    if (rs == SAR_RECOVER_OK) {
-        sar_recovery_verify_t verify;
-        sar_recovery_verify_from_record(&record, &verify);
-        rs = sar_recover_verify(pt, (uint64_t)len, &verify);
+        if (!RtlEqualMemory(record->key_id, Request->key_id, SEMANTICS_AR_KEY_ID_SIZE))
+            continue;
+        matched = 1;
+
+        off = record->provenance_offset;
+        if (off >= (UINT64)len)
+            continue;
+        rlen = record->provenance_length;
+        if (rlen == 0 || rlen > (UINT64)len - off)
+            rlen = (UINT64)len - off;
+
+        sar_recovery_key_from_record(record, &rk);
+        status = (sar_recover_range(&rk, ct, work, (uint64_t)len, off, rlen) == SAR_RECOVER_OK)
+                     ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+        RtlSecureZeroMemory(&rk, sizeof(rk));
+        if (!NT_SUCCESS(status))
+            continue;
+
+        sar_recovery_verify_from_record(record, &verify);
+        if (sar_recover_verify(work, (uint64_t)len, &verify) == SAR_RECOVER_OK) {
+            RtlCopyMemory(pt + off, work + off, (SIZE_T)rlen);
+            applied++;
+            recovered += rlen;
+        }
     }
-    RtlSecureZeroMemory(&record, sizeof(record));
 
-    if (rs != SAR_RECOVER_OK) {
-        result = (int)rs;
+    if (!matched) {
+        result = SAR_RECOVER_DECLINED_NO_KEY_ID;
+        goto cleanup;
+    }
+    if (!applied) {
+        result = SAR_RECOVER_DECLINED_MISMATCH;
         goto cleanup;
     }
 
@@ -203,10 +236,14 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
         goto cleanup;
     }
 
-    *BytesRecovered = (UINT64)len;
+    *BytesRecovered = recovered;
     result = SAR_RECOVER_OK;
 
 cleanup:
+    if (work != NULL) {
+        RtlSecureZeroMemory(work, len);
+        ExFreePoolWithTag(work, SAR_POOL_TAG_RECOVER);
+    }
     if (pt != NULL) {
         RtlSecureZeroMemory(pt, len);
         ExFreePoolWithTag(pt, SAR_POOL_TAG_RECOVER);
@@ -215,7 +252,10 @@ cleanup:
         RtlSecureZeroMemory(ct, len);
         ExFreePoolWithTag(ct, SAR_POOL_TAG_RECOVER);
     }
-    RtlSecureZeroMemory(&record, sizeof(record));
+    if (record != NULL) {
+        RtlSecureZeroMemory(record, sizeof(*record));
+        ExFreePoolWithTag(record, SAR_POOL_TAG_RECOVER);
+    }
     ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
     return result;
 }

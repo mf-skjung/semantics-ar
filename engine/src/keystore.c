@@ -34,6 +34,7 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
                               const sar_verdict_t *verdict,
                               const uint16_t *provenance_path,
                               uint64_t provenance_offset,
+                              uint64_t provenance_length,
                               const uint8_t *sample,
                               uint32_t sample_len,
                               uint64_t sample_offset) {
@@ -51,6 +52,7 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
     rec->ctr_layout_tag = verdict->ctr_layout_tag;
     rec->mode_params = verdict->mode_params;
     rec->provenance_offset = provenance_offset;
+    rec->provenance_length = provenance_length;
     if (provenance_path) {
         for (int i = 0; i < SEMANTICS_AR_PROVENANCE_PATH_MAX; i++) {
             rec->provenance_path[i] = provenance_path[i];
@@ -72,7 +74,10 @@ int sar_keystore_append(semantics_ar_keystore_record_t *records,
                         uint64_t *count, uint64_t capacity,
                         const semantics_ar_keystore_record_t *rec) {
     for (uint64_t i = 0; i < *count; i++) {
-        if (sar_memcmp(records[i].key_id, rec->key_id, SEMANTICS_AR_KEY_ID_SIZE) == 0)
+        if (sar_memcmp(records[i].key_id, rec->key_id, SEMANTICS_AR_KEY_ID_SIZE) == 0 &&
+            records[i].provenance_offset == rec->provenance_offset &&
+            sar_memcmp(records[i].provenance_path, rec->provenance_path,
+                       sizeof(records[i].provenance_path)) == 0)
             return 0;
     }
     if (*count >= capacity)

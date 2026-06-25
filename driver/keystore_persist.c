@@ -523,23 +523,43 @@ int SarKeystoreAppend(_Inout_ PSAR_KEYSTORE Keystore,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-int SarKeystoreLookup(_In_ PSAR_KEYSTORE Keystore,
-                      _In_reads_bytes_(SEMANTICS_AR_KEY_ID_SIZE) const UCHAR *KeyId,
-                      _Out_ semantics_ar_keystore_record_t *Record)
+int SarKeystoreProject(_In_ PSAR_KEYSTORE Keystore, _In_ ULONG64 Index,
+                       _Out_ semantics_ar_catalog_entry_t *Entry, _Out_ ULONG64 *Total)
 {
-    ULONG64 i;
-    int found = 0;
+    int valid = 0;
+
+    RtlZeroMemory(Entry, sizeof(*Entry));
 
     FltAcquirePushLockShared(&Keystore->lock);
-    for (i = 0; i < Keystore->record_count; i++) {
-        if (RtlEqualMemory(Keystore->records[i].key_id, KeyId, SEMANTICS_AR_KEY_ID_SIZE)) {
-            RtlCopyMemory(Record, &Keystore->records[i], sizeof(*Record));
-            found = 1;
-            break;
-        }
+    *Total = Keystore->record_count;
+    if (Index < Keystore->record_count) {
+        const semantics_ar_keystore_record_t *r = &Keystore->records[Index];
+        RtlCopyMemory(Entry->key_id, r->key_id, SEMANTICS_AR_KEY_ID_SIZE);
+        Entry->algorithm = r->algorithm;
+        Entry->mode = r->mode;
+        Entry->provenance_offset = r->provenance_offset;
+        RtlCopyMemory(Entry->provenance_path, r->provenance_path,
+                      sizeof(Entry->provenance_path));
+        valid = 1;
     }
     FltReleasePushLock(&Keystore->lock);
-    return found;
+    return valid;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+int SarKeystoreRecordAt(_In_ PSAR_KEYSTORE Keystore, _In_ ULONG64 Index,
+                        _Out_ semantics_ar_keystore_record_t *Record, _Out_ ULONG64 *Total)
+{
+    int valid = 0;
+
+    FltAcquirePushLockShared(&Keystore->lock);
+    *Total = Keystore->record_count;
+    if (Index < Keystore->record_count) {
+        RtlCopyMemory(Record, &Keystore->records[Index], sizeof(*Record));
+        valid = 1;
+    }
+    FltReleasePushLock(&Keystore->lock);
+    return valid;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

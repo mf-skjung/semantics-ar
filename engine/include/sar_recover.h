@@ -101,4 +101,9 @@ sar_recover_status_t sar_recover_buffer(const sar_recovery_key_t *rk,
                                         const uint8_t *ct, uint8_t *pt,
                                         uint64_t file_size);
 
+sar_recover_status_t sar_recover_range(const sar_recovery_key_t *rk,
+                                       const uint8_t *ct, uint8_t *pt,
+                                       uint64_t file_size,
+                                       uint64_t range_offset, uint64_t range_length);
+
 #endif

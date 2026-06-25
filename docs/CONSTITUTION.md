@@ -228,14 +228,24 @@ correspondingly fewer chances.
 ### II.5 The keystore
 **[DECISION] II.5.1 — The keystore is the system's sole persistent recovery asset.**
 Captured keys (with the algorithm and parameters needed to use them) are written to
-a keystore. Each record carries, alongside the key, a **verification tag** — a one-way
-hash of a sample of the original taken from the Oracle's input at the write that
-convicted (III.2) — so a recovery can confirm it has reconstructed the true original
-before it replaces a file (III.4); the tag is a check value, never a preserved original
-(III.1.1). Its size is proportional to the number of distinct captured keys; under
-per-file keying, up to one record per encrypted file — thousands to hundreds of
-thousands of records, megabytes in scale; the on-disk format is append-oriented and
-must scale to many records. It is the new center of gravity: if it
+a keystore. The keystore holds **one record per encrypted region** — the byte range a
+single convicting write destroyed: each record carries the key, that region's
+{offset, length} and per-region cipher parameters (IV/nonce/counter — which a family may
+mutate per chunk), and a **verification tag** — a one-way hash of a sample of *that
+region's* original taken from the Oracle's input at the write that convicted (III.2) — so
+a recovery can confirm it reconstructed the true original before it replaces those bytes
+(III.4); the tag is a check value, never a preserved original (III.1.1). A whole-file
+encryption is the special case of a single region spanning the file. The key bytes repeat
+across a key's regions and across files it reused on, but each record binds them to a
+distinct (file, range) with its own provenance, parameters, and tag — so a key caught at
+any one of its writes recovers **every** region in its set (II.4.2), each verified against
+its own tag, whether those regions are spread across many files (key reuse) or scattered
+within one file (intermittent/partial encryption). The record is therefore the
+(key, file, range) binding, never a bare key: collapsing a key's regions to one record
+would discard every sibling region's recovery anchor and silently deny it recovery, which
+II.4.2 forbids. Its size is proportional to the number of encrypted regions observed —
+thousands to hundreds of thousands of records, megabytes in scale; the on-disk format is
+append-oriented and must scale to many records. It is the new center of gravity: if it
 survives, recovery is possible; if it is destroyed, recovery is lost. Its protection
 is therefore the crown-jewel concern of Part VII, replacing every protection the old
 design spent on a shadow store.
@@ -258,10 +268,15 @@ plaintext back. No original is ever preserved to disk or held as a recovery copy
 
 **[INVARIANT] III.1.2 — Recovery decrypts where the key already lives: in the kernel.**
 Recovery is operator-initiated. The captured key never leaves the kernel pool to
-perform it. The minifilter reads the on-disk ciphertext, decrypts it in kernel with the
-key it holds (VII.1.1), and writes the plaintext to a temporary file beside the target;
-the user-mode service then performs the final metadata-preserving atomic replacement of
-the target by that temporary file. The service drives recovery by key identifier and
+perform it. The minifilter reads the on-disk file, decrypts in kernel — with the key it
+holds (VII.1.1) — **only the captured encrypted regions** of that key (II.5.1), each at
+its own offset with its own parameters, and writes a temporary file beside the target in
+which those regions are restored to plaintext and **every byte outside a verified region
+is left exactly as it was on disk**; the user-mode service then performs the final
+metadata-preserving atomic replacement of the target by that temporary file. A whole-file
+encryption restores as a single region spanning the file; an intermittently encrypted
+file restores its ciphertext slices while its untouched plaintext spans are never
+rewritten. The service drives recovery by key identifier and
 target path only — it never receives the key and never receives the recovered plaintext.
 The communication port therefore carries, for recovery, only the key identifier, the
 target path, and a status; never key material and never plaintext. No recovery step
@@ -279,6 +294,24 @@ so a wrong key, geometry, or key↔target pairing never reaches the atomic repla
 > preservation is realizable only through a premise this system has discarded;
 > therefore preservation is discarded with it. The thing worth holding was always
 > the key.
+
+**[DECISION] III.1.3 — Enumeration projects non-secret recovery metadata from the
+keystore; no shadow.**
+The keystore is also the sole source of truth for *enumerating* what is recoverable —
+an operator must be able to see what the system can restore in order to direct recovery
+(III.1.2). No second copy of that catalog is maintained in user mode; a user-mode shadow
+would diverge from the keystore (most visibly, it would not survive a service restart
+while the keystore does) and would be a second thing to protect. On the authenticated
+communication port — and only after the client handshake completes (VII.3) — the kernel
+projects, per record, the **non-secret** tuple {key identifier, algorithm, mode,
+provenance offset, provenance path}. It never projects key material, the IV, or the
+verification tag. This is the same non-secret tuple the post-conviction notification
+already carries (II.5), pulled on demand rather than pushed; enumeration therefore widens
+the recovery exchange of III.1.2 by exactly these non-secret fields and by nothing else,
+and III.1.2's "key identifier, target path, status only" continues to bind the *recovery*
+exchange unchanged. Because the keystore holds one record per encrypted file (II.5.1), the
+catalog enumerates one entry per captured file, so a reused key's whole recoverable set is
+visible, not just a single representative.
 
 ### III.2 The transient Oracle input
 **[DECISION] III.2.1 — The only transient artifact is the Oracle's input, in
@@ -312,16 +345,24 @@ encryption. No self-trust identity flag is needed or used for this; if one were 
 it would re-introduce the identity dependence Part VI forbids.
 
 ### III.4 Recovery is verified before it replaces
-**[INVARIANT] III.4.1 — No replacement without a passing verification.**
-Recovery decrypts the on-disk ciphertext with the captured key and, before it replaces
-the target, checks the decrypted result against the **verification tag** recorded at
-capture (II.5): the one-way hash of the decrypted sample must equal the recorded tag.
-The replacement proceeds only on a match; on any mismatch the recovery declines and the
-target is left byte-for-byte intact. A wrong key, a wrong cipher or mode, a wrong
-geometry, or a wrong key↔target pairing all fail this check, so recovery can never
-overwrite a file with a result it cannot confirm is the original. This is the recovery
-direction's analogue of the Oracle's forward proof: conviction never trusts a key in
-hand (II.2.2), and recovery never trusts a decryption in hand.
+**[INVARIANT] III.4.1 — Recovery writes back only verified regions; everything else is
+left byte-for-byte.**
+Recovery decrypts each captured encrypted region (II.5.1) with that region's key and
+parameters and, before it writes that region into the result, checks the decrypted
+region-sample against the **verification tag** recorded for that region at capture (II.5):
+the one-way hash must equal the recorded tag. **Only regions that pass are applied; every
+byte outside a passing region is left exactly as it was on disk.** A region whose
+decryption cannot be confirmed — wrong key, cipher, mode, geometry, parameters, or a
+region that in fact belongs to a different file under a reused key — is simply not
+applied. Two safety properties follow structurally, not by heuristic: recovery can never
+overwrite a file with a result it cannot confirm is the original, and recovery of an
+intermittently encrypted file can never corrupt the plaintext spans the attacker left
+untouched (they have no record and are never rewritten). If no region verifies for the
+target, recovery declines and the file is left byte-for-byte intact. A region the Oracle
+never captured stays as on-disk ciphertext — an honest **partial recovery** (VIII.2), the
+same edge as the confirmed limit, never a destructive replace. This is the recovery
+direction's analogue of the Oracle's forward proof: conviction never trusts a key in hand
+(II.2.2), and recovery never trusts a decryption in hand.
 
 The tag is a hash of a bounded original sample, never the sample itself — a check value
 with no recovery role, and not a preserved original (III.1.1). It rides in the keystore
@@ -668,6 +709,13 @@ reduce here and are **not** new open problems:
 - **Per-file keys never captured** at any of a file's writes (a unique key, every
   write's scan cold). cumulative-N across the file's chunk-writes makes this small, but
   it is not zero, and it is accepted.
+- **An intermittently encrypted region whose write was never convicted**: under partial
+  encryption each ciphertext slice is an independent capture opportunity (II.4.2), but a
+  slice whose key was not recovered at its write leaves *that region* as on-disk
+  ciphertext. Recovery restores the captured regions and leaves the rest byte-for-byte —
+  a **partial recovery** (III.4.1), never a corruption of the surrounding plaintext.
+  cumulative-N over the campaign's writes shrinks the uncaptured set; whatever remains
+  reduces here.
 - **Read/write split across processes** that defeats (`P`,`C`) pair construction: this
   delays or denies the conviction *accelerator*, not capture itself — the key is in the
   writing process's memory and is captured there. Where it does deny capture, it
@@ -750,6 +798,10 @@ An implementation is constitutional iff all hold.
 - [ ] Structural key-schedule location and round-key inversion are implemented; conviction
       stays the forward proof, never key-in-hand; cumulative-N is per-key capture-opportunity
       + keystore accumulation, never backup accumulation (II.4).
+- [ ] The keystore holds one record per encrypted region — (key, file, {offset,length})
+      with that region's parameters and verification tag; a key's regions (across reused
+      files or scattered within one file by partial encryption) each keep their own
+      anchor, so the whole set recovers and no region is silently denied (II.5.1).
 
 **Recovery (Part III)**
 - [ ] No original is preserved as a recovery source; recovery is decryption of the
@@ -757,8 +809,13 @@ An implementation is constitutional iff all hold.
 - [ ] Recovery decrypts in kernel; neither the captured key nor the recovered plaintext is
       exported to user mode; the port carries only key_id + target path + status, and the
       writeback is a metadata-preserving atomic replace (III.1.2).
-- [ ] Recovery verifies the decrypted result against the capture-time verification tag
-      before replacing the target; any mismatch declines and leaves the file intact (III.4).
+- [ ] Enumeration projects only the non-secret {key_id, algorithm, mode, provenance} tuple
+      from the keystore, post-handshake, with no user-mode catalog shadow; one entry per
+      captured file (III.1.3).
+- [ ] Recovery verifies each captured region against its own capture-time tag and writes
+      back only passing regions, leaving every other byte exactly as on disk (so an
+      intermittently encrypted file's plaintext spans are never corrupted); if no region
+      verifies it declines and leaves the file byte-for-byte intact (III.4).
 - [ ] The only transient is the in-memory Oracle input; under pressure it is dropped (a
       missed attempt, confirmed limit), never spilled to disk and never held on the IRP
       (III.2).

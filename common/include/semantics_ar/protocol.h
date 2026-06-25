@@ -18,6 +18,8 @@
 #define SEMANTICS_AR_MSG_CONNECT_CHALLENGE 8
 #define SEMANTICS_AR_MSG_CONNECT_RESPONSE  9
 #define SEMANTICS_AR_MSG_STATUS_REPLY     10
+#define SEMANTICS_AR_MSG_CATALOG_QUERY    11
+#define SEMANTICS_AR_MSG_CATALOG_REPLY    12
 
 #define SEMANTICS_AR_MODE_AUDIT   0
 #define SEMANTICS_AR_MODE_ENFORCE 1
@@ -92,6 +94,28 @@ typedef struct {
     uint32_t sig_length;
     uint8_t  signature[SEMANTICS_AR_HS_SIG_MAX];
 } semantics_ar_connect_response_t;
+
+typedef struct {
+    uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
+    uint32_t algorithm;
+    uint32_t mode;
+    uint64_t provenance_offset;
+    uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+} semantics_ar_catalog_entry_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint32_t index;
+} semantics_ar_catalog_query_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    int32_t  result;
+    uint32_t total;
+    uint32_t index;
+    uint32_t valid;
+    semantics_ar_catalog_entry_t entry;
+} semantics_ar_catalog_reply_t;
 
 #pragma pack(pop)
 

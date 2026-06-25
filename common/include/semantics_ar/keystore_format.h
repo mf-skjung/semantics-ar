@@ -48,6 +48,7 @@ typedef struct {
     uint8_t  ctr_layout_tag;
     uint64_t mode_params;
     uint64_t provenance_offset;
+    uint64_t provenance_length;
     uint16_t provenance_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
     uint64_t sample_offset;
     uint32_t sample_length;

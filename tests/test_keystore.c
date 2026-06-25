@@ -45,9 +45,9 @@ int main(void) {
     for (int i = 0; i < 64; i++) sample[i] = (uint8_t)(0x80 + i);
 
     semantics_ar_keystore_record_t ra, rb, rc;
-    sar_keystore_record_init(&ra, K, &va, NULL, 100, sample, sizeof sample, 0x1000);
-    sar_keystore_record_init(&rb, K, &vb, NULL, 200, NULL, 0, 0);
-    sar_keystore_record_init(&rc, K, &vc, NULL, 300, NULL, 0, 0);
+    sar_keystore_record_init(&ra, K, &va, NULL, 100, 4096, sample, sizeof sample, 0x1000);
+    sar_keystore_record_init(&rb, K, &vb, NULL, 200, 4096, NULL, 0, 0);
+    sar_keystore_record_init(&rc, K, &vc, NULL, 300, 4096, NULL, 0, 0);
 
     {
         uint8_t expect[SEMANTICS_AR_MAC_SIZE];
@@ -63,7 +63,24 @@ int main(void) {
     int r3 = sar_keystore_append(records, &count, 8, &rb);
     int r4 = sar_keystore_append(records, &count, 8, &rc);
     CHECK(r1 == 1 && r2 == 0 && r3 == 1 && r4 == 1 && count == 3,
-          "append new=1 dup=0; dedup by key_id; count == 3");
+          "append new=1 dup=0; dedup by (key_id, provenance); count == 3");
+
+    printf("[key reuse -> per-file anchors]\n");
+    {
+        static const uint16_t pa[6] = { 'a', '.', 't', 'x', 't', 0 };
+        static const uint16_t pb[6] = { 'b', '.', 't', 'x', 't', 0 };
+        semantics_ar_keystore_record_t rp1, rp2;
+        semantics_ar_keystore_record_t store2[4];
+        uint64_t c2 = 0;
+        sar_keystore_record_init(&rp1, K, &va, pa, 0, 4096, sample, sizeof sample, 0);
+        sar_keystore_record_init(&rp2, K, &va, pb, 0, 4096, sample, sizeof sample, 0);
+        int a1 = sar_keystore_append(store2, &c2, 4, &rp1);
+        int a2 = sar_keystore_append(store2, &c2, 4, &rp1);
+        int a3 = sar_keystore_append(store2, &c2, 4, &rp2);
+        CHECK(memcmp(rp1.key_id, rp2.key_id, SEMANTICS_AR_KEY_ID_SIZE) == 0 &&
+              a1 == 1 && a2 == 0 && a3 == 1 && c2 == 2,
+              "same key + distinct provenance -> separate anchors; same file deduped");
+    }
 
     printf("[serialize + verify]\n");
     size_t need = sar_keystore_serialized_size(count);

@@ -131,7 +131,8 @@ gate/write-path block (IV.3.1).
 
 Unit 2 owns the **append call, the record construction, the in-kernel non-paged store, its push
 lock, and a MAC key seeded at load** (`BCryptGenRandom`, resolved dynamically). The store is
-complete and append-correct (dedup by `key_id`, capacity `SAR_KEYSTORE_CAPACITY`). What Unit 3
+complete and append-correct (dedup by `(key_id, provenance_path)` — one record per encrypted file,
+II.5.1; capacity `SAR_KEYSTORE_CAPACITY`). What Unit 3
 adds is orthogonal and named: TPM-sealing the MAC key, the on-disk sealed copy, the external
 anchor compare, and HVCI/pool-residence hardening. Until Unit 3, captured keys live in
 non-paged pool and do not survive reboot — a **named deferral**, not a half-state: the append

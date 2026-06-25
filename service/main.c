@@ -46,7 +46,6 @@ static void sar_on_verdict(const semantics_ar_verdict_notify_t *notify, void *ct
     if (!notify)
         return;
     InterlockedIncrement64((volatile LONG64 *)&g_service.comm.captured_key_count);
-    sar_control_catalog_add(notify);
 }
 
 static DWORD WINAPI sar_control_handler(DWORD control, DWORD event_type,

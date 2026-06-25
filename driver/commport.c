@@ -2,6 +2,7 @@
 #include "state.h"
 #include "ntsystem.h"
 #include "recovery.h"
+#include "keystore_persist.h"
 
 #include <bcrypt.h>
 
@@ -328,6 +329,41 @@ static NTSTATUS SarHandleRecoveryExec(_Inout_ PSAR_COMM Comm,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandleCatalogQuery(_Inout_ PSAR_COMM Comm,
+                                      _In_ const semantics_ar_catalog_query_t *Request,
+                                      _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                      _In_ ULONG OutputBufferLength,
+                                      _Out_ PULONG ReturnLength)
+{
+    semantics_ar_catalog_reply_t reply;
+    ULONG64 total = 0;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_CATALOG_REPLY;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.result = 0;
+    reply.index = Request->index;
+
+    if (g_sar.keystore != NULL && SarKeystoreReady(g_sar.keystore)) {
+        reply.valid = SarKeystoreProject(g_sar.keystore, Request->index,
+                                         &reply.entry, &total) ? 1u : 0u;
+        reply.total = (uint32_t)total;
+    }
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
                               _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
                               _In_ ULONG InputBufferLength,
@@ -363,6 +399,10 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
         break;
     case SEMANTICS_AR_MSG_RECOVERY_EXEC:
         status = SarHandleRecoveryExec(comm, (const semantics_ar_recovery_exec_t *)InputBuffer,
+                                       OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_CATALOG_QUERY:
+        status = SarHandleCatalogQuery(comm, (const semantics_ar_catalog_query_t *)InputBuffer,
                                        OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
         break;
     case SEMANTICS_AR_MSG_SET_MODE:

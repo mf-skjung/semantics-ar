@@ -54,8 +54,6 @@ int sar_control_apply(sar_comm_client_t *client,
                       const sar_control_command_t *cmd,
                       sar_control_reply_t *reply);
 
-void sar_control_catalog_add(const semantics_ar_verdict_notify_t *notify);
-
 HANDLE sar_control_listener_start(sar_comm_client_t *client);
 
 void sar_control_listener_stop(HANDLE thread);

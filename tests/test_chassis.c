@@ -92,6 +92,10 @@ static void test_msg_validation(void) {
               == sizeof(semantics_ar_connect_response_t), "expected len response");
     CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_STATUS_REPLY)
               == sizeof(semantics_ar_status_reply_t), "expected len status reply");
+    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_CATALOG_QUERY)
+              == sizeof(semantics_ar_catalog_query_t), "expected len catalog query");
+    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_CATALOG_REPLY)
+              == sizeof(semantics_ar_catalog_reply_t), "expected len catalog reply");
     CHECK(sar_msg_expected_length(0u) == 0u, "expected len unknown is zero");
 }
 
@@ -106,7 +110,7 @@ static void test_msg_fuzz(void) {
         uint32_t type = 0xffffffffu;
         sar_msg_status_t r = sar_msg_validate(buf, len, &type);
         if (r == SAR_MSG_OK) {
-            if (type < 1u || type > 10u) bad = 1;
+            if (type < 1u || type > 12u) bad = 1;
             if (len != (size_t)sar_msg_expected_length(type)) bad = 1;
         } else {
             if (type != 0u) bad = 1;

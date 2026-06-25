@@ -327,6 +327,7 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         req.scan_length = work->scan_len;
         req.provenance_path = work->provenance_path;
         req.provenance_offset = work->provenance_offset;
+        req.provenance_length = work->write_length;
 
         if (sar_capture_run(&req, map, SarKeystoreMacKey(g_sar.keystore), result) ==
             SAR_CAPTURE_CONVICTED) {

@@ -23,6 +23,10 @@ uint32_t sar_msg_expected_length(uint32_t message_type) {
         return (uint32_t)sizeof(semantics_ar_connect_response_t);
     case SEMANTICS_AR_MSG_STATUS_REPLY:
         return (uint32_t)sizeof(semantics_ar_status_reply_t);
+    case SEMANTICS_AR_MSG_CATALOG_QUERY:
+        return (uint32_t)sizeof(semantics_ar_catalog_query_t);
+    case SEMANTICS_AR_MSG_CATALOG_REPLY:
+        return (uint32_t)sizeof(semantics_ar_catalog_reply_t);
     default:
         return 0u;
     }

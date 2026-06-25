@@ -57,10 +57,10 @@ int main(void) {
     make_verdict(&vc, SAR_ALG_SM4, 0x30);
     make_verdict(&vd, SAR_ALG_ARIA, 0x40);
     semantics_ar_keystore_record_t ra, rb, rc, rd;
-    sar_keystore_record_init(&ra, K, &va, NULL, 100, NULL, 0, 0);
-    sar_keystore_record_init(&rb, K, &vb, NULL, 200, NULL, 0, 0);
-    sar_keystore_record_init(&rc, K, &vc, NULL, 300, NULL, 0, 0);
-    sar_keystore_record_init(&rd, K, &vd, NULL, 400, NULL, 0, 0);
+    sar_keystore_record_init(&ra, K, &va, NULL, 100, 0, NULL, 0, 0);
+    sar_keystore_record_init(&rb, K, &vb, NULL, 200, 0, NULL, 0, 0);
+    sar_keystore_record_init(&rc, K, &vc, NULL, 300, 0, NULL, 0, 0);
+    sar_keystore_record_init(&rd, K, &vd, NULL, 400, 0, NULL, 0, 0);
     sar_keystore_append(recs, &count, 8, &ra);
     sar_keystore_append(recs, &count, 8, &rb);
     sar_keystore_append(recs, &count, 8, &rc);

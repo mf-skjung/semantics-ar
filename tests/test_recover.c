@@ -624,6 +624,48 @@ static void absorbed_kats(void) {
     }
 }
 
+static void recover_range_api(void) {
+    printf("[sar_recover_range: single captured range into caller buffer, rest untouched]\n");
+    enum { L = 1024 };
+    uint8_t key[16], nonce[16], pt[L], ct[L], out[L];
+    fill_pattern(key, 16, 0x91);
+    fill_pattern(nonce, 16, 0x00); memset(nonce + 8, 0, 8);
+    fill_pattern(pt, L, 0x55);
+    aes_ctx_t c; aes_setkey(&c, key, 16);
+    block_cipher_ctx_t bc = { aes_encrypt_block, aes_decrypt_block, &c, 16 };
+
+    uint64_t head = 256;
+    memcpy(ct, pt, L);
+    {
+        uint8_t zero[256], ks[256];
+        memset(zero, 0, sizeof zero);
+        ref_ctr(&bc, nonce, zero, ks, (uint32_t)head);
+        for (uint64_t o = 0; o < head; o++) ct[o] = (uint8_t)(pt[o] ^ ks[o]);
+    }
+
+    sar_recovery_key_t rk;
+    {
+        uint8_t s_ct[64];
+        for (int i = 0; i < 64; i++) s_ct[i] = ct[i];
+        uint8_t cd[1][16]; memcpy(cd[0], key, 16);
+        sar_engine_input_t in; memset(&in, 0, sizeof in);
+        in.candidates = cd; in.candidate_count = 1;
+        in.plaintext = pt; in.ciphertext = s_ct; in.sample_size = 64; in.file_offset = 0;
+        sar_verdict_t v; sar_convict(&in, &v);
+        sar_recovery_key_from_verdict(&v, &rk);
+    }
+
+    memcpy(out, ct, L);
+    sar_recover_status_t st = sar_recover_range(&rk, ct, out, L, 0, head);
+    CHECK(st == SAR_RECOVER_OK && memcmp(out, pt, L) == 0,
+          "head range decrypted, plaintext tail left byte-identical (driver write-back pattern)");
+
+    memcpy(out, ct, L);
+    sar_recover_range(&rk, ct, out, L, 512, 64);
+    CHECK(memcmp(out, ct, 512) == 0 && memcmp(out + 576, ct + 576, L - 576) == 0,
+          "only the requested range is modified; all other bytes untouched");
+}
+
 int main(void) {
     block_roundtrips();
     xts_roundtrip();
@@ -632,6 +674,7 @@ int main(void) {
     iv_recovery();
     block0_limit();
     slice_aware();
+    recover_range_api();
     no_clobber();
     atomic_replace();
     absorbed_kats();

@@ -13,35 +13,32 @@ typedef struct {
 
 static sar_control_listener_t g_control_listener;
 
-#define SAR_CATALOG_CAP 1024u
-static sar_catalog_entry_t g_catalog[SAR_CATALOG_CAP];
-static uint32_t g_catalog_count;
-static SRWLOCK g_catalog_lock = SRWLOCK_INIT;
-
-void sar_control_catalog_add(const semantics_ar_verdict_notify_t *notify)
+static int sar_catalog_fetch(sar_comm_client_t *client, uint32_t index,
+                             semantics_ar_catalog_entry_t *out_entry,
+                             uint32_t *out_total, uint32_t *out_valid)
 {
-    uint32_t i;
+    semantics_ar_catalog_query_t q;
+    semantics_ar_catalog_reply_t r;
+    sar_comm_status_t cs;
 
-    if (!notify)
-        return;
+    memset(&q, 0, sizeof(q));
+    q.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    q.header.message_type = SEMANTICS_AR_MSG_CATALOG_QUERY;
+    q.header.message_length = (uint32_t)sizeof(q);
+    q.index = index;
 
-    AcquireSRWLockExclusive(&g_catalog_lock);
-    for (i = 0; i < g_catalog_count; i++) {
-        if (memcmp(g_catalog[i].key_id, notify->key_id,
-                   SEMANTICS_AR_KEY_ID_SIZE) == 0) {
-            ReleaseSRWLockExclusive(&g_catalog_lock);
-            return;
-        }
-    }
-    if (g_catalog_count < SAR_CATALOG_CAP) {
-        sar_catalog_entry_t *e = &g_catalog[g_catalog_count++];
-        memcpy(e->key_id, notify->key_id, SEMANTICS_AR_KEY_ID_SIZE);
-        e->algorithm = notify->algorithm;
-        e->mode = notify->mode;
-        memcpy(e->provenance_path, notify->provenance_path,
-               sizeof(e->provenance_path));
-    }
-    ReleaseSRWLockExclusive(&g_catalog_lock);
+    memset(&r, 0, sizeof(r));
+    cs = sar_comm_send_recv(client, &q, (uint32_t)sizeof(q),
+                            &r, (uint32_t)sizeof(r),
+                            SEMANTICS_AR_MSG_CATALOG_REPLY);
+    if (cs != SAR_COMM_OK)
+        return -1;
+
+    *out_total = r.total;
+    *out_valid = r.valid;
+    if (r.valid)
+        memcpy(out_entry, &r.entry, sizeof(*out_entry));
+    return 0;
 }
 
 sar_comm_status_t sar_control_send_mode(sar_comm_client_t *client,
@@ -149,15 +146,28 @@ int sar_control_apply(sar_comm_client_t *client,
     case SAR_CTL_OP_LIST: {
         uint32_t start = cmd->mode;
         uint32_t n = 0;
+        uint32_t total = 0;
 
-        AcquireSRWLockShared(&g_catalog_lock);
-        reply->total = g_catalog_count;
-        while (start + n < g_catalog_count && n < SAR_CTL_LIST_PAGE) {
-            reply->entries[n] = g_catalog[start + n];
-            n++;
+        for (n = 0; n < SAR_CTL_LIST_PAGE; n++) {
+            semantics_ar_catalog_entry_t e;
+            uint32_t valid = 0;
+
+            if (sar_catalog_fetch(client, start + n, &e, &total, &valid) != 0) {
+                reply->result = -1;
+                reply->verdict = SAR_IDENTITY_VERDICT_ERROR;
+                return 0;
+            }
+            if (!valid)
+                break;
+
+            memcpy(reply->entries[n].key_id, e.key_id, SEMANTICS_AR_KEY_ID_SIZE);
+            reply->entries[n].algorithm = e.algorithm;
+            reply->entries[n].mode = e.mode;
+            memcpy(reply->entries[n].provenance_path, e.provenance_path,
+                   sizeof(reply->entries[n].provenance_path));
         }
+        reply->total = total;
         reply->returned = n;
-        ReleaseSRWLockShared(&g_catalog_lock);
         reply->result = 0;
         reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
         break;

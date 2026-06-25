@@ -26,6 +26,7 @@ typedef struct {
     size_t          scan_length;
     const uint16_t *provenance_path;
     uint64_t        provenance_offset;
+    uint64_t        provenance_length;
 } sar_capture_request_t;
 
 typedef struct {
