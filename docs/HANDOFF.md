@@ -504,8 +504,32 @@ pass; not derivable from code):**
    each gap either closed with an independent vector or re-affirmed as a recorded confirmed
    limit. *Deps:* none.
 
-5. **Periodic memory sampling of flagged encryptors — the robustness complement (research-validated;
-   future unit; supersedes the rejected crypto-API-escrow idea).** *Boundary:* in addition to the
+5. **Periodic memory sampling of flagged encryptors — DONE & VM-VERIFIED (2026-06-26).** Implemented in
+   `driver/capture.c` (+ `driver/driver.h` constants): a per-process behavioral flag raised on each
+   capture-eligible destructive write (before the inflight cap, so cap-dropped writes are still covered) and a
+   dedicated bounded-rate sampler system thread that re-attaches to flagged writers on a dual cadence —
+   write-progress kick + bounded wall-clock revisit — re-snapshots committed-private memory (heaps first, then
+   the rest: the snapshot was widened from PEB-heaps-only to a committed-private catch-all so CNG
+   `pbKeyObject==NULL`/Segment-Heap allocations are covered), runs the structural detector, and convicts the
+   resident key against the writer's most-recent stored (`P`,`C`) — feeding the existing `SarCaptureCommit`
+   (keystore + ENFORCE block). Build: `cl /kernel` OK (`semantics_ar.sys` ~137 KB), host `ctest` 9/9.
+   **VM-VERIFIED (live Win11 SarTarget):** (V2 stability) 500×8 burst ×2 + wipe, no bugcheck/hang, driver
+   stays loaded, paged-pool 380 MB bounded — repeated `KeStackAttachProcess` on cadence is safe; (V1
+   regression) `test_encryptor` → keystore 810 B → `sarctl recover` → SHA-256 == golden; (**GOAL** — ENFORCE,
+   reused-key pre-write-wipe via `tests/harness/wipe_reuse.c`, key-alive hold 1500 ms) **damaged=1
+   (recoverable) / prevented=49 / captured=1 = net permanent loss 0**, where the write-grab alone was TOTAL
+   compromise — the sampler's wall-clock revisit caught the reused key in the inter-write window and the one
+   conviction armed the block. **Honest scope:** the catch needs key *residence in a sample window* AND key
+   *reuse* (a per-file key's only matching (`P`,`C`) is its own write, gone under pre-write-wipe); **per-file
+   immediate-wipe of tiny files stays the irreducible VIII.2 floor.** Constitution amended clean
+   (as-if-original): II.3.1/II.3.2 (Oracle re-cadenced: write snapshot + behavior-paced re-sample;
+   committed-private region), II.4.2 (cumulative-N over writes AND resident-window samples), VI.1.1 (flag is
+   behavioral, not identity), VIII.2 (the reused/macro-window pre-write-wipe is closed; per-file immediate-wipe
+   is the floor), Part X checklist. Phase-2 dirtied-page delta scan deliberately NOT built — research showed no
+   documented driver-callable Windows dirty-bit API; the documented checksum/VAD-delta proxy is the future
+   optimization if full-rescan cost ever bites. *Original framing/research record retained below for context.*
+
+   *Boundary (original):* in addition to the
    write-IRP capture, periodically sample a flagged encryptor's memory to catch the symmetric key
    during its live ENCRYPTION window — closing the "wipe the key before the write" evasion (II.3.2 /
    VIII.2) and catching short-lived per-file keys the write-grab can miss. **[LOAD-TEST EVIDENCE 2026-06-26 re-scopes this follow-up; the gap is narrower than first thought.]** A graduated VM load/stress test (scratchpad ransom_sim.c + splitter.c, full-file AES-256-CBC, hold=0) established: (i) STABILITY is excellent — no deadlock/hang/bugcheck, FS healthy, paged-pool peak +42MB at 500 files x 8 threads; (ii) in ENFORCE (the protective mode) net permanent data loss = 0 in ALL realistic scenarios — single fast process is blocked after ~2 files, and process-splitting (1/10/50/250 procs -> prevented 99.8/97/39/33%) evades the per-process block but NOT capture: Captured >= Damaged at every split level, so every damaged file stays recoverable (empirically vindicates VI.1); (iii) counterintuitively, splitting RAISES capture (single fast proc churns its heap -> write-grab misses, AUDIT 500=6.6%; split procs have low per-heap churn -> capture ~100%), so the attacker trades block-evasion for higher recoverability. So this unit's REAL residual narrows to two corners: (a) the extreme edge of a process doing ONE write then exiting in us (faster than the deferred snapshot) or wiping the key pre-snapshot (VIII.2), and (b) AUDIT-mode coverage where a single high-churn process loses keys the write-grab missed (no block to save it). Periodic memory sampling targets exactly (a)+(b) by catching the key during the live encryption window independent of write-grab timing. **Pre-write-wipe now MEASURED (2026-06-26, scratchpad/wipe_encryptor.c): a deliberate attacker that zeroes the key (BCryptDestroyKey + SecureZeroMemory of key object + raw key) BEFORE writing the ciphertext reduces the write-grab to 0% capture (AUDIT N=20/100), and in ENFORCE yields 0 prevented / 100 damaged / 0 captured = TOTAL compromise (no conviction -> no block -> no recovery); the process was kept alive 15s so the worker attached a LIVE process and still found nothing, isolating wipe from exit. So corner (a) is real and total, not hypothetical — and it is exactly the VIII.2 confirmed-limit, already declared by Part I. HONEST BOUND on the fix: periodic sampling's catch scales with the encryption-window DURATION — effective for reused keys + large files (MB-GB, the real ransomware target, long live window), near the irreducible floor for per-file + immediate-wipe + tiny files (us window); it degrades total->partial evasion, NOT to zero. It is defense-in-depth vs a sophisticated attacker (most ransomware write-then-free, which the write-grab already catches at 100% low-churn).** Frontier research validated
