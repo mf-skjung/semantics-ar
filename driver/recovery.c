@@ -1,6 +1,7 @@
 #include "recovery.h"
 #include "driver.h"
 #include "keystore_persist.h"
+#include "preserve.h"
 
 #include <ntifs.h>
 
@@ -255,6 +256,138 @@ cleanup:
     if (record != NULL) {
         RtlSecureZeroMemory(record, sizeof(*record));
         ExFreePoolWithTag(record, SAR_POOL_TAG_RECOVER);
+    }
+    ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
+    return result;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarRecResolveNtPath(_In_ PCWSTR DosPath,
+                                _Out_writes_(SEMANTICS_AR_PROVENANCE_PATH_MAX) UINT16 *NtPath)
+{
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE h;
+    PFILE_OBJECT fo;
+
+    RtlZeroMemory(NtPath, SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16));
+    RtlInitUnicodeString(&name, DosPath);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+    if (!NT_SUCCESS(ZwCreateFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb, NULL,
+                                  FILE_ATTRIBUTE_NORMAL,
+                                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0)))
+        return;
+
+    if (NT_SUCCESS(ObReferenceObjectByHandle(h, 0, *IoFileObjectType, KernelMode,
+                                              (PVOID *)&fo, NULL))) {
+        ULONG needed = 0;
+        ObQueryNameString(fo, NULL, 0, &needed);
+        if (needed > 0) {
+            POBJECT_NAME_INFORMATION info = (POBJECT_NAME_INFORMATION)ExAllocatePool2(
+                POOL_FLAG_PAGED, needed, SAR_POOL_TAG_RECOVER);
+            if (info != NULL) {
+                if (NT_SUCCESS(ObQueryNameString(fo, info, needed, &needed))) {
+                    ULONG chars = info->Name.Length / sizeof(WCHAR);
+                    ULONG i;
+                    if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
+                        chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
+                    for (i = 0; i < chars; i++)
+                        NtPath[i] = (UINT16)info->Name.Buffer[i];
+                }
+                ExFreePoolWithTag(info, SAR_POOL_TAG_RECOVER);
+            }
+        }
+        ObDereferenceObject(fo);
+    }
+    ZwClose(h);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Request,
+                               _Out_ UINT64 *BytesRecovered)
+{
+    PWCHAR target;
+    PWCHAR temp;
+    PUCHAR ct = NULL;
+    PUCHAR region = NULL;
+    SIZE_T len = 0;
+    UINT64 off = Request->offset;
+    UINT64 rlen = Request->length;
+    NTSTATUS status;
+    int result;
+    ULONG produced = 0;
+
+    *BytesRecovered = 0;
+
+    if (g_sar.preserve == NULL)
+        return SAR_RECOVER_DECLINED_TARGET_IO;
+    if (rlen == 0 || rlen > SAR_RECOVERY_MAX_BYTES)
+        return SAR_RECOVER_INVALID;
+
+    target = (PWCHAR)ExAllocatePool2(POOL_FLAG_PAGED, 2 * SAR_REC_PATH_CCH * sizeof(WCHAR),
+                                     SAR_POOL_TAG_RECOVER);
+    if (target == NULL)
+        return SAR_RECOVER_INVALID;
+    temp = target + SAR_REC_PATH_CCH;
+
+    if (SarRecBuildPaths(Request->target_path, target, temp) == 0) {
+        ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
+        return SAR_RECOVER_INVALID;
+    }
+
+    status = SarRecReadTarget(target, &ct, &len);
+    if (status == STATUS_FILE_TOO_LARGE) {
+        result = SAR_RECOVER_DECLINED_TOO_LARGE;
+        goto cleanup;
+    }
+    if (!NT_SUCCESS(status)) {
+        result = SAR_RECOVER_DECLINED_TARGET_IO;
+        goto cleanup;
+    }
+    if (off >= (UINT64)len || rlen > (UINT64)len - off) {
+        result = SAR_RECOVER_DECLINED_MISMATCH;
+        goto cleanup;
+    }
+
+    region = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)rlen, SAR_POOL_TAG_RECOVER);
+    if (region == NULL) {
+        result = SAR_RECOVER_INVALID;
+        goto cleanup;
+    }
+
+    {
+        UINT16 resolved[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+        SarRecResolveNtPath(target, resolved);
+        status = SarPreserveRestore(g_sar.preserve,
+                                    resolved[0] != 0 ? resolved : Request->target_path,
+                                    off, rlen, region, (ULONG)rlen, &produced);
+    }
+    if (!NT_SUCCESS(status) || produced != (ULONG)rlen) {
+        result = SAR_RECOVER_DECLINED_MISMATCH;
+        goto cleanup;
+    }
+
+    RtlCopyMemory(ct + off, region, (SIZE_T)rlen);
+
+    if (!NT_SUCCESS(SarRecWriteTemp(temp, ct, len))) {
+        result = SAR_RECOVER_DECLINED_TARGET_IO;
+        goto cleanup;
+    }
+
+    *BytesRecovered = rlen;
+    result = SAR_RECOVER_OK;
+
+cleanup:
+    if (region != NULL) {
+        RtlSecureZeroMemory(region, (SIZE_T)rlen);
+        ExFreePoolWithTag(region, SAR_POOL_TAG_RECOVER);
+    }
+    if (ct != NULL) {
+        RtlSecureZeroMemory(ct, len);
+        ExFreePoolWithTag(ct, SAR_POOL_TAG_RECOVER);
     }
     ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
     return result;

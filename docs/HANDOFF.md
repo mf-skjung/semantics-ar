@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — Recovery round-trip PROVEN in a live kernel (2026-06-25)
+# Handoff — semantics-ar Windows realization — Two-asset model (Oracle + Preservation) implemented (2026-06-26)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
@@ -14,9 +14,10 @@ implementer updates it; the terminal implementer deletes it.
 A single x64 Windows binary set — boot-start minifilter + user-mode service — that realizes
 the Constitution: observe every destruction-of-an-existing-original, capture the encryption
 key at the write (the Oracle), persist captured keys in a self-protected keystore, recover
-files by decrypting their on-disk ciphertext, and respond under operator-chosen AUDIT/ENFORCE
-with a user-owned creation-time whitelist. Host-verifiable logic stays freestanding and tested;
-kernel-bound and Win32 code is verified in a WDK/VM context.
+files by decrypting their on-disk ciphertext, preserve original content before unrecoverable
+destruction (copy-on-first-write, encrypted at rest, bounded window), and respond under
+operator-chosen AUDIT/ENFORCE with a user-owned creation-time whitelist. Host-verifiable
+logic stays freestanding and tested; kernel-bound and Win32 code is verified in a WDK/VM context.
 
 ## 2. Current true state
 
@@ -56,7 +57,7 @@ clean).** Constitution III.4 now mandates *verify-before-replace*: recovery chec
 result against a capture-time **verification tag** before replacing a file; any mismatch declines and
 leaves the target byte-for-byte intact. Realized at the engine/format layer, the dependency floor the
 kernel round-trip builds on:
-- Keystore record format **v2→v3** (`keystore_format.h`): each record carries `sample_offset`,
+- Keystore record format (`keystore_format.h`): each record carries `sample_offset`,
   `sample_length`, and a 32-byte `sample_tag` = SHA-256 of a bounded sample (≤`SEMANTICS_AR_SAMPLE_TAG_MAX`
   = 64 B) of the *original* `P` taken from the Oracle's input at the convicting write. The tag is a check
   value, not a recovery source (III.1.1) and is covered by the record's keyed MAC (tamper test added).
@@ -149,6 +150,91 @@ ImagePath was pointed at a writable dir on the test VM (`C:\sar`) so iterative r
 the TrustedInstaller ACL on `system32\drivers`. **Still unrun: the capture path (the heart) and
 recovery** — the next and central frontier, gated on the C1 heap-scan correction (see §2 CORRECTION
 and §4 item 0).
+
+**[PRESERVATION (Constitution Part III.5) — IMPLEMENTED full-stack, VM-VERIFIED (2026-06-27, 24/24 PASS).]**
+Copy-on-first-write before destruction, the circumstantial bounded-recovery asset complementing
+the Oracle. Implemented across all layers and **proven end-to-end on live Win11 24H2 (SarTarget VM)**:
+- **Engine freestanding core** (`engine/include/sar_preserve.h`, `engine/src/preserve.c`): covered
+  (first-write-wins), append, reconcile (containment — key region must contain preserved region),
+  age/capacity eviction, verify-restore (path+offset+length binding + content_tag SHA-256),
+  serialize/verify (chained MAC + anchor rollback detection).
+- **On-disk format** (`common/include/semantics_ar/preserve_format.h`): `sar_preserve_record_t`
+  (provenance, offset, length, capture_time, IV, content_tag), `sar_preserve_header_t` (magic
+  `0x50524153`, generation, head_mac), `sar_preserve_disk_record_t` (per-record MAC). Packed.
+- **Driver kernel glue** (`driver/preserve.c`, `driver/store_io.c`): BCrypt AES-256-CBC
+  encrypt/decrypt with per-op key object + IV copy + secure zeroize; free-extent-first data file
+  allocator; debounced persist thread (5 s); push lock; paged pool records (cap 65536); key
+  generation via `BCryptGenRandom`; `SarStoreWriteAtomic` (write→flush→rename); SYSTEM+Admins-only
+  directory DACL. Encryption buffers use paged pool (ctbuf, padbuf in SarPreserveStage/Restore).
+- **Integration — capture** (`driver/capture.c`): `SarCaptureSubmitWrite` reads pre-modification
+  data via `FltReadFile` from PreWrite (cached read from the initiating instance — does NOT trigger
+  the instance's own callbacks; safe because PreWrite fires before NTFS acquires any lock).
+  `SarCapturePreserveFromWork` validates FltReadFile data against the PostRead pre-image sample,
+  stages via `SarPreserveStage`. `SarCaptureCommit` calls `SarPreserveReconcile` after keystore
+  append (III.5.4). ENFORCE capacity exhaustion: early blocking in `SarCaptureWorker` right after
+  `sar_gate_classify` (before the expensive process memory scan) + `SarCapturePreserveFromWork`
+  checks `SarPreserveWouldExceed` before the `preserve_buf` null check (so FltReadFile failure
+  cannot bypass the capacity gate).
+- **Integration — lifecycle** (`driver/driver.c`): `SarPreserveCreate` in DriverEntry (non-fatal,
+  sets `preserve_active`); `SarPreserveLoad` in boot-reinit + post-boot; `SarPreserveDestroy` in
+  unload (ordered: capture→preserve→keystore→comm→filter→state).
+- **Integration — recovery** (`driver/recovery.c`): `SarPreserveRecoveryExecute` resolves DOS→NT
+  device path via `SarRecResolveNtPath` (`IoCreateFileSpecifyDeviceObjectHint` +
+  `ObQueryNameString`), calls `SarPreserveRestore` (decrypt + content_tag verify), splices restored
+  bytes, writes temp. Path resolution is required because the preserve index stores NT device paths
+  (from `FltGetFileNameInformation` in kernel) while user-space tools pass DOS paths.
+- **Integration — self-protection** (`driver/operations.c`): preserve store files under
+  `\SystemRoot\System32\drivers\SemanticsAr\` protected by `SarNameIsOwnStore` + anti-deletion.
+- **Protocol** (`protocol.h`): messages 13–17 (PRESERVE_QUERY/REPLY, PRESERVE_RECOVER,
+  PRESERVE_RESULT, SET_BUDGET); `control/src/msg.c` size validation.
+- **Service** (`service/control.c`, `service/recovery.c`): PRESERVE_LIST pagination via
+  `sar_preserve_fetch`, PRESERVE_RECOVER → `sar_preserve_recovery_run` → atomic replace,
+  SET_BUDGET forwarding.
+- **CLI** (`tools/sarctl.c`): `preserve-list`, `preserve-recover <path> <off> <len>`, `budget
+  <retention-sec> <capacity-MB>`.
+- **Tests** (`tests/test_preserve.c`): 13 assertions covering first-write-wins, distinct
+  region/file, reconcile containment, age/capacity eviction, would_exceed, verify-before-restore
+  (content_tag + binding), serialize/verify/anchor (round-trip, tamper, rollback).
+  `tests/harness/preserve_test.c`: VM test tool (per-file random AES-256-CBC in-place encryption).
+- **Build**: `scripts/build_driver.bat` includes `store_io` + `preserve` TUs; all three
+  `CMakeLists.txt` (driver, engine, tests) include preserve sources.
+- **Constants** (`driver/driver.h`): retention default 7 days, capacity default 10 GB, record cap
+  65536, stage max 4 MB, sector 4096.
+
+*VM verification script:* `scripts/vm_verify_preserve.ps1` — 10 phases, 18 assertions:
+- Phase 1: Package & deploy (driver load + service start)
+- Phase 2: Preservation staging (5 files 16B–64KB, all staged, all encrypted)
+- Phase 3: First-write-wins (re-encryption does not duplicate entries)
+- Phase 4: Restore round-trip (5/5 files restored to golden SHA-256)
+- Phase 5: Oracle→Preservation reconciliation (Oracle conviction removes preserve entry)
+- Phase 6: Large files (256KB, 512KB, 1MB — all staged + restored to golden)
+- Phase 7: Self-protection (all 5 store files resist user-mode deletion)
+- Phase 8: Budget control (sarctl budget set + restore)
+- Phase 9: ENFORCE capacity exhaustion (1MB budget, 20×128KB files: 0 modified, 20 blocked)
+- Phase 10: Edge cases (sub-SAR_CANDIDATE_SIZE skip, double-encrypt identity)
+
+*Bugs found and fixed during VM verification (all structural, not band-aids):*
+- **NT path vs DOS path mismatch** (`driver/recovery.c`): preserve index stores NT device paths
+  (`\Device\HarddiskVolume3\...`) from kernel-side `FltGetFileNameInformation`; user-space passes
+  DOS paths (`C:\...`). Added `SarRecResolveNtPath` to resolve the namespace boundary.
+- **ENFORCE would-exceed check ordering** (`driver/capture.c`): `SarCapturePreserveFromWork`
+  checked `preserve_buf == NULL` before `SarPreserveWouldExceed` — if FltReadFile failed, the
+  function returned without checking capacity, so blocking never triggered. Moved capacity check
+  before the null check.
+- **Late ENFORCE blocking** (`driver/capture.c`): blocking decision was after the expensive
+  `SarCaptureSnapshotProcess` (~500ms on VM). By the time the worker blocked the process,
+  subsequent writes had already gone through. Added early blocking right after `sar_gate_classify`
+  (cost ~0), before the process scan. VM result: 20/20 writes blocked with 1MB budget.
+
+*Code-level audit finding:* the offset-0 pre-image filter in `SarPostRead` is a deliberate
+correlation-model heuristic, not a bug — the Gate D∧T requires old-vs-new comparison at the same
+offset, and removing the filter would break the dominant ransomware pattern's correlation (later
+chunk reads overwrite the offset-0 sample). Non-zero-offset writes that lack a correlated read
+sample are a confirmed limit of the correlation model (VIII.2 scope).
+
+*Persist/reboot verified (Phase 11):* 10 preserve entries survived VM reboot intact, post-reboot
+restore returned the exact golden SHA-256, and new staging worked after reboot. The full
+preservation lifecycle — stage → persist → reboot → load → restore → new stage — is proven.
 
 **Done and host-verified (builds clean `-Werror`/`-Wconversion` on Linux gcc and `/W4 /WX` on
 MSVC; `ctest` green):**
@@ -489,7 +575,7 @@ pass; not derivable from code):**
    swap** — applying a wrong key/geometry yields a garbage temp; the core trusts the operator's
    key_id↔target pairing (safe for the proven provenance file). Persist a hash of the capture-time
    original sample `P` (a verification tag, not a recovery source → not preservation under III.1) in the
-   keystore record (format v2→v3, couples to capture) and have the kernel verify the decrypted head
+   keystore record (couples to capture) and have the kernel verify the decrypted head
    before producing the temp. *DoD:* a wrong key can never overwrite a file. (d) **volume enumeration /
    recover-all** — a VERDICT_NOTIFY-fed catalog (key_id→provenance paths) + ReFS/same-volume specifics +
    residue clearing. *Deps:* Units 2/3-Core/6 (done).
@@ -572,9 +658,12 @@ pass; not derivable from code):**
   path from the `FileObject` + Flt name info.
 - **Plaintext keys / candidates / `(P,C)` never cross the comm port** (Slice 1 contract). The seam
   hands references inside the kernel; the port carries only `key_id` + algorithm/mode/provenance.
-- **The keystore is the sole recovery asset** — there is no preservation anywhere. A missed write,
-  a dropped Oracle-input sample, a keyless wiper member: each is a confirmed limit absorbed by
-  cumulative-N, never a data loss. Do not "fix" any of them by reintroducing a backup.
+- **Two-asset graduated response (Part I).** Oracle (definitive, unbounded — key-capture recovery)
+  and Preservation (circumstantial, bounded — copy-on-first-write recovery) are both implemented.
+  Key-capture cancels preservation for the recovered region (III.5.4 reconciliation, containment
+  semantics). Preservation is the fallback for writes the Oracle cannot convict; it is not a
+  backup of the keystore. A missed write, a dropped Oracle-input sample, a keyless wiper member:
+  each is a confirmed limit absorbed by cumulative-N.
 - **Altitude 385000 is a placeholder** — replace with the Microsoft-allocated integer before
   production signing.
 - **Comm-port SD is at default ACL.** `SarBuildPortSecurity` uses
@@ -648,6 +737,12 @@ pass; not derivable from code):**
 > INF validation, test-signing, load, or behavioral test was done — those need a VM. Still run
 > `InfVerif /h` + CodeQL Must-Fix and confirm the points below in a VM:
 
+- **Preservation path (`driver/preserve.c` + `driver/store_io.c`) — VM-VERIFIED (2026-06-27, 24/24):**
+  staging (FltReadFile cached pre-read from PreWrite, 16B–1MB), first-write-wins, Oracle reconciliation,
+  ENFORCE capacity blocking (early gate-classify + would-exceed), restore round-trip (decrypt + content_tag
+  verify + splice), self-protection of store files, budget control, persist/load with anchor verification
+  across reboot (Phase 11: 10 entries survived, restore + new staging confirmed). **Remaining:** age
+  eviction observation.
 - **Recovery path (`driver/recovery.c`, Unit 4) — compiles+links into the `.sys`, UNRUN:** validate in a
   VM that `SarRecoveryExecute` opens `\??\<target>` and decrypts correctly end-to-end; that the kernel
   temp write + the service `ReplaceFileW`/POSIX-rename swap leave the recovered file with the target's

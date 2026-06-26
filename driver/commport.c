@@ -3,6 +3,7 @@
 #include "ntsystem.h"
 #include "recovery.h"
 #include "keystore_persist.h"
+#include "preserve.h"
 
 #include <bcrypt.h>
 
@@ -364,6 +365,75 @@ static NTSTATUS SarHandleCatalogQuery(_Inout_ PSAR_COMM Comm,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandlePreserveQuery(_Inout_ PSAR_COMM Comm,
+                                       _In_ const semantics_ar_preserve_query_t *Request,
+                                       _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                       _In_ ULONG OutputBufferLength,
+                                       _Out_ PULONG ReturnLength)
+{
+    semantics_ar_preserve_reply_t reply;
+    ULONG64 total = 0;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_PRESERVE_REPLY;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.result = 0;
+    reply.index = Request->index;
+
+    if (g_sar.preserve != NULL && SarPreserveReady(g_sar.preserve)) {
+        reply.valid = SarPreserveProject(g_sar.preserve, Request->index,
+                                         &reply.entry, &total) ? 1u : 0u;
+        reply.total = (uint32_t)total;
+    }
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandlePreserveRecover(_Inout_ PSAR_COMM Comm,
+                                         _In_ const semantics_ar_preserve_recover_t *Request,
+                                         _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                         _In_ ULONG OutputBufferLength,
+                                         _Out_ PULONG ReturnLength)
+{
+    semantics_ar_preserve_recover_t req;
+    semantics_ar_recovery_result_t reply;
+    UINT64 bytes = 0;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlCopyMemory(&req, Request, sizeof(req));
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_PRESERVE_RESULT;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.status = SarPreserveRecoveryExecute(&req, &bytes);
+    reply.bytes_recovered = bytes;
+
+    RtlSecureZeroMemory(&req, sizeof(req));
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
                               _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
                               _In_ ULONG InputBufferLength,
@@ -404,6 +474,24 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
     case SEMANTICS_AR_MSG_CATALOG_QUERY:
         status = SarHandleCatalogQuery(comm, (const semantics_ar_catalog_query_t *)InputBuffer,
                                        OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_PRESERVE_QUERY:
+        status = SarHandlePreserveQuery(comm, (const semantics_ar_preserve_query_t *)InputBuffer,
+                                        OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_PRESERVE_RECOVER:
+        status = SarHandlePreserveRecover(comm, (const semantics_ar_preserve_recover_t *)InputBuffer,
+                                          OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_SET_BUDGET:
+        if (!sar_handshake_authenticated(&comm->handshake)) {
+            InterlockedIncrement64(&comm->tamper_counter);
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else {
+            const semantics_ar_set_budget_t *b = (const semantics_ar_set_budget_t *)InputBuffer;
+            SarPreserveSetBudget(g_sar.preserve, b->retention_100ns, b->capacity_bytes);
+            status = STATUS_SUCCESS;
+        }
         break;
     case SEMANTICS_AR_MSG_SET_MODE:
         if (!sar_handshake_authenticated(&comm->handshake)) {

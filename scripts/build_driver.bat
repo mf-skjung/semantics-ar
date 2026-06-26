@@ -24,7 +24,7 @@ set INCS=/I"%REPO%\driver" /I"%REPO%\control\include" /I"%REPO%\common\include" 
 set CF=/nologo /kernel /GS- /Z7 /O2 /c /W3 /wd4005 %DEFS% %INCS%
 
 echo === compiling driver ===
-for %%F in (driver operations seam keystore_persist commport recovery state processnotify feature bypassio) do (
+for %%F in (driver operations seam keystore_persist store_io preserve commport recovery state processnotify feature bypassio) do (
   cl %CF% /Fo"%OUT%\drv_%%F.obj" "%REPO%\driver\%%F.c" || ( echo COMPILE FAIL %%F & exit /b 2 )
 )
 cl %CF% /Fo"%OUT%\drv_capture.obj"  "%REPO%\driver\capture.c"      || ( echo COMPILE FAIL driver\capture & exit /b 2 )
@@ -36,7 +36,7 @@ for %%F in (msg whitelist mode handshake) do (
 )
 
 echo === compiling engine ===
-for %%F in (battery modes gate keystore keystore_mgr recover sha256) do (
+for %%F in (battery modes gate keystore keystore_mgr preserve recover sha256) do (
   cl %CF% /Fo"%OUT%\eng_%%F.obj" "%REPO%\engine\src\%%F.c" || ( echo COMPILE FAIL eng %%F & exit /b 2 )
 )
 for %%F in (aes des sm4 camellia aria seed stream) do (

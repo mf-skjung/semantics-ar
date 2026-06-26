@@ -82,6 +82,31 @@ static BOOLEAN SarFsControlIsKeyless(_In_ sar_destruct_member_t Member)
 }
 
 _IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarNameIsOwnStore(_In_ PCUNICODE_STRING Name)
+{
+    static const WCHAR marker[] = L"SemanticsAr";
+    USHORT nchars = (USHORT)(Name->Length / sizeof(WCHAR));
+    USHORT mlen = (USHORT)(RTL_NUMBER_OF(marker) - 1);
+    USHORT i, j;
+
+    if (nchars < mlen)
+        return FALSE;
+    for (i = 0; (USHORT)(i + mlen) <= nchars; i++) {
+        for (j = 0; j < mlen; j++) {
+            WCHAR a = Name->Buffer[i + j];
+            WCHAR b = marker[j];
+            if (a >= L'a' && a <= L'z') a = (WCHAR)(a - 32);
+            if (b >= L'a' && b <= L'z') b = (WCHAR)(b - 32);
+            if (a != b)
+                break;
+        }
+        if (j == mlen)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
 static PSAR_STREAM_CONTEXT SarGetStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObjects)
 {
     PSAR_STREAM_CONTEXT context = NULL;
@@ -233,6 +258,59 @@ SarPostRead(_Inout_ PFLT_CALLBACK_DATA Data,
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
+FLT_POSTOP_CALLBACK_STATUS
+SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
+              _In_ PCFLT_RELATED_OBJECTS FltObjects,
+              _In_opt_ PVOID CompletionContext,
+              _In_ FLT_POST_OPERATION_FLAGS Flags)
+{
+    PFLT_FILE_NAME_INFORMATION info = NULL;
+    PSAR_STREAM_CONTEXT context;
+
+    UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    if (!NT_SUCCESS(Data->IoStatus.Status))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    if (!NT_SUCCESS(FltGetFileNameInformation(Data,
+                                              FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+                                              &info)))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    if (NT_SUCCESS(FltParseFileNameInformation(info)) && SarNameIsOwnStore(&info->Name)) {
+        context = SarGetStreamContext(FltObjects);
+        if (context != NULL) {
+            InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_OWN_STORE);
+            FltReleaseContext(context);
+        }
+    }
+
+    FltReleaseFileNameInformation(info);
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarTargetIsProtectedStore(_In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                         _In_ PFLT_CALLBACK_DATA Data)
+{
+    PSAR_STREAM_CONTEXT context = NULL;
+    BOOLEAN own = FALSE;
+
+    if (Data->RequestorMode != UserMode)
+        return FALSE;
+
+    if (NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                       (PFLT_CONTEXT *)&context))) {
+        own = (context->flags & SAR_STREAMCTX_FLAG_OWN_STORE) != 0;
+        FltReleaseContext(context);
+    }
+    return own;
+}
+
 FLT_PREOP_CALLBACK_STATUS
 SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
             _In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -257,6 +335,12 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
         process = PsGetCurrentProcess();
 
     if (SarCaptureOriginatorBlocked(g_sar.capture, process)) {
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
+    if (SarTargetIsProtectedStore(FltObjects, Data)) {
         Data->IoStatus.Status = STATUS_ACCESS_DENIED;
         Data->IoStatus.Information = 0;
         return FLT_PREOP_COMPLETE;
@@ -288,6 +372,12 @@ SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
     if (member == SAR_DESTRUCT_NONE)
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
 
+    if (SarTargetIsProtectedStore(FltObjects, Data)) {
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+
     SarSubmitMetadata(Data, FltObjects, member, 0);
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
@@ -314,6 +404,12 @@ SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
     member = SarClassifyFsControl(control_code);
     if (member == SAR_DESTRUCT_NONE)
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    if (SarTargetIsProtectedStore(FltObjects, Data)) {
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
 
     if (SarFsControlIsKeyless(member)) {
         SarSubmitMetadata(Data, FltObjects, member, control_code);

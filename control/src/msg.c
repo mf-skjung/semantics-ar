@@ -27,6 +27,16 @@ uint32_t sar_msg_expected_length(uint32_t message_type) {
         return (uint32_t)sizeof(semantics_ar_catalog_query_t);
     case SEMANTICS_AR_MSG_CATALOG_REPLY:
         return (uint32_t)sizeof(semantics_ar_catalog_reply_t);
+    case SEMANTICS_AR_MSG_PRESERVE_QUERY:
+        return (uint32_t)sizeof(semantics_ar_preserve_query_t);
+    case SEMANTICS_AR_MSG_PRESERVE_REPLY:
+        return (uint32_t)sizeof(semantics_ar_preserve_reply_t);
+    case SEMANTICS_AR_MSG_PRESERVE_RECOVER:
+        return (uint32_t)sizeof(semantics_ar_preserve_recover_t);
+    case SEMANTICS_AR_MSG_PRESERVE_RESULT:
+        return (uint32_t)sizeof(semantics_ar_recovery_result_t);
+    case SEMANTICS_AR_MSG_SET_BUDGET:
+        return (uint32_t)sizeof(semantics_ar_set_budget_t);
     default:
         return 0u;
     }

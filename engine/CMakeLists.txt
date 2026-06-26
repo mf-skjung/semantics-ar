@@ -11,6 +11,7 @@ add_library(semantics_ar_engine STATIC
     src/sha256.c
     src/keystore.c
     src/keystore_mgr.c
+    src/preserve.c
     src/recover.c
     src/gate.c)
 

@@ -5,6 +5,7 @@
 #include "commport.h"
 #include "capture.h"
 #include "keystore_persist.h"
+#include "preserve.h"
 
 SAR_GLOBALS g_sar;
 PSAR_STATE g_sar_state;
@@ -27,6 +28,10 @@ FLT_POSTOP_CALLBACK_STATUS SarPostRead(_Inout_ PFLT_CALLBACK_DATA Data,
                                        _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                        _In_opt_ PVOID CompletionContext,
                                        _In_ FLT_POST_OPERATION_FLAGS Flags);
+FLT_POSTOP_CALLBACK_STATUS SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
+                                         _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                         _In_opt_ PVOID CompletionContext,
+                                         _In_ FLT_POST_OPERATION_FLAGS Flags);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarBypassIoResolve(_Inout_ PSAR_POSTURE Posture);
@@ -39,6 +44,7 @@ static VOID SarStreamContextCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_
 }
 
 static const FLT_OPERATION_REGISTRATION g_sar_operations[] = {
+    { IRP_MJ_CREATE, 0, NULL, SarPostCreate },
     { IRP_MJ_READ, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, NULL, SarPostRead },
     { IRP_MJ_WRITE, 0, SarPreWrite, NULL },
     { IRP_MJ_SET_INFORMATION, 0, SarPreSetInformation, NULL },
@@ -87,6 +93,11 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
         g_sar.capture = NULL;
     }
 
+    if (g_sar.preserve != NULL) {
+        SarPreserveDestroy(g_sar.preserve);
+        g_sar.preserve = NULL;
+    }
+
     if (g_sar.keystore != NULL) {
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
@@ -121,6 +132,8 @@ static VOID SarBootReinit(_In_ PDRIVER_OBJECT DriverObject, _In_opt_ PVOID Conte
 
     if (g_sar.keystore != NULL)
         SarKeystoreLoad(g_sar.keystore);
+    if (g_sar.preserve != NULL)
+        SarPreserveLoad(g_sar.preserve);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -250,8 +263,17 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
+    if (NT_SUCCESS(SarPreserveCreate(g_sar.filter, &g_sar.posture, &g_sar.preserve)))
+        g_sar.posture.preserve_active = TRUE;
+    else
+        g_sar.preserve = NULL;
+
     status = FltStartFiltering(g_sar.filter);
     if (!NT_SUCCESS(status)) {
+        if (g_sar.preserve != NULL) {
+            SarPreserveDestroy(g_sar.preserve);
+            g_sar.preserve = NULL;
+        }
         SarCaptureDestroy(g_sar.capture);
         g_sar.capture = NULL;
         SarKeystoreDestroy(g_sar.keystore);
@@ -267,10 +289,13 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
-    if (SarDriverIsPostBootStart(RegistryPath))
+    if (SarDriverIsPostBootStart(RegistryPath)) {
         SarKeystoreLoad(g_sar.keystore);
-    else
+        if (g_sar.preserve != NULL)
+            SarPreserveLoad(g_sar.preserve);
+    } else {
         IoRegisterBootDriverReinitialization(DriverObject, SarBootReinit, NULL);
+    }
 
     return STATUS_SUCCESS;
 }

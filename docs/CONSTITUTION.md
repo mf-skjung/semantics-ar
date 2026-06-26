@@ -65,11 +65,19 @@ checkable. It does not specify **how** (data structures, libraries) except where
 how is itself load-bearing and promoted to a [DECISION]. Implementation freedom is
 real; constraint satisfaction is mandatory.
 
-### 0.5 No runtime-tunable policy
-Every policy value in this document is a recorded design decision derived now, not a
-knob exposed to runtime configuration. Where a value sits inside a derived safe
-band, the band and its safety are [DERIVED] and the chosen point is [DESIGN]; both
-are recorded here, neither is deferred to "measure later."
+### 0.5 No runtime-tunable detection; a resource envelope the user may own
+Every value that governs **detection or conviction** — the gate threshold, the cipher
+battery, the capture cadence, what counts as a destructive write — is a recorded design
+decision derived now, not a knob exposed to runtime configuration. Where such a value
+sits inside a derived safe band, the band and its safety are [DERIVED] and the chosen
+point is [DESIGN]; both are recorded here, neither is deferred to "measure later."
+
+A **resource envelope** is the one thing the user may set: the time and capacity bounds
+of the preservation window (Part III, Part VI). This is not detection logic and changing
+it never changes what the system proves or convicts — it sizes how much reversible
+holding the user is willing to spend, exactly as a backup retention policy does. The
+default is a recorded [DESIGN] value; the user's authority over it is deliberate and is
+distinct from the forbidden tuning of detection.
 
 ---
 
@@ -77,36 +85,62 @@ are recorded here, neither is deferred to "measure later."
 
 Everything in this document is this sentence, unfolded:
 
-> **Protection is the capture of the encryption key.**
-> When the key is captured, any file encrypted under it is recovered by decrypting
-> the ciphertext that already resides on disk. When the key is not captured, the
-> system does not protect that file — and says so plainly.
+> **The strength of the response is proportional to the certainty of the evidence.**
+> The system observes every destruction of an existing original and answers it with
+> recovery and, under the operator's policy, prevention — graduated to what it can
+> prove. When it captures the encryption key, the evidence is definitive: the file is
+> recovered with certainty by decrypting the ciphertext already on disk, for as long as
+> the key is kept, and a proven encryption may be blocked at its first instance. When it
+> cannot capture the key, the evidence is only circumstantial — a destructive,
+> unpredictable write by an unexempted process — and the response is correspondingly
+> reversible: the original it was about to destroy is held in a bounded window so the
+> destruction can be undone, and prevention waits until that window is exhausted. Where
+> neither the key nor the original can be held, the system does not protect that data —
+> and says so plainly.
 
-This is the heart. The proof of encryption — the **Oracle** — is the system. Three
-consequences follow, and the rest of the document is only their detail.
+This is the heart. Protection has **two assets, ranked by the certainty of the evidence
+that feeds them**: the **Oracle** (key capture, Part II) is the definitive asset and the
+only one whose recovery is unbounded; **preservation** (bounded copy-on-first-write,
+Part III) is the circumstantial fallback for the residue the Oracle cannot reach. The
+rest of the document is their detail.
 
-**[INVARIANT] I.1 — The Oracle is the sole locus of protection.**
-There is no second mechanism that protects data when the Oracle fails. Any design
-element that exists to hedge against the Oracle being wrong, missed, or bypassed is
-not a safety net; it is a statement of distrust in the heart, and it is absent from
-this system. A solution premised on "the Oracle might be bypassed" has no reason to
-exist, because the Oracle is the reason it exists.
+**[INVARIANT] I.1 — Response is graduated to evidence, never beyond it.**
+The Oracle is the primary locus of protection; where it reaches, nothing else is needed,
+because a captured key recovers every file under it without bound. Preservation exists
+**only** for what the Oracle cannot capture, and it is deliberately the weaker asset:
+bounded in time and capacity, reversible, and **never a basis for conviction**. The
+system never responds more strongly than its evidence warrants — a captured key
+(definitive) recovers and may block at its first instance; an uncaptured destruction
+(circumstantial) is only held, reversibly, and provokes a block only when the bounded
+resource it was given is exhausted under ENFORCE (Part V, Part VI). There is no response
+that inverts this ordering: no preserved original treated as definitive, no conviction
+from circumstantial evidence, no key in hand treated as a verdict without the forward
+proof (II.2).
 
-**What derives from the proposition.** The gate (Part IV) exists only to decide what
-to ask the Oracle about. Recovery (Part III) is decryption with the captured key.
-Response (Part V) is the Oracle's verdict plus the user's intent. Identity discipline
-(Part VI) exists so the capture cannot be evaded by who issues a write.
+**What derives from the proposition.** The gate (Part IV) decides what to ask the Oracle
+about and what to preserve. Recovery (Part III) is decryption with the captured key or
+restoration of the preserved original. Response (Part V) is the system's evidence plus
+the user's intent. Identity discipline (Part VI) ensures neither asset can be evaded by
+who issues a write.
 
-**What is absent because it would distrust the proposition.** There is **no**
-preservation of originals as a recovery source; no shadow store; no capacity limit;
-no saturation signal; no key-less auto-block; no backup held "in case the Oracle was
-wrong." Each of these was a hedge against the heart and is therefore not in this
-system (Part III, Part V, Part VIII record this explicitly).
+**Why both assets exist, and why preservation is bounded.** The Oracle's reach is
+irreducible: a key computed, used, and discarded faster than any memory snapshot can see
+it — the regime of fast small-file and partial encryption, and of an adversary that
+zeroizes the key before it writes — is not capturable (Part VIII). Preservation covers
+exactly that residue and only it, and it can, because the attacker must read the original
+plaintext before it can encrypt: the original is therefore in hand at the destructive
+write and can be held aside. It is **bounded** because holding originals without bound is
+the retain-everything this system refuses; it is **reversible-only** because circumstantial
+evidence must never convict. The Oracle relieves preservation — a captured key discards
+the original it had held, which is no longer needed — so preservation spends its bounded
+resource only where the Oracle failed.
 
-**Where the proposition stops.** When the Oracle does not capture the key, the file
-is not protected. This is the **confirmed limit** (Part VIII). It is not a defect to
-be engineered away; it is the honest edge of a key-capture defense, and the system
-states it rather than pretending past it.
+**Where the proposition stops.** When neither the key was captured nor the original held
+within its window — a destruction the Oracle could not see whose preserved original has
+aged or been pushed out of the bounded store, or a write whose original could not be
+copied at all — the data is not protected. This is the **confirmed limit** (Part VIII):
+the honest edge of a system that holds keys and a *bounded* window of originals, not an
+infinite backup. It is stated rather than papered over.
 
 ---
 
@@ -241,8 +275,8 @@ asymmetric key — `N` is the capture-eligible writes of *that file* plus the sa
 file's key is resident, so a file whose key is written by very few writes and resident only briefly
 has correspondingly fewer chances.
 
-> **cumulative-N is redefined from the old design and this redefinition is
-> load-bearing:** it is *not* the accumulation of backups. It is the accumulation of
+> **cumulative-N is load-bearing and precise:** it is *not* the accumulation of backups.
+> It is the accumulation of
 > (a) capture opportunities and (b) captured keys in the keystore. A key caught at
 > *any one* of its writes recovers *every* file encrypted under that key — the whole set
 > under key reuse, that one file under per-file keying — including data written before the
@@ -250,7 +284,7 @@ has correspondingly fewer chances.
 > recovery asset is the key, not a per-file backup.
 
 ### II.5 The keystore
-**[DECISION] II.5.1 — The keystore is the system's sole persistent recovery asset.**
+**[DECISION] II.5.1 — The keystore is the definitive persistent recovery asset.**
 Captured keys (with the algorithm and parameters needed to use them) are written to
 a keystore. The keystore holds **one record per encrypted region** — the byte range a
 single convicting write destroyed: each record carries the key, that region's
@@ -269,26 +303,34 @@ within one file (intermittent/partial encryption). The record is therefore the
 would discard every sibling region's recovery anchor and silently deny it recovery, which
 II.4.2 forbids. Its size is proportional to the number of encrypted regions observed —
 thousands to hundreds of thousands of records, megabytes in scale; the on-disk format is
-append-oriented and must scale to many records. It is the new center of gravity: if it
-survives, recovery is possible; if it is destroyed, recovery is lost. Its protection
-is therefore the crown-jewel concern of Part VII, replacing every protection the old
-design spent on a shadow store.
+append-oriented and must scale to many records. It is the center of gravity of the definitive
+asset: if it survives, recovery by key is possible without bound; if it is destroyed, that
+recovery is lost (the bounded preservation store, III.5, independently covers the residue it
+did not capture). Its protection is a crown-jewel concern of Part VII.
 
 ---
 
-## PART III — RECOVERY (key-based; no preservation)
+## PART III — RECOVERY AND PRESERVATION (two assets)
 
 ### III.1 The recovery sources
-**[DECISION] III.1.1 — Recover from the key and the on-disk ciphertext. Preserve
-nothing.**
-There are exactly two recovery sources, and neither is a backup of the original:
+**[DECISION] III.1.1 — Recover from a captured key, or from a bounded preserved original.**
+Recovery has two assets, ranked by evidence certainty (I.1):
 
-1. **The keystore** — the captured keys (II.5).
-2. **The ciphertext on disk** — which the attacker has already written, at no cost
-   to us.
+1. **The keystore and the on-disk ciphertext** — the definitive asset. The captured keys
+   (II.5) decrypt the ciphertext the attacker already wrote, at no cost to us, with
+   **unbounded** retention: a key recovers every region under it for as long as the
+   keystore survives. This is recovery by *proof*.
+2. **The preservation store** — the circumstantial asset (III.5). For a destruction whose
+   key the Oracle did not capture, the original the write was about to destroy was copied
+   aside — once, before the destruction — and held in a **bounded** window; recovery
+   restores that copy. This is recovery by *holding*, bounded and reversible precisely
+   because the evidence is only circumstantial.
 
-Recovery is: decrypt the on-disk ciphertext with the captured key, write the
-plaintext back. No original is ever preserved to disk or held as a recovery copy.
+The definitive asset is preferred wherever it applies and it **cancels** the circumstantial
+one: when a key that recovers a region is captured at any time, that region's preserved
+original is discarded (III.5.4) — it was only ever a hedge for the case the key was never
+caught. Neither asset is the other's backup; together they are the graduated response of
+I.1.
 
 **[INVARIANT] III.1.2 — Recovery decrypts where the key already lives: in the kernel.**
 Recovery is operator-initiated. The captured key never leaves the kernel pool to
@@ -310,14 +352,14 @@ recovery restores the file, not merely its bytes. The kernel checks the decrypte
 against the capture-time verification tag (III.4) before it produces the temporary file,
 so a wrong key, geometry, or key↔target pairing never reaches the atomic replacement.
 
-> **Why this is the consistent endpoint, not a cost-saving shortcut.** A preserved
-> original could only save one case a captured key cannot: a file whose key was
-> never captured at any of its writes. But the verdict "never captured" never
-> terminates, so saving that case requires holding the backup indefinitely —
-> retain-everything, which the governing proposition rejects. The single benefit of
-> preservation is realizable only through a premise this system has discarded;
-> therefore preservation is discarded with it. The thing worth holding was always
-> the key.
+> **Why preservation is bounded, not infinite.** A preserved original answers exactly the
+> case a captured key cannot: a region whose key was never captured at any of its writes.
+> That verdict — "never captured" — never terminates, so an *unbounded* preserved copy
+> would be retain-everything, which I.1 refuses. The resolution is the bounded window
+> (III.5): the original is held only long enough to make the destruction reversible while
+> the user can still notice and act, and beyond that window the confirmed limit (VIII.2)
+> applies honestly. The thing worth holding forever is still the key; the original is held
+> only briefly, and only when the key was missed.
 
 **[DECISION] III.1.3 — Enumeration projects non-secret recovery metadata from the
 keystore; no shadow.**
@@ -335,7 +377,10 @@ the recovery exchange of III.1.2 by exactly these non-secret fields and by nothi
 and III.1.2's "key identifier, target path, status only" continues to bind the *recovery*
 exchange unchanged. Because the keystore holds one record per encrypted file (II.5.1), the
 catalog enumerates one entry per captured file, so a reused key's whole recoverable set is
-visible, not just a single representative.
+visible, not just a single representative. The preservation store is enumerated the same way
+(III.5.6): per held original the kernel projects only the non-secret {provenance path, region
+offset and length, capture time, age, size, status}, never the preserved bytes — so the
+operator can see and direct what is reversibly held without the store ever leaving the kernel.
 
 ### III.2 The transient Oracle input
 **[DECISION] III.2.1 — The only transient artifact is the Oracle's input, in
@@ -395,6 +440,74 @@ for each file it observes, so each file recovers against its own anchor. Where r
 is directed at a target for which no verification anchor was captured, it declines rather
 than perform an unverifiable destructive replace — the same honest edge as the confirmed
 limit (VIII.2): the system replaces only what it can prove it is restoring.
+
+### III.5 Preservation — the circumstantial asset
+
+**[DECISION] III.5.1 — Copy-on-first-write, on the same gate, for the residue the Oracle cannot reach.**
+A write that passes the gate (D ∧ T, Part IV) by an unexempted process is, by construction, a
+destruction of an existing original whose content is unpredictable from that original — the same
+population the Oracle is asked about. Before that original is destroyed, a copy of the destroyed
+region is taken **once** and placed in the preservation store. Preservation runs on the gate's
+output, never as a second classifier: it adds a *holding*, it does not judge, it never blocks
+(IV.3), and a held original is never a conviction (I.1).
+
+**[INVARIANT] III.5.2 — The copy is taken off the IRP and never reads the file from the write path.**
+The original is obtained without the in-IRP same-file read that wedges the volume (III.2.1), from
+two deadlock-free sources, in order:
+
+1. **The originator's own read.** Because read → encrypt → write is causal, the attacker has
+   already read the plaintext it is about to destroy; that read is sampled at the read seam and,
+   for preservation, the **whole** read region — not merely the proof sample — is correlated to
+   the write by stream and offset and staged to the store. This is the primary source: it costs no
+   extra file I/O and cannot deadlock, because the bytes are already in hand.
+2. **A separate file object, off the IRP.** For a destruction whose original the read did not
+   yield in full — a truncate or delete/rename-over of a region not recently read, or a mapped-
+   section write — a worker copies the still-intact original through a *distinct* kernel file
+   object opened unbuffered, at PASSIVE level, holding no filesystem resource of the destroying
+   operation. A delete, rename-over, or truncate exposes the whole original on disk at the moment
+   it is requested, so the copy precedes the destruction; an in-place overwrite whose region was
+   not read is copied best-effort before the write commits, and where that copy loses the race the
+   region reduces to the confirmed limit (VIII.2), never to a held resource on the IRP.
+
+Every destruction member of IV.1.2 — overwrite, truncate, delete, rename-over, hardlink-replace,
+clone, section write — is a preservation trigger by the same enumeration that makes it a capture
+candidate; the original is held under whichever source applies.
+
+**[INVARIANT] III.5.3 — First write wins; a held original is never overwritten by what destroys it.**
+The store holds **one copy per (file, region)** — the earliest observed state of that region within
+the window. A second destructive write to a region already held (double encryption, a re-encrypting
+pass, chunked rewrites) does not replace the held original: the original is the pre-attack plaintext
+and the later write carries only ciphertext, so the store admits the first and rejects the rest for
+that region. A region first observed as already ciphertext (encrypted before observation began) has
+no true original to hold; that is the pre-observation edge, recorded, not a false hold.
+
+**[DECISION] III.5.4 — A captured key discards the original it would have recovered.**
+The preserved original hedges against the key being missed; the moment a key that recovers its region
+enters the keystore — at the convicting write, at a periodic re-sample, or via a sibling region under
+a reused key (II.4.2) — the hedge is spent and the held original for that region is discarded.
+Reconciliation is driven by keystore append: each new record cancels the preserved originals its
+(file, region) now covers. Preservation therefore consumes its bounded resource only on the residue
+the Oracle never caught, and where the Oracle succeeds the store trends to empty.
+
+**[DECISION] III.5.5 — The window is a bounded resource envelope: time and capacity.**
+Held originals live under two bounds, a recorded [DESIGN] default the user may set as a resource
+envelope (0.5, V.1.3): a **retention time**, after which a held original is reclaimed (the destruction
+is old enough that the user has had the window to notice and recover), and a **total capacity**,
+accounted by held-region bytes (II.5.1's region model, not a file count). Reclamation orders by age.
+What happens at capacity exhaustion is the response question and belongs to the mode (V.1.2): AUDIT
+slides the window — commits the oldest, accepting that beyond the envelope a capacity-exceeding attack
+is not prevented; ENFORCE blocks. The bounds size reversible holding; they are never a detection or
+conviction signal.
+
+**[INVARIANT] III.5.6 — Restore is operator-directed, verified, and metadata-preserving; the store never leaves the kernel.**
+Restoration of a held original is initiated by the operator, never automatically — circumstantial
+evidence holds, it does not decide. Before a held original replaces on-disk bytes the kernel verifies
+the copy against its own integrity tag and its (file, region) binding, decrypts it where it lives (the
+store is encrypted at rest, VII.1.3), and writes a temporary file in which only the held regions are
+restored and every other byte is left exactly as on disk; the service then performs the metadata-
+preserving atomic replacement (III.1.2), receiving neither the preserved bytes nor the store key. A
+held original that fails its integrity or binding check is not applied. The preserved bytes never cross
+the communication port.
 
 ---
 
@@ -524,11 +637,15 @@ new content random?"*
 > where it is free and blind-spot-free.
 
 ### IV.3 The gate never blocks
-**[INVARIANT] IV.3.1.** The gate emits **capture-candidate-or-skip**. It never blocks
-an operation. A loose gate cannot create a false block, because it cannot block at
-all. Over-asking the Oracle is a cost absorbed downstream; under-asking risks a
-missed capture (confirmed limit). Tune toward over-asking. Blocking, where it happens
-at all, is the ENFORCE-mode response (Part V), strictly downstream of a verdict.
+**[INVARIANT] IV.3.1.** The gate emits **capture-candidate-or-skip**, and a candidate feeds
+both consumers — the Oracle (II) and preservation staging (III.5). It never blocks or alters
+an operation; the write proceeds unchanged whether or not it is a candidate. A loose gate
+cannot create a false block, because it cannot block at all, and it cannot corrupt a write,
+because it never redirects one. Over-asking the Oracle and over-preserving are costs absorbed
+downstream — the latter bounded and reclaimed (III.5.5); under-asking risks a missed capture
+and a missed hold (confirmed limit). Tune toward over-asking. Blocking, where it happens at
+all, is the ENFORCE-mode response (Part V), strictly downstream of a verdict or of capacity
+exhaustion.
 
 ---
 
@@ -540,32 +657,55 @@ governs *whether the system observes at all*.
 
 ### V.1 Layer one — global mode (governs blocking, not observation)
 **[DECISION] V.1.1 — AUDIT and ENFORCE.**
-Key capture (the Oracle) is **always on** in both modes. The mode governs only the
-response to a conviction:
+Observation, key capture (the Oracle), preservation, recovery, and visibility are **always
+on** in both modes. The mode governs only whether the system blocks autonomously:
 
-- **AUDIT** — observe; capture keys; **never block.** The system records which
-  originators would trigger a block, and recovers by key if asked.
-- **ENFORCE** — observe; capture keys; on conviction, **block the originator's
-  further writes** (the already-written, key-captured files remain recoverable).
+- **AUDIT** — observe; capture keys; preserve; **never block autonomously.** The system
+  records which originators would trigger a block, and recovers by key or by held original
+  if asked. At capacity exhaustion the preservation window **slides** — the oldest held
+  original is committed (III.5.5) — so AUDIT does not prevent a capacity-exceeding attack;
+  it is the posture for discovering the whitelist and minimizing false positives, not a
+  protective guarantee.
+- **ENFORCE** — observe; capture keys; preserve; and **block the originator's further
+  destructive writes** on either of the two triggers of V.1.2. The already-written,
+  key-captured or held files remain recoverable.
 
-The transition between modes is the **user's policy decision**. The system never
-infers "now is the time to start blocking." This is the clean partition of
-responsibility: the system mechanically proves *encryption*; the user decides *when
-proven encryption should be treated as an attack*.
+The transition between modes is the **user's policy decision**. The system never infers
+"now is the time to start blocking." This is the clean partition of responsibility: the
+system mechanically proves *encryption* and reversibly holds what it cannot prove; the user
+decides *when* proven or capacity-exhausting destruction should be treated as an attack.
 
-> A legitimate bulk in-place encryption (e.g. a database enabling transparent
-> encryption) is behaviorally identical to ransomware and is **not** special-cased
-> (special-casing it would be the intent-inference Part VI forbids). It is captured
-> like everything else; whether it is blocked is the mode's and the user's call. In
-> AUDIT it proceeds and is recoverable; in ENFORCE the user has chosen to block
-> unrecognized mass encryption.
+> A legitimate bulk in-place encryption (e.g. a database enabling transparent encryption) is
+> behaviorally identical to ransomware and is **not** special-cased (special-casing it would
+> be the intent-inference Part VI forbids). It is captured and preserved like everything
+> else; whether it is blocked is the mode's and the user's call. In AUDIT it proceeds and is
+> recoverable; in ENFORCE the user has chosen to block unrecognized mass encryption.
 
-> **[NEGATIVE] V.1.2** There is no capacity limit, no saturation signal, and no
-> key-less auto-block. Nothing accumulates as a "fill up and then it must be an
-> attack" reservoir (there is no preservation to accumulate, III.1). A block
-> originates only from a forward Oracle conviction under ENFORCE — never from a count,
-> a percentage of bytes, or elapsed time. These mechanisms were hedges that
-> distrusted the Oracle and are absent (Part I).
+**[DECISION] V.1.2 — Under ENFORCE a block originates from exactly two triggers, each matched to its evidence.**
+1. **Forward conviction (definitive).** A forward Oracle proof (II.2) blocks the originator
+   at its **first** instance — the strongest response, because the evidence is certain and
+   the blocked files are independently recoverable by the captured key.
+2. **Capacity exhaustion (circumstantial).** When the preservation window's capacity is
+   exhausted by unreconciled held originals — destructions the Oracle never convicted — and a
+   further such destruction would force the window to slide and lose an original, the active
+   destructive writers are blocked rather than that original lost. This is the cautious
+   extreme: the only key-less block, it fires only at the bound the user set (V.1.3), only
+   under ENFORCE, and it convicts nothing — it refuses to spend the last of a resource the
+   user reserved for reversibility. Preservation never blocks below this bound; below it, it
+   only holds.
+
+The set blocked is the behavioral set of active destructive writers (VI.1), never a requestor
+identity. No other quantity blocks: not a count, not a byte percentage, not elapsed time. The
+capacity trigger is not a "fill up and it must be an attack" inference — it is the explicit
+exhaustion of a declared resource envelope, and the choice it forces (block vs slide) is the
+mode's, not the system's guess.
+
+**[DECISION] V.1.3 — The preservation resource envelope.**
+The window's bounds (III.5.5) — a **retention time** and a **total capacity** — are a resource
+envelope the user may set (0.5). Their default is a recorded [DESIGN] value; the band is the
+user's to widen or narrow as a backup-retention decision, changing only how much reversible
+holding is spent, never what the system detects or convicts or how it proves. It is the user's
+only quantitative control, and it is a resource decision, not a detection knob.
 
 ### V.2 Layer two — per-process whitelist (a full exemption the user owns)
 **[DECISION] V.2.1 — Whitelist means: not protected.**
@@ -628,12 +768,12 @@ whitelist is the only identity-based exemption:
 
 ---
 
-## PART VII — SELF-PROTECTION (protect the keystore and the observation point)
+## PART VII — SELF-PROTECTION (protect the two recovery assets and the observation point)
 
-The keystore (II.5) is now the sole recovery asset; protecting it is the whole of
-this part. The system must also keep its hook attached and its trusted state trusted.
-These properties ride on platform security primitives that are a function of the OS
-generation; where a primitive is absent the boundary it guards descends (VII.5) and
+The keystore (II.5) and the preservation store (III.5) are the recovery assets; protecting
+both is the whole of this part. The system must also keep its hook attached and its trusted
+state trusted. These properties ride on platform security primitives that are a function of
+the OS generation; where a primitive is absent the boundary it guards descends (VII.5) and
 the descent is recorded, never silently assumed.
 
 ### VII.1 Keystore secrecy, integrity, and persistence
@@ -655,6 +795,46 @@ decrypts in kernel (III.1.2). The MAC key is held in kernel pool; it exists in u
 only inside the single bounded boot-time unsealing window of VII.1.2, and where the
 platform cannot seal it its persisted secrecy descends to that same boundary and is
 recorded.
+
+**[DECISION] VII.1.3 — The preservation store is encrypted at rest under the same kernel-held seal.**
+The preservation store holds plaintext copies of user originals and is far larger than the
+keystore, so it lives on disk, not in pool. It is **encrypted at rest in the kernel** — the
+minifilter encrypts each held original with the platform's in-kernel symmetric primitives
+before it touches the disk and decrypts only in kernel during a restore (III.5.6), under a
+store key held in non-paged pool and rooted exactly as the keystore's MAC key is (VII.1.2):
+unsealed once at boot by the protected service, delivered over the authenticated port, never
+persisted in the clear. To any in-scope actor (user mode up to SYSTEM without kernel code) the
+store is therefore ciphertext — the same confidentiality the keystore has — and its plaintext
+is reachable only across the kernel line (VIII.1). Each held original carries an integrity tag
+and its (file, region) binding (III.5.6) so a tampered or substituted entry is detected and not
+applied. The store key never leaves the kernel, and no operation exports a held original to
+user mode.
+
+**[DECISION] VII.1.4 — Integrity, anti-deletion, and anti-rollback of the on-disk assets against a SYSTEM actor.**
+Both on-disk assets must survive an in-scope SYSTEM actor that can run the filesystem against
+them. Three mechanisms, each bounded honestly:
+- **Anti-deletion through the I/O manager.** The minifilter denies destructive operations
+  (overwrite, truncate, delete, rename-over) targeting its own store and keystore paths from
+  any unexempted requestor — the IV.1.2 destruction enumeration turned on the system's own
+  files. This defeats every deletion routed through the filesystem stack (the
+  `vssadmin`/`wmic`/scripted-delete class).
+- **Tamper-evidence against offline edit.** Both files are sealed with a chained keyed MAC
+  computed and verified in kernel, with an external freshness anchor (`{generation, head_mac}`)
+  committed at **coarse checkpoint boundaries** to a platform monotonic root where present
+  (TPM NV) or to the sealed-key blob where not. On load the anchor is compared to the chained
+  head; a mismatch **halts and alerts** rather than trusting rolled-back or edited state. The
+  anchor is committed at checkpoints, never per write, because a hardware monotonic root cannot
+  sustain per-write updates; the guarantee is detection of rollback, not its prevention.
+- **The honest residual (recorded, not closed).** A SYSTEM actor may lawfully dismount or lock
+  the volume to reach the on-disk store beneath the minifilter without executing kernel code;
+  the dismount is itself in IV.1.2 and is detected, and on remount the store's freshness is
+  re-verified — but a SYSTEM actor determined to **destroy** the on-disk store can do so, as it
+  can destroy any on-host backup. Confidentiality (encryption) and integrity (tamper-evidence)
+  hold against this actor; **availability of the on-disk store does not fully hold against
+  SYSTEM**, and the system's answer there is detection and a truthful report of lost
+  reversibility, not a false claim of protection. This is the recorded edge where on-host
+  holding ends and off-host immutability — a different product — begins; the keystore, being
+  tiny, survives more readily, and a captured key recovers without the store at all.
 
 **[DECISION] VII.1.2.** The seal is rooted in the platform, never synthesized in
 software. A Windows kernel driver has no TPM access — the TPM is reached only through
@@ -688,6 +868,14 @@ authenticates the user-mode client connecting to the filter communication port
 (verifying protection/signing level and expected identity), and the port's security
 descriptor restricts access to that identity. Accepting the first connector and
 granting it trusted-channel status is a trust-bootstrap hole and is forbidden.
+
+The service's protected status is the anti-malware PPL level, established by a signed
+early-launch (ELAM) driver that registers the signer of the service binaries; this raises the
+bar against ordinary user-mode tampering (no handle injection, termination, or user-mode debug
+of the service). It is **defense-in-depth, not a boundary against SYSTEM**: the platform itself
+treats an administrator as inside the trusted base, so PPL is used where eligible, and its
+absence — or its bypass by a SYSTEM actor — descends to the kernel line (VIII.1) and is recorded
+(VII.5), never claimed as a guarantee against SYSTEM. The recovery assets do not depend on it.
 
 ### VII.4 Our own process is where hijack-prevention lives
 **[DECISION] VII.4.1.** Code-integrity guards (e.g. CIG / ACG where the platform and
@@ -727,9 +915,15 @@ reading the kernel pool, deleting the keystore directly — reduces here.
 > compromise is loss of *future* observation, not retroactive undoing of past captures
 > (subject to keystore survival, VII.1).
 
-### VIII.2 [BOUNDARY] The confirmed limit — Oracle-miss is unprotected
-If the Oracle does not capture the key, the file is not protected. The following all
-reduce here and are **not** new open problems:
+### VIII.2 [BOUNDARY] The confirmed limit — beyond both assets
+Where the Oracle does not capture the key **and** preservation does not hold the original
+within its window, the data is not protected. An Oracle miss **alone** is not the limit: the
+same destructive write the Oracle could not key-capture had its original held by preservation
+(III.5), so it is *reversibly protected within the window*. The limit is reached only when both
+assets fail — the key was never captured **and** the held original has aged or been pushed out
+of the bounded store, could not be copied at all, or the on-disk store was destroyed by a
+SYSTEM actor (VII.1.4). The following are the **Oracle-miss** cases; each falls to preservation
+within the window and reduces to this limit only beyond it. They are **not** new open problems:
 
 - **Key isolation** (SGX enclaves, Key Locker): the key never enters scannable
   memory/registers. This is the structural-`p≈0` family; the field confirms it is rare
@@ -765,13 +959,21 @@ reduce here and are **not** new open problems:
   file's (`P`,`C`) is a different key), so the re-sample, even when it sees the key resident,
   cannot convict it. A key *reused* across files escapes this, since any sibling's (`P`,`C`)
   convicts it; the immediate per-file zeroize of a tiny file does not. The behavior-paced cadence
-  and the synchronous register grab shrink the window; whatever still falls outside it reduces
-  here.
+  and the synchronous register grab shrink the window; whatever still falls outside it is held by
+  preservation (III.5) for the window, and reduces here only beyond it.
+- **The held original could not be copied, or its store was destroyed**: a destruction whose
+  original was never readable through the filesystem (a region the originator did not read and
+  whose best-effort separate-object copy lost the race, III.5.2), one whose held copy aged or was
+  evicted past the window (III.5.5), or a held copy whose on-disk store a SYSTEM actor destroyed
+  (VII.1.4). A captured key still recovers regardless; only the *held-only* residue reduces here,
+  and it is detected and reported, never silently dropped.
 
-> **Rationale.** This is the honest edge of a key-capture defense, and it is the
-> ratified premise of the whole system (Part I): the Oracle is the protection, and where
-> the Oracle cannot see, there is no protection. Engineering "around" this would
-> re-introduce retain-everything, which is rejected.
+> **Rationale.** This is the honest edge of a system that holds keys and a *bounded* window of
+> originals (Part I). The Oracle is the definitive protection and preservation the bounded
+> reversible one; where the key was never caught **and** the window has passed, there is no
+> protection, and engineering "around" *that* would re-introduce the unbounded retain-everything
+> the system refuses. The edge is stated, not hidden: recovery is offered only where a key or a
+> held original can prove it.
 
 ### VIII.3 [BOUNDARY] Wiper / no-key destruction
 Plaintext-over-plaintext destruction, pure deletion, and zeroing produce no recoverable
@@ -811,6 +1013,14 @@ kernel is resolved at runtime with a down-level alternative.
 - Self-protection primitives (HVCI, TPM 2.0 + kernel TBS, PPL, Dev Drive policy) are
   runtime-detected; where present they are verified/configured, where absent the
   dependent boundary descends (VII.5) and is recorded.
+- The protected service runs at the anti-malware PPL level via a signed ELAM driver that
+  registers the service-binary signer (VII.3.1); where AM-PPL eligibility is absent the service
+  runs unprotected and the descent is recorded (VII.5). The recovery assets do not depend on it.
+- The preservation store is encrypted at rest with the in-kernel symmetric primitives (VII.1.3),
+  present on every supported OS, and opened unbuffered + write-through for crash consistency. Its
+  retention-time and capacity bounds are the resource envelope of V.1.3; the throughput of
+  write-through encrypted holding at the chosen capacity is a deployment characteristic measured
+  on the target, not a correctness property.
 - The supported floor is a recorded deployment decision. The recovery mechanism is
   deliverable down to the FltMgr / CNG / process-notify-Ex floor; the self-protection
   model is intact only from the OS generation that supplies its primitives. The
@@ -823,8 +1033,11 @@ kernel is resolved at runtime with a down-level alternative.
 
 An implementation is constitutional iff all hold.
 
-**The heart (Parts I, II)**
-- [ ] Protection is key capture; no mechanism protects data when the Oracle fails (I.1).
+**The heart (Parts I, II, III)**
+- [ ] Response strength is graduated to evidence certainty: a captured key (definitive) →
+      unbounded recovery + block at first instance; an uncaptured destruction (circumstantial)
+      → bounded reversible preservation + block only at capacity; nothing responds beyond its
+      evidence (I.1).
 - [ ] Conviction is forward-only (`Encrypt_K(destroyed original) == written`); the
       reverse never convicts; the system cannot convict its own recovery (II.2).
 - [ ] The Oracle anchors capture to the writer but reads its memory off the IRP, on a
@@ -844,9 +1057,17 @@ An implementation is constitutional iff all hold.
       files or scattered within one file by partial encryption) each keep their own
       anchor, so the whole set recovers and no region is silently denied (II.5.1).
 
-**Recovery (Part III)**
-- [ ] No original is preserved as a recovery source; recovery is decryption of the
-      on-disk ciphertext with the captured key (III.1).
+**Recovery and preservation (Part III)**
+- [ ] Recovery has two assets: decryption with the captured key (definitive, unbounded), and
+      restoration of a bounded copy-on-first-write preserved original (circumstantial); a
+      captured key cancels the held original for its region (III.1, III.5.4).
+- [ ] Preservation copies the original off the IRP (the originator's own read, else a separate
+      file object), one copy per (file, region), first-write-wins, never overwriting a held
+      original with what destroys it; it triggers on every IV.1.2 destruction member and never
+      blocks (III.5.1–III.5.3).
+- [ ] The window is bounded by a time + capacity resource envelope; reclamation is by age;
+      restore is operator-directed, verified, and metadata-preserving, and the store never
+      leaves the kernel (III.5.5, III.5.6).
 - [ ] Recovery decrypts in kernel; neither the captured key nor the recovered plaintext is
       exported to user mode; the port carries only key_id + target path + status, and the
       writeback is a metadata-preserving atomic replace (III.1.2).
@@ -874,8 +1095,11 @@ An implementation is constitutional iff all hold.
 **Response and authority (Part V)**
 - [ ] Capture is always on; mode (AUDIT / ENFORCE) governs blocking only; the mode
       transition is the user's, never inferred (V.1).
-- [ ] No capacity limit, no saturation, no key-less auto-block; a block originates only
-      from a forward conviction under ENFORCE (V.1.2).
+- [ ] Under ENFORCE a block originates from exactly two triggers: a forward conviction at first
+      instance (definitive), or preservation capacity exhaustion (circumstantial, key-less, the
+      cautious extreme); the blocked set is behavioral; no other quantity blocks (V.1.2).
+- [ ] The preservation window's time + capacity bounds are a user-ownable resource envelope,
+      not a detection knob (V.1.3, 0.5).
 - [ ] Whitelist is a full exemption (no capture, no adjudication); it is a user-owned
       gap, matched on creation-time verified identity, narrow and revocable; the default
       is no whitelist (V.2).
@@ -888,6 +1112,12 @@ An implementation is constitutional iff all hold.
 **Self-protection (Part VII)**
 - [ ] Keystore is in kernel pool; the on-disk copy is keyed-MAC'd in kernel; it is
       TPM-sealed where available and tamper-evident against key erasure (VII.1).
+- [ ] The preservation store is encrypted at rest in kernel under a pool-resident sealed key;
+      its plaintext never leaves the kernel; held entries are integrity-tagged and bound to
+      (file, region) (VII.1.3).
+- [ ] Both on-disk assets deny destructive IRPs on their own paths and are chained-MAC'd with a
+      checkpoint-committed freshness anchor that halts on rollback; the SYSTEM volume-dismount
+      availability gap is detected and recorded, not falsely claimed closed (VII.1.4).
 - [ ] The comm-port authenticates the client; the first connector is not auto-trusted
       (VII.3).
 - [ ] Each primitive is runtime-detected; absence descends the boundary explicitly
@@ -896,6 +1126,9 @@ An implementation is constitutional iff all hold.
 **Boundaries (Part VIII)**
 - [ ] No defense is added past the kernel line or the confirmed limit; threats are not
       escalated above them (VIII.5).
+- [ ] The confirmed limit is "beyond both assets": an Oracle miss is reversibly protected by
+      preservation within the window and reduces to the limit only beyond it; held-only data
+      lost to a SYSTEM store-destruction is detected and reported, never silently dropped (VIII.2).
 
 **Compatibility (Part IX)**
 - [ ] One binary per architecture; down-level branches only where a routine would
@@ -911,10 +1144,12 @@ An implementation is constitutional iff all hold.
 
 ### Closing note (non-normative)
 
-This document has one load-bearing sentence (Part I) and nothing that contradicts it.
-The gate asks the Oracle a question; the Oracle answers by capturing a key; the key
-recovers the file; the user decides when a proven encryption is an attack; and where the
-key is never caught, the system says so instead of pretending otherwise. Everything the
-old design spent on preserving originals, sizing shadow stores, counting saturation, and
-hedging against the Oracle is gone — not refactored, gone — because each of those existed
-only to distrust the one sentence this system is built to trust.
+This document has one load-bearing sentence (Part I) and nothing that contradicts it: the
+strength of the response is proportional to the certainty of the evidence. The gate asks one
+question; the Oracle answers it by capturing a key, and where it does the key recovers every
+file under it without bound; where the key is too fleeting to catch, the original the attacker
+had to read is held aside in a bounded window so the destruction can be undone; the user decides
+when proven or capacity-exhausting destruction is an attack; and where neither the key nor a
+held original remains, the system says so instead of pretending otherwise. The two assets are
+ranked, not redundant — the definitive key capture and the bounded reversible hold — and nothing
+in the system responds more strongly than the evidence it has.

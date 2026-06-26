@@ -14,6 +14,9 @@
 #define SAR_CTL_OP_WHITELIST_REMOVE  3u
 #define SAR_CTL_OP_RECOVER           4u
 #define SAR_CTL_OP_LIST              5u
+#define SAR_CTL_OP_PRESERVE_LIST     6u
+#define SAR_CTL_OP_PRESERVE_RECOVER  7u
+#define SAR_CTL_OP_SET_BUDGET        8u
 
 #define SAR_CTL_LIST_PAGE            8u
 
@@ -24,6 +27,8 @@ typedef struct {
     uint32_t mode;
     uint8_t  key_id[SEMANTICS_AR_KEY_ID_SIZE];
     uint16_t image_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint64_t arg0;
+    uint64_t arg1;
 } sar_control_command_t;
 
 typedef struct {
@@ -34,11 +39,20 @@ typedef struct {
 } sar_catalog_entry_t;
 
 typedef struct {
+    uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint64_t offset;
+    uint64_t length;
+    uint64_t capture_time;
+    uint64_t size;
+} sar_preserve_list_entry_t;
+
+typedef struct {
     int32_t            result;
     uint32_t           verdict;
     uint32_t           total;
     uint32_t           returned;
     sar_catalog_entry_t entries[SAR_CTL_LIST_PAGE];
+    sar_preserve_list_entry_t preserve_entries[SAR_CTL_LIST_PAGE];
 } sar_control_reply_t;
 
 #pragma pack(pop)

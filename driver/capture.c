@@ -2,6 +2,7 @@
 #include "state.h"
 #include "commport.h"
 #include "keystore_persist.h"
+#include "preserve.h"
 #include "ntsystem.h"
 
 #include <ntifs.h>
@@ -71,6 +72,8 @@ typedef struct _SAR_CAPTURE_WORK {
     UCHAR written[SAR_CAPTURE_BUFFER_BYTES];
     UINT16 provenance_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
     UINT64 provenance_offset;
+    PUCHAR preserve_buf;
+    ULONG preserve_len;
 } SAR_CAPTURE_WORK, *PSAR_CAPTURE_WORK;
 
 _IRQL_requires_max_(APC_LEVEL)
@@ -323,8 +326,50 @@ static VOID SarCaptureCommit(_In_ PSAR_CAPTURE_CTX Ctx, _In_ sar_capture_result_
     if (SarKeystoreAppend(g_sar.keystore, &Result->record) == 1)
         SarCaptureSendNotify(Ctx, &Result->notify);
 
+    SarPreserveReconcile(g_sar.preserve, Result->record.provenance_path,
+                         Result->record.provenance_offset, Result->record.provenance_length);
+
     if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE)
         SarCaptureBlockOriginator(Ctx, Originator);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+static VOID SarCapturePreserveFromWork(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PSAR_CAPTURE_WORK Work)
+{
+    SIZE_T pathchars;
+    ULONG validate_len;
+
+    if (g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (Work->write_length == 0 || Work->write_length > SAR_PRESERVE_STAGE_MAX)
+        return;
+
+    if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
+        SarPreserveWouldExceed(g_sar.preserve, Work->write_length)) {
+        SarCaptureBlockOriginator(Ctx, Work->originator_process);
+        return;
+    }
+
+    if (Work->preserve_buf == NULL || Work->preserve_len < Work->write_length)
+        return;
+
+    for (pathchars = 0; pathchars < SEMANTICS_AR_PROVENANCE_PATH_MAX; pathchars++) {
+        if (Work->provenance_path[pathchars] == 0)
+            break;
+    }
+    if (pathchars == 0)
+        return;
+
+    validate_len = Work->pre_image_len < Work->write_length ? Work->pre_image_len :
+                   Work->write_length;
+    if (validate_len > SAR_CAPTURE_BUFFER_BYTES)
+        validate_len = SAR_CAPTURE_BUFFER_BYTES;
+
+    if (validate_len > 0 &&
+        RtlEqualMemory(Work->preserve_buf, Work->pre_image, validate_len)) {
+        SarPreserveStage(g_sar.preserve, Work->provenance_path, Work->file_offset,
+                         Work->write_length, Work->preserve_buf, Work->write_length);
+    }
 }
 
 _Function_class_(FLT_GENERIC_WORKITEM_ROUTINE)
@@ -352,6 +397,13 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         sar_gate_result_t gate;
 
         sar_gate_classify(map, work->pre_image, work->written, sample, &gate);
+        if (gate.candidate &&
+            SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
+            g_sar.preserve != NULL && SarPreserveReady(g_sar.preserve) &&
+            work->write_length > 0 && work->write_length <= SAR_PRESERVE_STAGE_MAX &&
+            SarPreserveWouldExceed(g_sar.preserve, work->write_length)) {
+            SarCaptureBlockOriginator(ctx, work->originator_process);
+        }
         if (gate.candidate) {
             work->scan = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
                                                  SAR_POOL_TAG_SNAPSHOT);
@@ -393,6 +445,8 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         if (sar_capture_run(&req, map, SarKeystoreMacKey(g_sar.keystore), result) ==
             SAR_CAPTURE_CONVICTED) {
             SarCaptureCommit(ctx, result, work->originator_process);
+        } else if (gate.candidate) {
+            SarCapturePreserveFromWork(ctx, work);
         }
     }
 
@@ -408,6 +462,10 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
     if (work->scan != NULL) {
         RtlSecureZeroMemory(work->scan, work->scan_len);
         ExFreePoolWithTag(work->scan, SAR_POOL_TAG_SNAPSHOT);
+    }
+    if (work->preserve_buf != NULL) {
+        RtlSecureZeroMemory(work->preserve_buf, work->preserve_len);
+        ExFreePoolWithTag(work->preserve_buf, SAR_POOL_TAG_PRESBUF);
     }
 
     ObDereferenceObject(work->originator_thread);
@@ -782,6 +840,27 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
 
     work->scan = NULL;
     work->scan_len = 0;
+    work->preserve_buf = NULL;
+    work->preserve_len = 0;
+
+    if (Request->related != NULL && !FlagOn(Request->irp_flags, IRP_NOCACHE) &&
+        g_sar.preserve != NULL && SarPreserveReady(g_sar.preserve) &&
+        Request->write_length > 0 && Request->write_length <= SAR_PRESERVE_STAGE_MAX) {
+        PUCHAR pbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED,
+                                               Request->write_length, SAR_POOL_TAG_PRESBUF);
+        if (pbuf != NULL) {
+            ULONG got = 0;
+            if (NT_SUCCESS(FltReadFile(Request->related->Instance, Request->related->FileObject,
+                                        &Request->write_offset, Request->write_length, pbuf,
+                                        0, &got, NULL, NULL)) &&
+                got >= Request->write_length) {
+                work->preserve_buf = pbuf;
+                work->preserve_len = got;
+            } else {
+                ExFreePoolWithTag(pbuf, SAR_POOL_TAG_PRESBUF);
+            }
+        }
+    }
 
     Request->originator_process = NULL;
     Request->originator_thread = NULL;
@@ -790,6 +869,10 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
                                             DelayedWorkQueue, work))) {
         ObDereferenceObject(work->originator_thread);
         ObDereferenceObject(work->originator_process);
+        if (work->preserve_buf != NULL) {
+            RtlSecureZeroMemory(work->preserve_buf, work->preserve_len);
+            ExFreePoolWithTag(work->preserve_buf, SAR_POOL_TAG_PRESBUF);
+        }
         FltFreeGenericWorkItem(item);
         ExFreeToLookasideListEx(&Ctx->work_pool, work);
         ExReleaseRundownProtection(&Ctx->rundown);

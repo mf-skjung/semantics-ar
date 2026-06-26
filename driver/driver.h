@@ -28,6 +28,11 @@
 #define SAR_POOL_TAG_RECOVER   'vRrS'
 #define SAR_POOL_TAG_SNAPSHOT  'nSrS'
 #define SAR_POOL_TAG_FLAGS     'lFrS'
+#define SAR_POOL_TAG_PRESCTX   'xPrS'
+#define SAR_POOL_TAG_PRESIDX   'iPrS'
+#define SAR_POOL_TAG_PRESFREE  'fPrS'
+#define SAR_POOL_TAG_PRESBUF   'bPrS'
+#define SAR_POOL_TAG_PRESKEY   'kPrS'
 
 #define SAR_WHITELIST_CAPACITY    256u
 #define SAR_IDENTITY_BUCKET_COUNT 1024u
@@ -46,6 +51,13 @@
 #define SAR_SAMPLER_PCREFRESH_100NS 2500000LL
 #define SAR_SAMPLER_QUIESCE_100NS  20000000LL
 #define SAR_SAMPLER_CADENCE_BYTES  (1024u * 1024u)
+#define SAR_PRESERVE_RECORD_CAPACITY        65536u
+#define SAR_PRESERVE_MAX_INDEX_FILE         (256ull * 1024ull * 1024ull)
+#define SAR_PRESERVE_DEFAULT_RETENTION_100NS (7ull * 24ull * 3600ull * 10000000ull)
+#define SAR_PRESERVE_DEFAULT_CAPACITY_BYTES  (10ull * 1024ull * 1024ull * 1024ull)
+#define SAR_PRESERVE_AES_BLOCK              16u
+#define SAR_PRESERVE_STAGE_MAX              (4u * 1024u * 1024u)
+#define SAR_PRESERVE_SECTOR                 4096u
 
 typedef enum {
     SAR_DESTRUCT_NONE = 0,
@@ -88,6 +100,7 @@ typedef struct _SAR_POSTURE {
     BOOLEAN bypass_io_negotiated;
     BOOLEAN keystore_persistent;
     BOOLEAN keystore_tamper_detected;
+    BOOLEAN preserve_active;
 } SAR_POSTURE, *PSAR_POSTURE;
 
 struct _SAR_STATE;
@@ -95,6 +108,7 @@ struct _SAR_COMM;
 struct _SAR_FEATURE_FNS;
 struct _SAR_CAPTURE_CTX;
 struct _SAR_KEYSTORE;
+struct _SAR_PRESERVE;
 
 typedef struct _SAR_GLOBALS {
     PDRIVER_OBJECT driver_object;
@@ -103,6 +117,7 @@ typedef struct _SAR_GLOBALS {
     struct _SAR_COMM *comm;
     struct _SAR_KEYSTORE *keystore;
     struct _SAR_CAPTURE_CTX *capture;
+    struct _SAR_PRESERVE *preserve;
     SAR_POSTURE posture;
     BOOLEAN process_notify_registered;
 } SAR_GLOBALS, *PSAR_GLOBALS;

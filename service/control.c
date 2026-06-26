@@ -41,6 +41,34 @@ static int sar_catalog_fetch(sar_comm_client_t *client, uint32_t index,
     return 0;
 }
 
+static int sar_preserve_fetch(sar_comm_client_t *client, uint32_t index,
+                              semantics_ar_preserve_entry_t *out_entry,
+                              uint32_t *out_total, uint32_t *out_valid)
+{
+    semantics_ar_preserve_query_t q;
+    semantics_ar_preserve_reply_t r;
+    sar_comm_status_t cs;
+
+    memset(&q, 0, sizeof(q));
+    q.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    q.header.message_type = SEMANTICS_AR_MSG_PRESERVE_QUERY;
+    q.header.message_length = (uint32_t)sizeof(q);
+    q.index = index;
+
+    memset(&r, 0, sizeof(r));
+    cs = sar_comm_send_recv(client, &q, (uint32_t)sizeof(q),
+                            &r, (uint32_t)sizeof(r),
+                            SEMANTICS_AR_MSG_PRESERVE_REPLY);
+    if (cs != SAR_COMM_OK)
+        return -1;
+
+    *out_total = r.total;
+    *out_valid = r.valid;
+    if (r.valid)
+        memcpy(out_entry, &r.entry, sizeof(*out_entry));
+    return 0;
+}
+
 sar_comm_status_t sar_control_send_mode(sar_comm_client_t *client,
                                         uint32_t mode)
 {
@@ -169,6 +197,68 @@ int sar_control_apply(sar_comm_client_t *client,
         reply->total = total;
         reply->returned = n;
         reply->result = 0;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        break;
+    }
+
+    case SAR_CTL_OP_PRESERVE_LIST: {
+        uint32_t start = cmd->mode;
+        uint32_t n = 0;
+        uint32_t total = 0;
+
+        for (n = 0; n < SAR_CTL_LIST_PAGE; n++) {
+            semantics_ar_preserve_entry_t e;
+            uint32_t valid = 0;
+
+            if (sar_preserve_fetch(client, start + n, &e, &total, &valid) != 0) {
+                reply->result = -1;
+                reply->verdict = SAR_IDENTITY_VERDICT_ERROR;
+                return 0;
+            }
+            if (!valid)
+                break;
+
+            memcpy(reply->preserve_entries[n].provenance_path, e.provenance_path,
+                   sizeof(reply->preserve_entries[n].provenance_path));
+            reply->preserve_entries[n].offset = e.provenance_offset;
+            reply->preserve_entries[n].length = e.provenance_length;
+            reply->preserve_entries[n].capture_time = e.capture_time;
+            reply->preserve_entries[n].size = e.payload_length;
+        }
+        reply->total = total;
+        reply->returned = n;
+        reply->result = 0;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        break;
+    }
+
+    case SAR_CTL_OP_PRESERVE_RECOVER: {
+        wchar_t  path[SEMANTICS_AR_PROTO_PATH_MAX];
+        uint64_t bytes = 0;
+        uint32_t i;
+
+        for (i = 0; i + 1 < SEMANTICS_AR_PROTO_PATH_MAX && cmd->image_path[i] != 0; i++)
+            path[i] = (wchar_t)cmd->image_path[i];
+        path[i] = L'\0';
+
+        reply->result = sar_preserve_recovery_run(client, path, cmd->arg0, cmd->arg1, &bytes);
+        reply->verdict = (reply->result == 0) ? SAR_IDENTITY_VERDICT_VERIFIED
+                                              : SAR_IDENTITY_VERDICT_ERROR;
+        break;
+    }
+
+    case SAR_CTL_OP_SET_BUDGET: {
+        semantics_ar_set_budget_t msg;
+
+        memset(&msg, 0, sizeof(msg));
+        msg.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+        msg.header.message_type = SEMANTICS_AR_MSG_SET_BUDGET;
+        msg.header.message_length = (uint32_t)sizeof(msg);
+        msg.retention_100ns = cmd->arg0;
+        msg.capacity_bytes = cmd->arg1;
+
+        cs = sar_comm_send(client, &msg, (uint32_t)sizeof(msg));
+        reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
         reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
         break;
     }

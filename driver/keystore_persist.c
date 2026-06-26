@@ -1,5 +1,6 @@
 #include "keystore_persist.h"
 #include "state.h"
+#include "store_io.h"
 
 #include <ntifs.h>
 #include <bcrypt.h>
@@ -42,217 +43,6 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 static NTSTATUS SarKsGenMacKey(_Out_writes_bytes_(SEMANTICS_AR_MAC_SIZE) PUCHAR Key)
 {
     return BCryptGenRandom(NULL, Key, SEMANTICS_AR_MAC_SIZE, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarKsBuildSecurity(_Outptr_ PSECURITY_DESCRIPTOR *Sd, _Outptr_ PACL *Dacl)
-{
-    NTSTATUS status;
-    PSID system = SeExports->SeLocalSystemSid;
-    PSID admins = SeExports->SeAliasAdminsSid;
-    ULONG acl_size;
-    PACL dacl;
-    PSECURITY_DESCRIPTOR sd;
-
-    *Sd = NULL;
-    *Dacl = NULL;
-
-    acl_size = (ULONG)(sizeof(ACL) + 2 * (sizeof(ACCESS_ALLOWED_ACE) - sizeof(ULONG)) +
-                       RtlLengthSid(system) + RtlLengthSid(admins));
-
-    sd = ExAllocatePool2(POOL_FLAG_PAGED, sizeof(SECURITY_DESCRIPTOR), SAR_POOL_TAG_KSSEC);
-    if (sd == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    dacl = ExAllocatePool2(POOL_FLAG_PAGED, acl_size, SAR_POOL_TAG_KSSEC);
-    if (dacl == NULL) {
-        ExFreePoolWithTag(sd, SAR_POOL_TAG_KSSEC);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    status = RtlCreateSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION);
-    if (NT_SUCCESS(status))
-        status = RtlCreateAcl(dacl, acl_size, ACL_REVISION);
-    if (NT_SUCCESS(status))
-        status = RtlAddAccessAllowedAce(dacl, ACL_REVISION, FILE_ALL_ACCESS, system);
-    if (NT_SUCCESS(status))
-        status = RtlAddAccessAllowedAce(dacl, ACL_REVISION, FILE_ALL_ACCESS, admins);
-    if (NT_SUCCESS(status))
-        status = RtlSetDaclSecurityDescriptor(sd, TRUE, dacl, FALSE);
-    if (!NT_SUCCESS(status)) {
-        ExFreePoolWithTag(dacl, SAR_POOL_TAG_KSSEC);
-        ExFreePoolWithTag(sd, SAR_POOL_TAG_KSSEC);
-        return status;
-    }
-
-    *Sd = sd;
-    *Dacl = dacl;
-    return STATUS_SUCCESS;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static VOID SarKsEnsureDir(VOID)
-{
-    PSECURITY_DESCRIPTOR sd = NULL;
-    PACL dacl = NULL;
-    UNICODE_STRING name;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    HANDLE h;
-    NTSTATUS status;
-
-    if (!NT_SUCCESS(SarKsBuildSecurity(&sd, &dacl))) {
-        sd = NULL;
-        dacl = NULL;
-    }
-
-    RtlInitUnicodeString(&name, SAR_KS_DIR);
-    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, sd);
-
-    status = ZwCreateFile(&h, FILE_LIST_DIRECTORY | SYNCHRONIZE, &oa, &iosb, NULL,
-                          FILE_ATTRIBUTE_NORMAL, 0, FILE_OPEN_IF,
-                          FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
-    if (NT_SUCCESS(status))
-        ZwClose(h);
-
-    if (sd != NULL) {
-        ExFreePoolWithTag(dacl, SAR_POOL_TAG_KSSEC);
-        ExFreePoolWithTag(sd, SAR_POOL_TAG_KSSEC);
-    }
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarKsReadAll(_In_ PCWSTR Path, _Outptr_result_maybenull_ PUCHAR *OutBuf,
-                             _Out_ SIZE_T *OutLen)
-{
-    UNICODE_STRING name;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    HANDLE h;
-    NTSTATUS status;
-    FILE_STANDARD_INFORMATION si;
-    PUCHAR buf;
-    SIZE_T len;
-    LARGE_INTEGER off;
-
-    *OutBuf = NULL;
-    *OutLen = 0;
-
-    RtlInitUnicodeString(&name, Path);
-    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    status = ZwCreateFile(&h, FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
-                          FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
-                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
-    if (!NT_SUCCESS(status))
-        return status;
-
-    status = ZwQueryInformationFile(h, &iosb, &si, sizeof(si), FileStandardInformation);
-    if (!NT_SUCCESS(status)) {
-        ZwClose(h);
-        return status;
-    }
-    if (si.EndOfFile.QuadPart == 0) {
-        ZwClose(h);
-        return STATUS_SUCCESS;
-    }
-    if ((ULONG64)si.EndOfFile.QuadPart > SAR_KS_MAX_FILE) {
-        ZwClose(h);
-        return STATUS_FILE_TOO_LARGE;
-    }
-
-    len = (SIZE_T)si.EndOfFile.QuadPart;
-    buf = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, len, SAR_POOL_TAG_KSBUF);
-    if (buf == NULL) {
-        ZwClose(h);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    off.QuadPart = 0;
-    status = ZwReadFile(h, NULL, NULL, NULL, &iosb, buf, (ULONG)len, &off, NULL);
-    ZwClose(h);
-    if (!NT_SUCCESS(status)) {
-        ExFreePoolWithTag(buf, SAR_POOL_TAG_KSBUF);
-        return status;
-    }
-
-    *OutBuf = buf;
-    *OutLen = iosb.Information;
-    return STATUS_SUCCESS;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarKsWriteRaw(_In_ PCWSTR Path, _In_reads_bytes_(Len) const VOID *Buf, _In_ ULONG Len)
-{
-    UNICODE_STRING name;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    HANDLE h;
-    NTSTATUS status;
-
-    RtlInitUnicodeString(&name, Path);
-    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    status = ZwCreateFile(&h, FILE_WRITE_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
-                          FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
-                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
-    if (!NT_SUCCESS(status))
-        return status;
-
-    status = ZwWriteFile(h, NULL, NULL, NULL, &iosb, (PVOID)(ULONG_PTR)Buf, Len, NULL, NULL);
-    if (NT_SUCCESS(status))
-        status = ZwFlushBuffersFile(h, &iosb);
-    ZwClose(h);
-    return status;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarKsRename(_In_ PCWSTR Tmp, _In_ PCWSTR Final)
-{
-    UNICODE_STRING tmp_name;
-    UNICODE_STRING final_name;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    HANDLE h;
-    NTSTATUS status;
-    PFILE_RENAME_INFORMATION info;
-    ULONG info_len;
-
-    RtlInitUnicodeString(&tmp_name, Tmp);
-    RtlInitUnicodeString(&final_name, Final);
-
-    InitializeObjectAttributes(&oa, &tmp_name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-    status = ZwCreateFile(&h, DELETE | SYNCHRONIZE, &oa, &iosb, NULL, FILE_ATTRIBUTE_NORMAL,
-                          0, FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
-    if (!NT_SUCCESS(status))
-        return status;
-
-    info_len = (ULONG)(FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) + final_name.Length);
-    info = (PFILE_RENAME_INFORMATION)ExAllocatePool2(POOL_FLAG_PAGED, info_len, SAR_POOL_TAG_KSBUF);
-    if (info == NULL) {
-        ZwClose(h);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    info->ReplaceIfExists = TRUE;
-    info->RootDirectory = NULL;
-    info->FileNameLength = final_name.Length;
-    RtlCopyMemory(info->FileName, final_name.Buffer, final_name.Length);
-
-    status = ZwSetInformationFile(h, &iosb, info, info_len, FileRenameInformation);
-
-    ExFreePoolWithTag(info, SAR_POOL_TAG_KSBUF);
-    ZwClose(h);
-    return status;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarKsWriteAtomic(_In_ PCWSTR Tmp, _In_ PCWSTR Final,
-                                 _In_reads_bytes_(Len) const VOID *Buf, _In_ ULONG Len)
-{
-    NTSTATUS status = SarKsWriteRaw(Tmp, Buf, Len);
-    if (!NT_SUCCESS(status))
-        return status;
-    return SarKsRename(Tmp, Final);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -300,7 +90,8 @@ static VOID SarKsPersist(_Inout_ PSAR_KEYSTORE Ks)
         return;
     }
 
-    if (!NT_SUCCESS(SarKsWriteAtomic(SAR_KS_TMP, SAR_KS_FILE, buf, (ULONG)out_len))) {
+    if (!NT_SUCCESS(SarStoreWriteAtomic(SAR_KS_TMP, SAR_KS_FILE, buf, (ULONG)out_len,
+                                        SAR_POOL_TAG_KSBUF))) {
         ExFreePoolWithTag(buf, SAR_POOL_TAG_KSBUF);
         InterlockedExchange(&Ks->dirty, 1);
         return;
@@ -311,7 +102,7 @@ static VOID SarKsPersist(_Inout_ PSAR_KEYSTORE Ks)
     Ks->anchor = na;
 
     SarKsFillBlob(&blob, Ks->mac_key, &na);
-    if (!NT_SUCCESS(SarKsWriteAtomic(SAR_KS_KEYTMP, SAR_KS_KEYFILE, &blob, sizeof(blob))))
+    if (!NT_SUCCESS(SarStoreWriteAtomic(SAR_KS_KEYTMP, SAR_KS_KEYFILE, &blob, sizeof(blob), SAR_POOL_TAG_KSBUF)))
         InterlockedExchange(&Ks->dirty, 1);
     RtlSecureZeroMemory(&blob, sizeof(blob));
 
@@ -404,9 +195,9 @@ VOID SarKeystoreLoad(_Inout_ PSAR_KEYSTORE Ks)
     HANDLE th;
     OBJECT_ATTRIBUTES toa;
 
-    SarKsEnsureDir();
+    SarStoreEnsureDir(SAR_KS_DIR, SAR_POOL_TAG_KSSEC);
 
-    status = SarKsReadAll(SAR_KS_KEYFILE, &kbuf, &klen);
+    status = SarStoreReadAll(SAR_KS_KEYFILE, SAR_POOL_TAG_KSBUF, SAR_KS_MAX_FILE, &kbuf, &klen);
     if (NT_SUCCESS(status) && kbuf != NULL && klen == sizeof(SAR_MACKEY_BLOB)) {
         PSAR_MACKEY_BLOB b = (PSAR_MACKEY_BLOB)kbuf;
         if (b->magic == SAR_MACKEY_MAGIC && b->version == SAR_MACKEY_VERSION) {
@@ -433,12 +224,12 @@ VOID SarKeystoreLoad(_Inout_ PSAR_KEYSTORE Ks)
         Ks->have_key = TRUE;
 
         SarKsFillBlob(&blob, Ks->mac_key, &Ks->anchor);
-        if (!NT_SUCCESS(SarKsWriteAtomic(SAR_KS_KEYTMP, SAR_KS_KEYFILE, &blob, sizeof(blob))))
+        if (!NT_SUCCESS(SarStoreWriteAtomic(SAR_KS_KEYTMP, SAR_KS_KEYFILE, &blob, sizeof(blob), SAR_POOL_TAG_KSBUF)))
             persist_ok = FALSE;
         RtlSecureZeroMemory(&blob, sizeof(blob));
     }
 
-    status = SarKsReadAll(SAR_KS_FILE, &fbuf, &flen);
+    status = SarStoreReadAll(SAR_KS_FILE, SAR_POOL_TAG_KSBUF, SAR_KS_MAX_FILE, &fbuf, &flen);
     if (status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND) {
         fbuf = NULL;
         flen = 0;
@@ -457,7 +248,7 @@ VOID SarKeystoreLoad(_Inout_ PSAR_KEYSTORE Ks)
         Ks->anchor = aout;
         if (res.anchor_advanced && persist_ok) {
             SarKsFillBlob(&blob, Ks->mac_key, &aout);
-            SarKsWriteAtomic(SAR_KS_KEYTMP, SAR_KS_KEYFILE, &blob, sizeof(blob));
+            SarStoreWriteAtomic(SAR_KS_KEYTMP, SAR_KS_KEYFILE, &blob, sizeof(blob), SAR_POOL_TAG_KSBUF);
             RtlSecureZeroMemory(&blob, sizeof(blob));
         }
     } else if (ls == SAR_KSM_EMPTY) {

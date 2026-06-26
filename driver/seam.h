@@ -6,6 +6,7 @@
 #include "driver.h"
 
 #define SAR_STREAMCTX_FLAG_SECTION_DIRTY 0x00000001u
+#define SAR_STREAMCTX_FLAG_OWN_STORE     0x00000002u
 
 typedef struct _SAR_STREAM_CONTEXT {
     volatile LONG flags;

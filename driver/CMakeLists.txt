@@ -14,6 +14,8 @@ set(SAR_DRIVER_SOURCES
     seam.c
     capture.c
     keystore_persist.c
+    store_io.c
+    preserve.c
     commport.c
     recovery.c
     state.c
@@ -30,6 +32,7 @@ set(SAR_DRIVER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/gate.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/keystore.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/keystore_mgr.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/preserve.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/recover.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/src/sha256.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../engine/ciphers/aes.c
@@ -65,7 +68,8 @@ target_compile_definitions(semantics_ar_driver PRIVATE
 target_link_libraries(semantics_ar_driver PRIVATE
     fltMgr.lib
     ntoskrnl.lib
-    ksecdd.lib)
+    ksecdd.lib
+    cng.lib)
 
 set_target_properties(semantics_ar_driver PROPERTIES
     LINK_FLAGS "/DRIVER /INTEGRITYCHECK /SUBSYSTEM:NATIVE /ENTRY:DriverEntry /NODEFAULTLIB")

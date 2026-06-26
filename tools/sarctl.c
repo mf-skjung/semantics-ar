@@ -109,6 +109,73 @@ static int cmd_recover(const char *keyhex, const char *path)
     return reply.result == 0 ? 0 : 3;
 }
 
+static int cmd_preserve_list(void)
+{
+    uint32_t start = 0, total = 0;
+
+    do {
+        sar_control_command_t cmd;
+        sar_control_reply_t reply;
+        uint32_t i;
+
+        memset(&cmd, 0, sizeof cmd);
+        cmd.op = SAR_CTL_OP_PRESERVE_LIST;
+        cmd.mode = start;
+        if (send_command(&cmd, &reply) != 0)
+            return 1;
+
+        total = reply.total;
+        if (reply.returned == 0)
+            break;
+        for (i = 0; i < reply.returned; i++) {
+            const sar_preserve_list_entry_t *e = &reply.preserve_entries[i];
+            wchar_t path[SEMANTICS_AR_PROTO_PATH_MAX];
+            uint32_t j = 0;
+            for (; j < SEMANTICS_AR_PROTO_PATH_MAX && e->provenance_path[j] != 0; j++)
+                path[j] = (wchar_t)e->provenance_path[j];
+            path[j] = 0;
+            wprintf(L"[%u] off=%llu len=%llu size=%llu  %ls\n", start + i,
+                    (unsigned long long)e->offset, (unsigned long long)e->length,
+                    (unsigned long long)e->size, path);
+        }
+        start += reply.returned;
+    } while (start < total);
+
+    wprintf(L"%u preserved region(s)\n", total);
+    return 0;
+}
+
+static int cmd_preserve_recover(const char *path, const char *off, const char *len)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = SAR_CTL_OP_PRESERVE_RECOVER;
+    put_path(path, cmd.image_path);
+    cmd.arg0 = _strtoui64(off, NULL, 10);
+    cmd.arg1 = _strtoui64(len, NULL, 10);
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    wprintf(L"preserve-recover result=%d\n", reply.result);
+    return reply.result == 0 ? 0 : 3;
+}
+
+static int cmd_budget(const char *retention_sec, const char *capacity_mb)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = SAR_CTL_OP_SET_BUDGET;
+    cmd.arg0 = _strtoui64(retention_sec, NULL, 10) * 10000000ull;
+    cmd.arg1 = _strtoui64(capacity_mb, NULL, 10) * 1024ull * 1024ull;
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    wprintf(L"budget result=%d\n", reply.result);
+    return reply.result == 0 ? 0 : 3;
+}
+
 static int cmd_mode(const char *m)
 {
     sar_control_command_t cmd;
@@ -138,8 +205,16 @@ int main(int argc, char **argv)
         return cmd_recover(argv[2], argv[3]);
     if (argc == 3 && strcmp(argv[1], "mode") == 0)
         return cmd_mode(argv[2]);
+    if (argc >= 2 && strcmp(argv[1], "preserve-list") == 0)
+        return cmd_preserve_list();
+    if (argc == 5 && strcmp(argv[1], "preserve-recover") == 0)
+        return cmd_preserve_recover(argv[2], argv[3], argv[4]);
+    if (argc == 4 && strcmp(argv[1], "budget") == 0)
+        return cmd_budget(argv[2], argv[3]);
 
     fwprintf(stderr,
-             L"usage: sarctl list | recover <key_id-hex> <path> | mode <audit|enforce>\n");
+             L"usage: sarctl list | recover <key_id-hex> <path> | mode <audit|enforce>\n"
+             L"       | preserve-list | preserve-recover <path> <offset> <length>\n"
+             L"       | budget <retention-seconds> <capacity-MB>\n");
     return 2;
 }

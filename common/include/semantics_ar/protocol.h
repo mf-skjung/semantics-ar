@@ -20,6 +20,11 @@
 #define SEMANTICS_AR_MSG_STATUS_REPLY     10
 #define SEMANTICS_AR_MSG_CATALOG_QUERY    11
 #define SEMANTICS_AR_MSG_CATALOG_REPLY    12
+#define SEMANTICS_AR_MSG_PRESERVE_QUERY   13
+#define SEMANTICS_AR_MSG_PRESERVE_REPLY   14
+#define SEMANTICS_AR_MSG_PRESERVE_RECOVER 15
+#define SEMANTICS_AR_MSG_PRESERVE_RESULT  16
+#define SEMANTICS_AR_MSG_SET_BUDGET       17
 
 #define SEMANTICS_AR_MODE_AUDIT   0
 #define SEMANTICS_AR_MODE_ENFORCE 1
@@ -116,6 +121,41 @@ typedef struct {
     uint32_t valid;
     semantics_ar_catalog_entry_t entry;
 } semantics_ar_catalog_reply_t;
+
+typedef struct {
+    uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint64_t provenance_offset;
+    uint64_t provenance_length;
+    uint64_t capture_time;
+    uint64_t payload_length;
+} semantics_ar_preserve_entry_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint32_t index;
+} semantics_ar_preserve_query_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    int32_t  result;
+    uint32_t total;
+    uint32_t index;
+    uint32_t valid;
+    semantics_ar_preserve_entry_t entry;
+} semantics_ar_preserve_reply_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint16_t target_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint64_t offset;
+    uint64_t length;
+} semantics_ar_preserve_recover_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint64_t retention_100ns;
+    uint64_t capacity_bytes;
+} semantics_ar_set_budget_t;
 
 #pragma pack(pop)
 

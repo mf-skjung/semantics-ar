@@ -1,10 +1,11 @@
 add_executable(test_engine test_engine.c)
 add_executable(test_keystore test_keystore.c)
 add_executable(test_keystore_mgr test_keystore_mgr.c)
+add_executable(test_preserve test_preserve.c)
 add_executable(test_gate test_gate.c)
 add_executable(test_schedule test_schedule.c)
 
-foreach(t test_engine test_keystore test_keystore_mgr test_gate test_schedule)
+foreach(t test_engine test_keystore test_keystore_mgr test_preserve test_gate test_schedule)
     target_link_libraries(${t} PRIVATE semantics_ar_engine)
     set_target_properties(${t} PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
     if(MSVC)
