@@ -67,7 +67,7 @@ real; constraint satisfaction is mandatory.
 
 ### 0.5 No runtime-tunable detection; a resource envelope the user may own
 Every value that governs **detection or conviction** — the gate threshold, the cipher
-battery, the capture cadence, what counts as a destructive write — is a recorded design
+battery, the capture trigger, what counts as a destructive write — is a recorded design
 decision derived now, not a knob exposed to runtime configuration. Where such a value
 sits inside a derived safe band, the band and its safety are [DERIVED] and the chosen
 point is [DESIGN]; both are recorded here, neither is deferred to "measure later."
@@ -192,13 +192,14 @@ that write. Its residence is the writing process's committed-private memory — 
 case a heap key object (e.g. CNG's `BCryptGenerateSymmetricKey` object) that holds the expanded
 key schedule and is reused across writes — not its stack and not its registers, which hold the
 key only transiently. A process that performs a capture-eligible destructive write is therefore a
-capture target for as long as it remains an active destructive writer: the write names the process
-to read, and because the key is resident across the encryption window — not only at the instant of
-one write, and sometimes only in the interval between writes — the Oracle reads that memory both at
-the write and again, on a behavior-paced cadence, while the process keeps destroying. The writes
-tell the Oracle which process, and across what span, to read.
+capture target at that write: the write names the process to read, and because the key is resident
+in committed-private memory at the moment the write executes, the Oracle reads that memory once —
+deferred from the write — while the key is still live. The dominant case (a heap key object reused
+across writes) means the key is resident at every write in the campaign; a key zeroed before the
+deferred snapshot can reach it falls to the irreducible floor (VIII.2). The write tells the Oracle
+which process to read; each capture-eligible write is an independent capture opportunity.
 
-**[INVARIANT] II.3.2 — The memory capture runs off the IRP, on a behavior-paced cadence; nothing scans the writer's memory from the write path.**
+**[INVARIANT] II.3.2 — The memory capture runs off the IRP; nothing scans the writer's memory from the write path.**
 Enumerating or reading the writer's address space from inside the filesystem write IRP can
 re-enter the filesystem and the memory manager and deadlock; the capture must never do it
 there. The permitted shape:
@@ -212,37 +213,26 @@ there. The permitted shape:
    are swept within the same bounded budget so a key object the allocator placed outside the
    enumerable heaps is still covered. This runs off the IRP, holding no filesystem resource, so it
    cannot deadlock against the write.
-2. **Periodic re-sample of the active writer.** A process whose destructive write was
-   capture-eligible is *flagged* — a behavioral mark derived from the write itself, never an
-   identity (VI.1) — and while it remains an active destructive writer a bounded-rate worker
-   periodically re-attaches and re-snapshots its committed-private memory, off the IRP under the
-   same exit synchronization. The cadence is paced by the writer's own destruction — sampled per a
-   span of bytes destroyed, so it scales with attack throughput — and is revisited on a bounded
-   wall-clock interval, so a key that lives only in the interval between writes (computed, used, and
-   about to be zeroized) is still read. Each re-sample is an independent capture opportunity for
-   whatever key is resident then; conviction remains the forward proof (II.2.1) against a recent
-   (`P`,`C`) the writer has already produced, never key-in-hand. The snapshot at the write is the
-   prompt first reading; the re-sample extends the reading across the residence of the key.
-3. **Analysis on the frozen bytes.** The structural key-schedule scan, the cipher battery, and
+2. **Analysis on the frozen bytes.** The structural key-schedule scan, the cipher battery, and
    the forward (`P`,`C`) proof run on each copied buffer — never on live process memory and never
    on the IRP — so destruction of the live key after a snapshot cannot defeat what that snapshot
    already holds.
-4. **Optional synchronous register grab.** Only the register file (XMM / `FXSAVE`) — kernel-saved,
+3. **Optional synchronous register grab.** Only the register file (XMM / `FXSAVE`) — kernel-saved,
    fault-free, no memory enumeration, no re-entrancy — may be taken during a short synchronous
    hold; it resists key destruction and process exit but is low-yield because registers are
    transient.
-5. **The cipher-verification battery** (AES family incl. XTS, plus ChaCha/Salsa, 3DES, SM4,
+4. **The cipher-verification battery** (AES family incl. XTS, plus ChaCha/Salsa, 3DES, SM4,
    Camellia, ARIA, SEED, etc.) is offline on the snapshot and the in-message plaintext/ciphertext
    sample. It needs no live process.
 
 > Because every snapshot is a prompt off-IRP copy and the analysis runs on frozen bytes, no timing,
-> deadlock, or scan-fault can reach the IRP. The cost is the honest one: the write-time snapshot and
-> the behavior-paced re-sample together hold the key in view for as long as it is resident, so a key
-> reused or held across the encryption window is caught even when no single write coincides with its
-> residence; a key resident only for a window shorter than the sampler can reach — computed, used,
-> and zeroized between writes faster than any snapshot in that window, or the process exited before
-> it — is not captured by the memory path (VIII.2). The cadence and the register grab shrink that
-> window; what remains is the confirmed limit.
+> deadlock, or scan-fault can reach the IRP. The cost is the honest one: the deferred snapshot
+> catches the key if it is still resident when the worker attaches — which is the dominant case for
+> a heap key object reused across writes, since the key persists in committed-private memory across
+> the encryption window. A key zeroed before the deferred snapshot can reach it — computed, used,
+> and destroyed faster than the worker can attach, or the process exited before the snapshot — is
+> not captured by the memory path (VIII.2). The register grab provides a secondary channel for keys
+> transiently in registers; what remains beyond both is the confirmed limit.
 
 ### II.4 Conviction-rate levers
 **[DECISION] II.4.1 — Structural location and round-key inversion.**
@@ -262,18 +252,15 @@ schedule) — are indistinguishable from random in memory and are located only b
 `(P,C)` trial over the snapshot; a key whose location falls outside that bounded trial
 reduces to the confirmed limit (VIII.2).
 
-**[DECISION] II.4.2 — cumulative-N over writes and samples.**
-Each capture-eligible write is an independent capture opportunity for the key it uses, and so is
-each periodic re-sample of the active writer (II.3.2) taken while that key is resident. For a
+**[DECISION] II.4.2 — cumulative-N over writes.**
+Each capture-eligible write is an independent capture opportunity for the key it uses. For a
 single-opportunity capture probability `p > 0`, the chance of at least one capture across `N`
 opportunities under that key is `1 − (1−p)^N → 1` rapidly. The relevant `N` is **per key** and it
-accrues along two axes — the capture-eligible writes under the key, and the behavior-paced samples
-taken across the span the key is resident. Where a campaign reuses one key across many files, `N` is
-the whole campaign's writes and samples and capture is near-certain; under per-file keying — the
-dominant hybrid-envelope shape, where each file gets a fresh symmetric key wrapped by the attacker's
-asymmetric key — `N` is the capture-eligible writes of *that file* plus the samples taken while that
-file's key is resident, so a file whose key is written by very few writes and resident only briefly
-has correspondingly fewer chances.
+accrues across the capture-eligible writes under the key. Where a campaign reuses one key across
+many files, `N` is the whole campaign's writes and capture is near-certain; under per-file keying —
+the dominant hybrid-envelope shape, where each file gets a fresh symmetric key wrapped by the
+attacker's asymmetric key — `N` is the capture-eligible writes of *that file*, so a file encrypted
+by very few writes has correspondingly fewer chances.
 
 > **cumulative-N is load-bearing and precise:** it is *not* the accumulation of backups.
 > It is the accumulation of
@@ -483,8 +470,7 @@ no true original to hold; that is the pre-observation edge, recorded, not a fals
 
 **[DECISION] III.5.4 — A captured key discards the original it would have recovered.**
 The preserved original hedges against the key being missed; the moment a key that recovers its region
-enters the keystore — at the convicting write, at a periodic re-sample, or via a sibling region under
-a reused key (II.4.2) — the hedge is spent and the held original for that region is discarded.
+enters the keystore — at a convicting write or via a sibling region under a reused key (II.4.2) — the hedge is spent and the held original for that region is discarded.
 Reconciliation is driven by keystore append: each new record cancels the preserved originals its
 (file, region) now covers. Preservation therefore consumes its bounded resource only on the residue
 the Oracle never caught, and where the Oracle succeeds the store trends to empty.
@@ -738,12 +724,11 @@ is **no whitelist**, i.e. universal capture.
 **[INVARIANT] VI.1.1.** Key capture never depends on who issued a write. The requestor
 identity available at a write IRP is unreliable: under IRP pending by a higher filter,
 the callback may run in a system-worker-thread context. Therefore every destructive,
-T-passing write is a capture candidate regardless of requestor, and the set of active
-destructive writers the Oracle periodically re-samples (II.3.2) is likewise behavioral —
-derived from the writes themselves, never from requestor identity — so it only ever *adds*
-capture and never withholds it, and where an attacker splits the work across many short-lived
-processes every one that issues such a write is flagged and re-sampled. This is not a
-limitation to work around; it is why capture is anchored to behavior, not identity.
+T-passing write is a capture candidate regardless of requestor, and the capture trigger is
+behavioral — derived from the writes themselves, never from requestor identity — so it only
+ever *adds* capture and never withholds it, and where an attacker splits the work across many
+short-lived processes every one that issues such a write triggers a capture snapshot. This is
+not a limitation to work around; it is why capture is anchored to behavior, not identity.
 
 ### VI.2 Identity is used in exactly one place
 **[DECISION] VI.2.1.** The whitelist (V.2) is the only use of identity, it is
@@ -947,20 +932,18 @@ within the window and reduces to this limit only beyond it. They are **not** new
   `(P,C)` trial over the snapshot; a key whose memory location falls outside that budget
   on every capture-eligible write is a miss. The structural scan removes this cost for the
   AES-schedule case but not for structureless keys.
-- **Key resident only shorter than the sampler can reach**: the memory capture is a prompt
-  off-IRP snapshot at the write plus a behavior-paced re-sample of the active writer (II.3.2),
-  never an in-IRP scan; together they hold a key in view for as long as it is resident, so a key
-  reused or held across the encryption window is caught even when it is freed before any single
-  write's snapshot — and under ENFORCE one such capture is enough to convict and block, bounding
-  the damage of a pre-write-zeroizing attacker. What still reduces here: a key computed, used, and
-  zeroized between writes within a window shorter than any sample in it; and, distinctly, a
-  *per-file* key under pre-write zeroization — because conviction is the forward proof and that
-  key's only matching (`P`,`C`) is its own write, at which the key is already gone (a sibling
-  file's (`P`,`C`) is a different key), so the re-sample, even when it sees the key resident,
-  cannot convict it. A key *reused* across files escapes this, since any sibling's (`P`,`C`)
-  convicts it; the immediate per-file zeroize of a tiny file does not. The behavior-paced cadence
-  and the synchronous register grab shrink the window; whatever still falls outside it is held by
-  preservation (III.5) for the window, and reduces here only beyond it.
+- **Key zeroed before the deferred snapshot**: the memory capture is a prompt off-IRP snapshot
+  deferred from each capture-eligible write (II.3.2), never an in-IRP scan. A key reused or held
+  across multiple writes is caught at any write whose deferred snapshot finds it still resident —
+  and under ENFORCE one such capture is enough to convict and block, bounding the damage. What
+  still reduces here: a key computed, used, and zeroized before the deferred worker can attach;
+  and, distinctly, a *per-file* key under immediate zeroization — because conviction is the
+  forward proof and that key's only matching (`P`,`C`) is its own write, at which the key is
+  already gone (a sibling file's (`P`,`C`) is a different key). A key *reused* across files
+  escapes this, since any sibling's (`P`,`C`) convicts it; the immediate per-file zeroize of a
+  tiny file does not. The synchronous register grab provides a secondary channel; whatever still
+  falls outside both is held by preservation (III.5) for the window, and reduces here only
+  beyond it.
 - **The held original could not be copied, or its store was destroyed**: a destruction whose
   original was never readable through the filesystem (a region the originator did not read and
   whose best-effort separate-object copy lost the race, III.5.2), one whose held copy aged or was
@@ -1040,18 +1023,14 @@ An implementation is constitutional iff all hold.
       evidence (I.1).
 - [ ] Conviction is forward-only (`Encrypt_K(destroyed original) == written`); the
       reverse never convicts; the system cannot convict its own recovery (II.2).
-- [ ] The Oracle anchors capture to the writer but reads its memory off the IRP, on a
-      behavior-paced cadence: a prompt deferred worker attaches to the still-live writer (under
-      exit synchronization) and copies bounded resident committed-private regions (heaps first,
-      then the rest), and while the process stays an active destructive writer a bounded-rate
-      worker periodically re-samples it (progress-paced + wall-clock revisit) so a key resident
-      between writes is still read; the structural scan, cipher battery, and forward proof run on
-      each frozen snapshot; nothing enumerates or scans the writer's memory from inside the write
-      IRP (II.3).
+- [ ] The Oracle anchors capture to the writer but reads its memory off the IRP: a prompt
+      deferred worker attaches to the still-live writer (under exit synchronization) and copies
+      bounded resident committed-private regions (heaps first, then the rest) into a frozen
+      snapshot; the structural scan, cipher battery, and forward proof run on each frozen
+      snapshot; nothing enumerates or scans the writer's memory from inside the write IRP (II.3).
 - [ ] Structural key-schedule location and round-key inversion are implemented; conviction
       stays the forward proof, never key-in-hand; cumulative-N is per-key capture-opportunity
-      over both writes and resident-window samples + keystore accumulation, never backup
-      accumulation (II.4).
+      over writes + keystore accumulation, never backup accumulation (II.4).
 - [ ] The keystore holds one record per encrypted region — (key, file, {offset,length})
       with that region's parameters and verification tag; a key's regions (across reused
       files or scattered within one file by partial encryption) each keep their own

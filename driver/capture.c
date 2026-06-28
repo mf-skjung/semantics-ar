@@ -12,22 +12,6 @@
 
 extern PSAR_STATE g_sar_state;
 
-typedef struct _SAR_FLAG_SLOT {
-    PEPROCESS process;
-    UCHAR pre_image[SAR_CAPTURE_BUFFER_BYTES];
-    ULONG pre_image_len;
-    UCHAR written[SAR_CAPTURE_BUFFER_BYTES];
-    ULONG written_len;
-    UINT64 file_offset;
-    UINT64 provenance_offset;
-    ULONG write_length;
-    UINT16 provenance_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
-    volatile LONG64 progress_bytes;
-    LARGE_INTEGER last_sample_time;
-    LARGE_INTEGER last_write_time;
-    LARGE_INTEGER last_pc_refresh;
-} SAR_FLAG_SLOT, *PSAR_FLAG_SLOT;
-
 struct _SAR_CAPTURE_CTX {
     PFLT_FILTER filter;
 
@@ -45,16 +29,9 @@ struct _SAR_CAPTURE_CTX {
     volatile LONG64 pressure_drops;
     volatile LONG64 preload_drops;
 
-    EX_PUSH_LOCK flag_lock;
-    PSAR_FLAG_SLOT flags;
-    ULONG flag_count;
-
-    PVOID sampler_thread;
-    KEVENT sampler_wake;
-    volatile LONG sampler_stop;
-    PUCHAR sampler_buf;
-    sar_gate_map_t *sampler_map;
-    sar_capture_result_t *sampler_result;
+    EX_PUSH_LOCK scanned_lock;
+    PEPROCESS *scanned;
+    ULONG scanned_count;
 };
 
 typedef struct _SAR_CAPTURE_WORK {
@@ -405,8 +382,22 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
             SarCaptureBlockOriginator(ctx, work->originator_process);
         }
         if (gate.candidate) {
-            work->scan = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
-                                                 SAR_POOL_TAG_SNAPSHOT);
+            BOOLEAN already_scanned = FALSE;
+            ULONG si;
+
+            FltAcquirePushLockShared(&ctx->scanned_lock);
+            for (si = 0; si < ctx->scanned_count; si++) {
+                if (ctx->scanned[si] == work->originator_process) {
+                    already_scanned = TRUE;
+                    break;
+                }
+            }
+            FltReleasePushLock(&ctx->scanned_lock);
+
+            if (!already_scanned) {
+                work->scan = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
+                                                     SAR_POOL_TAG_SNAPSHOT);
+            }
         }
         if (work->scan != NULL) {
             HANDLE hproc;
@@ -428,6 +419,23 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
                 }
                 ZwClose(hproc);
             }
+
+            FltAcquirePushLockExclusive(&ctx->scanned_lock);
+            {
+                BOOLEAN found = FALSE;
+                for (ULONG si = 0; si < ctx->scanned_count; si++) {
+                    if (ctx->scanned[si] == work->originator_process) {
+                        found = TRUE;
+                        break;
+                    }
+                }
+                if (!found && ctx->scanned_count < SAR_SCANNED_CAPACITY) {
+                    ObReferenceObject(work->originator_process);
+                    ctx->scanned[ctx->scanned_count] = work->originator_process;
+                    ctx->scanned_count++;
+                }
+            }
+            FltReleasePushLock(&ctx->scanned_lock);
         }
 
         req.plaintext = work->pre_image;
@@ -497,262 +505,6 @@ static BOOLEAN SarCaptureProvenanceIsOwn(_In_ const UINT16 *Path)
 }
 
 _IRQL_requires_max_(APC_LEVEL)
-static VOID SarSamplerNote(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PSAR_WRITE_SEAM_REQUEST Request)
-{
-    LARGE_INTEGER now;
-    PSAR_FLAG_SLOT slot = NULL;
-    ULONG i;
-    BOOLEAN found = FALSE;
-    BOOLEAN do_fill = FALSE;
-    BOOLEAN kick = FALSE;
-
-    KeQuerySystemTime(&now);
-
-    FltAcquirePushLockShared(&Ctx->flag_lock);
-    for (i = 0; i < Ctx->flag_count; i++) {
-        if (Ctx->flags[i].process == Request->originator_process) {
-            slot = &Ctx->flags[i];
-            InterlockedAdd64(&slot->progress_bytes, (LONG64)Request->write_length);
-            slot->last_write_time = now;
-            if (now.QuadPart - slot->last_pc_refresh.QuadPart >= SAR_SAMPLER_PCREFRESH_100NS)
-                do_fill = TRUE;
-            if (slot->progress_bytes >= (LONG64)SAR_SAMPLER_CADENCE_BYTES)
-                kick = TRUE;
-            found = TRUE;
-            break;
-        }
-    }
-    FltReleasePushLock(&Ctx->flag_lock);
-
-    if (!found) {
-        FltAcquirePushLockExclusive(&Ctx->flag_lock);
-        for (i = 0; i < Ctx->flag_count; i++) {
-            if (Ctx->flags[i].process == Request->originator_process) {
-                slot = &Ctx->flags[i];
-                InterlockedAdd64(&slot->progress_bytes, (LONG64)Request->write_length);
-                slot->last_write_time = now;
-                found = TRUE;
-                do_fill = TRUE;
-                break;
-            }
-        }
-        if (!found && Ctx->flag_count < SAR_SAMPLER_CAPACITY) {
-            slot = &Ctx->flags[Ctx->flag_count];
-            RtlZeroMemory(slot, sizeof(*slot));
-            ObReferenceObject(Request->originator_process);
-            slot->process = Request->originator_process;
-            slot->progress_bytes = (LONG64)Request->write_length;
-            slot->last_write_time = now;
-            slot->last_sample_time = now;
-            Ctx->flag_count++;
-            found = TRUE;
-            do_fill = TRUE;
-        }
-        FltReleasePushLock(&Ctx->flag_lock);
-    }
-
-    if (found && do_fill && KeGetCurrentIrql() == PASSIVE_LEVEL) {
-        UINT16 prov[SEMANTICS_AR_PROVENANCE_PATH_MAX];
-        UCHAR wr[SAR_CAPTURE_BUFFER_BYTES];
-        ULONG wr_len;
-        ULONG pre_len;
-
-        SarCaptureResolveProvenance(Request->data, prov);
-        wr_len = SarCaptureCopyWritten(Request->data, wr, SAR_CAPTURE_BUFFER_BYTES);
-        pre_len = Request->pre_image_len < SAR_CAPTURE_BUFFER_BYTES ?
-                  Request->pre_image_len : SAR_CAPTURE_BUFFER_BYTES;
-
-        FltAcquirePushLockExclusive(&Ctx->flag_lock);
-        slot = NULL;
-        for (i = 0; i < Ctx->flag_count; i++) {
-            if (Ctx->flags[i].process == Request->originator_process) {
-                slot = &Ctx->flags[i];
-                break;
-            }
-        }
-        if (slot != NULL) {
-            RtlCopyMemory(slot->written, wr, wr_len);
-            slot->written_len = wr_len;
-            RtlCopyMemory(slot->pre_image, Request->pre_image, pre_len);
-            slot->pre_image_len = pre_len;
-            slot->file_offset = (UINT64)Request->write_offset.QuadPart;
-            slot->provenance_offset = slot->file_offset;
-            slot->write_length = Request->write_length;
-            RtlCopyMemory(slot->provenance_path, prov, sizeof(prov));
-            slot->last_pc_refresh = now;
-        }
-        FltReleasePushLock(&Ctx->flag_lock);
-    }
-
-    if (kick)
-        KeSetEvent(&Ctx->sampler_wake, IO_NO_INCREMENT, FALSE);
-}
-
-_IRQL_requires_(PASSIVE_LEVEL)
-static VOID SarSamplerSampleOne(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PEPROCESS Process,
-                                _In_ PSAR_FLAG_SLOT Md)
-{
-    HANDLE hproc;
-    ULONG scan_len = 0;
-
-    if (!NT_SUCCESS(ObOpenObjectByPointer(Process, OBJ_KERNEL_HANDLE, NULL, 0, *PsProcessType,
-                                          KernelMode, &hproc)))
-        return;
-
-    if (NT_SUCCESS(PsAcquireProcessExitSynchronization(Process))) {
-        KAPC_STATE apc;
-        SAR_PROCESS_BASIC_INFORMATION pbi;
-        ULONG pret = 0;
-
-        KeStackAttachProcess(Process, &apc);
-        if (NT_SUCCESS(ZwQueryInformationProcess(hproc, ProcessBasicInformation, &pbi,
-                                                 sizeof(pbi), &pret)) &&
-            pbi.PebBaseAddress != NULL)
-            scan_len = SarCaptureSnapshotProcess(hproc, pbi.PebBaseAddress, Ctx->sampler_buf,
-                                                 SAR_CAPTURE_HEAP_BUDGET);
-        KeUnstackDetachProcess(&apc);
-        PsReleaseProcessExitSynchronization(Process);
-    }
-    ZwClose(hproc);
-
-    if (scan_len > 0) {
-        sar_capture_request_t req;
-
-        req.plaintext = Md->pre_image;
-        req.ciphertext = Md->written;
-        req.sample_size = Md->pre_image_len < Md->written_len ? Md->pre_image_len : Md->written_len;
-        req.file_offset = Md->file_offset;
-        req.candidates = NULL;
-        req.candidate_count = 0;
-        req.scan_buffer = Ctx->sampler_buf;
-        req.scan_length = scan_len;
-        req.provenance_path = Md->provenance_path;
-        req.provenance_offset = Md->provenance_offset;
-        req.provenance_length = Md->write_length;
-
-        if (sar_capture_run(&req, Ctx->sampler_map, SarKeystoreMacKey(g_sar.keystore),
-                            Ctx->sampler_result) == SAR_CAPTURE_CONVICTED)
-            SarCaptureCommit(Ctx, Ctx->sampler_result, Process);
-
-        RtlSecureZeroMemory(Ctx->sampler_result, sizeof(*Ctx->sampler_result));
-        RtlSecureZeroMemory(Ctx->sampler_buf, scan_len);
-    }
-}
-
-_IRQL_requires_(PASSIVE_LEVEL)
-static VOID SarSamplerSweep(_In_ PSAR_CAPTURE_CTX Ctx)
-{
-    for (;;) {
-        LARGE_INTEGER now;
-        SAR_FLAG_SLOT pick;
-        PEPROCESS proc = NULL;
-        ULONG i;
-
-        KeQuerySystemTime(&now);
-
-        FltAcquirePushLockExclusive(&Ctx->flag_lock);
-
-        i = 0;
-        while (i < Ctx->flag_count) {
-            if (now.QuadPart - Ctx->flags[i].last_write_time.QuadPart >= SAR_SAMPLER_QUIESCE_100NS) {
-                ObDereferenceObject(Ctx->flags[i].process);
-                Ctx->flags[i] = Ctx->flags[Ctx->flag_count - 1];
-                Ctx->flag_count--;
-                continue;
-            }
-            i++;
-        }
-
-        for (i = 0; i < Ctx->flag_count; i++) {
-            PSAR_FLAG_SLOT s = &Ctx->flags[i];
-            BOOLEAN due = (s->progress_bytes >= (LONG64)SAR_SAMPLER_CADENCE_BYTES) ||
-                          (now.QuadPart - s->last_sample_time.QuadPart >= SAR_SAMPLER_REVISIT_100NS);
-
-            if (!due)
-                continue;
-
-            s->last_sample_time = now;
-            s->progress_bytes = 0;
-
-            if (s->pre_image_len >= SAR_CANDIDATE_SIZE && s->written_len >= SAR_CANDIDATE_SIZE) {
-                ObReferenceObject(s->process);
-                proc = s->process;
-                pick = *s;
-                break;
-            }
-        }
-
-        FltReleasePushLock(&Ctx->flag_lock);
-
-        if (proc == NULL)
-            break;
-
-        SarSamplerSampleOne(Ctx, proc, &pick);
-        ObDereferenceObject(proc);
-    }
-}
-
-_Function_class_(KSTART_ROUTINE)
-_IRQL_requires_(PASSIVE_LEVEL)
-static VOID SarSamplerThread(_In_ PVOID Context)
-{
-    PSAR_CAPTURE_CTX ctx = (PSAR_CAPTURE_CTX)Context;
-    LARGE_INTEGER wait;
-
-    wait.QuadPart = SAR_SAMPLER_WAIT_100NS;
-
-    for (;;) {
-        KeWaitForSingleObject(&ctx->sampler_wake, Executive, KernelMode, FALSE, &wait);
-        if (ctx->sampler_stop != 0)
-            break;
-        SarSamplerSweep(ctx);
-    }
-
-    PsTerminateSystemThread(STATUS_SUCCESS);
-}
-
-_IRQL_requires_(PASSIVE_LEVEL)
-static NTSTATUS SarSamplerStart(_In_ PSAR_CAPTURE_CTX Ctx)
-{
-    OBJECT_ATTRIBUTES oa;
-    HANDLE th;
-    NTSTATUS status;
-
-    KeInitializeEvent(&Ctx->sampler_wake, SynchronizationEvent, FALSE);
-    Ctx->sampler_stop = 0;
-    Ctx->sampler_thread = NULL;
-
-    InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
-    status = PsCreateSystemThread(&th, THREAD_ALL_ACCESS, &oa, NULL, NULL, SarSamplerThread, Ctx);
-    if (!NT_SUCCESS(status))
-        return status;
-
-    status = ObReferenceObjectByHandle(th, SYNCHRONIZE, *PsThreadType, KernelMode,
-                                       &Ctx->sampler_thread, NULL);
-    if (!NT_SUCCESS(status)) {
-        Ctx->sampler_stop = 1;
-        KeSetEvent(&Ctx->sampler_wake, IO_NO_INCREMENT, FALSE);
-        ZwWaitForSingleObject(th, FALSE, NULL);
-        Ctx->sampler_thread = NULL;
-    }
-    ZwClose(th);
-    return STATUS_SUCCESS;
-}
-
-_IRQL_requires_(PASSIVE_LEVEL)
-static VOID SarSamplerStop(_In_ PSAR_CAPTURE_CTX Ctx)
-{
-    if (Ctx->sampler_thread == NULL)
-        return;
-
-    Ctx->sampler_stop = 1;
-    KeSetEvent(&Ctx->sampler_wake, IO_NO_INCREMENT, FALSE);
-    KeWaitForSingleObject(Ctx->sampler_thread, Executive, KernelMode, FALSE, NULL);
-    ObDereferenceObject(Ctx->sampler_thread);
-    Ctx->sampler_thread = NULL;
-}
-
-_IRQL_requires_max_(APC_LEVEL)
 VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEAM_REQUEST Request)
 {
     PSAR_CAPTURE_WORK work;
@@ -783,8 +535,6 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
         SarSeamWriteRelease(Request);
         return;
     }
-
-    SarSamplerNote(Ctx, Request);
 
     if (InterlockedIncrement(&Ctx->inflight) > SAR_CAPTURE_INFLIGHT_CAP) {
         InterlockedDecrement(&Ctx->inflight);
@@ -918,49 +668,24 @@ NTSTATUS SarCaptureCreate(_In_ PFLT_FILTER Filter, _Outptr_ PSAR_CAPTURE_CTX *Ct
     ctx->work_pool_init = TRUE;
 
     FltInitializePushLock(&ctx->blocked_lock);
-    FltInitializePushLock(&ctx->flag_lock);
+    FltInitializePushLock(&ctx->scanned_lock);
     ExInitializeRundownProtection(&ctx->rundown);
 
-    ctx->flag_count = 0;
-    ctx->sampler_thread = NULL;
-    ctx->flags = (PSAR_FLAG_SLOT)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                 SAR_SAMPLER_CAPACITY * sizeof(SAR_FLAG_SLOT),
-                                                 SAR_POOL_TAG_FLAGS);
-    ctx->sampler_buf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_CAPTURE_HEAP_BUDGET,
-                                               SAR_POOL_TAG_SNAPSHOT);
-    ctx->sampler_map = (sar_gate_map_t *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(sar_gate_map_t),
-                                                         SAR_POOL_TAG_GATEMAP);
-    ctx->sampler_result = (sar_capture_result_t *)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                                  sizeof(sar_capture_result_t),
-                                                                  SAR_POOL_TAG_CAPRES);
-    if (ctx->flags == NULL || ctx->sampler_buf == NULL || ctx->sampler_map == NULL ||
-        ctx->sampler_result == NULL) {
-        status = STATUS_INSUFFICIENT_RESOURCES;
-        goto fail;
+    ctx->scanned_count = 0;
+    ctx->scanned = (PEPROCESS *)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                                                SAR_SCANNED_CAPACITY * sizeof(PEPROCESS),
+                                                SAR_POOL_TAG_FLAGS);
+    if (ctx->scanned == NULL) {
+        FltDeletePushLock(&ctx->scanned_lock);
+        FltDeletePushLock(&ctx->blocked_lock);
+        ExDeleteLookasideListEx(&ctx->work_pool);
+        ExFreePoolWithTag(ctx->blocked, SAR_POOL_TAG_BLOCKED);
+        ExFreePoolWithTag(ctx, SAR_POOL_TAG_CAPCTX);
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
-
-    status = SarSamplerStart(ctx);
-    if (!NT_SUCCESS(status))
-        goto fail;
 
     *Ctx = ctx;
     return STATUS_SUCCESS;
-
-fail:
-    if (ctx->sampler_result != NULL)
-        ExFreePoolWithTag(ctx->sampler_result, SAR_POOL_TAG_CAPRES);
-    if (ctx->sampler_map != NULL)
-        ExFreePoolWithTag(ctx->sampler_map, SAR_POOL_TAG_GATEMAP);
-    if (ctx->sampler_buf != NULL)
-        ExFreePoolWithTag(ctx->sampler_buf, SAR_POOL_TAG_SNAPSHOT);
-    if (ctx->flags != NULL)
-        ExFreePoolWithTag(ctx->flags, SAR_POOL_TAG_FLAGS);
-    FltDeletePushLock(&ctx->flag_lock);
-    FltDeletePushLock(&ctx->blocked_lock);
-    ExDeleteLookasideListEx(&ctx->work_pool);
-    ExFreePoolWithTag(ctx->blocked, SAR_POOL_TAG_BLOCKED);
-    ExFreePoolWithTag(ctx, SAR_POOL_TAG_CAPCTX);
-    return status;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -971,32 +696,24 @@ VOID SarCaptureDestroy(_Inout_ PSAR_CAPTURE_CTX Ctx)
     if (Ctx == NULL)
         return;
 
-    SarSamplerStop(Ctx);
-
     ExWaitForRundownProtectionRelease(&Ctx->rundown);
 
     for (i = 0; i < Ctx->blocked_count; i++)
         ObDereferenceObject(Ctx->blocked[i]);
 
-    for (i = 0; i < Ctx->flag_count; i++)
-        ObDereferenceObject(Ctx->flags[i].process);
+    for (i = 0; i < Ctx->scanned_count; i++)
+        ObDereferenceObject(Ctx->scanned[i]);
 
     if (Ctx->work_pool_init)
         ExDeleteLookasideListEx(&Ctx->work_pool);
 
     FltDeletePushLock(&Ctx->blocked_lock);
-    FltDeletePushLock(&Ctx->flag_lock);
+    FltDeletePushLock(&Ctx->scanned_lock);
 
     if (Ctx->blocked != NULL)
         ExFreePoolWithTag(Ctx->blocked, SAR_POOL_TAG_BLOCKED);
-    if (Ctx->flags != NULL)
-        ExFreePoolWithTag(Ctx->flags, SAR_POOL_TAG_FLAGS);
-    if (Ctx->sampler_buf != NULL)
-        ExFreePoolWithTag(Ctx->sampler_buf, SAR_POOL_TAG_SNAPSHOT);
-    if (Ctx->sampler_map != NULL)
-        ExFreePoolWithTag(Ctx->sampler_map, SAR_POOL_TAG_GATEMAP);
-    if (Ctx->sampler_result != NULL)
-        ExFreePoolWithTag(Ctx->sampler_result, SAR_POOL_TAG_CAPRES);
+    if (Ctx->scanned != NULL)
+        ExFreePoolWithTag(Ctx->scanned, SAR_POOL_TAG_FLAGS);
 
     ExFreePoolWithTag(Ctx, SAR_POOL_TAG_CAPCTX);
 }
