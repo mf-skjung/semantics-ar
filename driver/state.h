@@ -13,6 +13,8 @@ typedef struct _SAR_IDENTITY_ENTRY {
     sar_identity_t identity;
     BOOLEAN identity_valid;
     BOOLEAN subsystem_process;
+    LONG phantom_trust;
+    volatile LONG phantom_evidence;
 } SAR_IDENTITY_ENTRY, *PSAR_IDENTITY_ENTRY;
 
 typedef struct _SAR_STATE {

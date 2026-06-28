@@ -6,6 +6,7 @@
 #include "capture.h"
 #include "keystore_persist.h"
 #include "preserve.h"
+#include "phantom.h"
 
 SAR_GLOBALS g_sar;
 PSAR_STATE g_sar_state;
@@ -44,11 +45,13 @@ static VOID SarStreamContextCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_
 }
 
 static const FLT_OPERATION_REGISTRATION g_sar_operations[] = {
-    { IRP_MJ_CREATE, 0, NULL, SarPostCreate },
+    { IRP_MJ_CREATE, 0, SarPhantomPreCreate, SarPostCreate },
     { IRP_MJ_READ, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, NULL, SarPostRead },
     { IRP_MJ_WRITE, 0, SarPreWrite, NULL },
     { IRP_MJ_SET_INFORMATION, 0, SarPreSetInformation, NULL },
-    { IRP_MJ_FILE_SYSTEM_CONTROL, 0, SarPreFsControl, NULL },
+    { IRP_MJ_DIRECTORY_CONTROL, 0, SarPhantomPreDirControl, SarPhantomPostDirControl },
+    { IRP_MJ_FILE_SYSTEM_CONTROL, 0, SarPreFsControl, SarPhantomPostFsControl },
+    { IRP_MJ_QUERY_INFORMATION, 0, NULL, SarPhantomPostQueryInfo },
     { IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION, 0, SarPreAcquireForSection, NULL },
     { IRP_MJ_OPERATION_END }
 };
@@ -86,7 +89,13 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(Flags);
 
+    SarPhantomImageNotifyUnregister();
     SarProcessNotifyUnregister();
+
+    if (g_sar.phantom != NULL) {
+        SarPhantomDestroy(g_sar.phantom);
+        g_sar.phantom = NULL;
+    }
 
     if (g_sar.capture != NULL) {
         SarCaptureDestroy(g_sar.capture);
@@ -134,6 +143,13 @@ static VOID SarBootReinit(_In_ PDRIVER_OBJECT DriverObject, _In_opt_ PVOID Conte
         SarKeystoreLoad(g_sar.keystore);
     if (g_sar.preserve != NULL)
         SarPreserveLoad(g_sar.preserve);
+    if (g_sar.phantom != NULL && g_sar.keystore != NULL) {
+        const UCHAR *mac_key = SarKeystoreMacKey(g_sar.keystore);
+        if (mac_key != NULL) {
+            SarPhantomActivate(g_sar.phantom, mac_key);
+            g_sar.posture.phantom_active = TRUE;
+        }
+    }
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -248,8 +264,18 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     }
 
+    if (NT_SUCCESS(SarPhantomCreate(g_sar.filter, &g_sar.phantom)))
+        SarPhantomImageNotifyRegister();
+    else
+        g_sar.phantom = NULL;
+
     status = SarCaptureCreate(g_sar.filter, &g_sar.capture);
     if (!NT_SUCCESS(status)) {
+        if (g_sar.phantom != NULL) {
+            SarPhantomImageNotifyUnregister();
+            SarPhantomDestroy(g_sar.phantom);
+            g_sar.phantom = NULL;
+        }
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
@@ -276,6 +302,11 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         }
         SarCaptureDestroy(g_sar.capture);
         g_sar.capture = NULL;
+        if (g_sar.phantom != NULL) {
+            SarPhantomImageNotifyUnregister();
+            SarPhantomDestroy(g_sar.phantom);
+            g_sar.phantom = NULL;
+        }
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
@@ -293,6 +324,13 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarKeystoreLoad(g_sar.keystore);
         if (g_sar.preserve != NULL)
             SarPreserveLoad(g_sar.preserve);
+        if (g_sar.phantom != NULL && g_sar.keystore != NULL) {
+            const UCHAR *mac_key = SarKeystoreMacKey(g_sar.keystore);
+            if (mac_key != NULL) {
+                SarPhantomActivate(g_sar.phantom, mac_key);
+                g_sar.posture.phantom_active = TRUE;
+            }
+        }
     } else {
         IoRegisterBootDriverReinitialization(DriverObject, SarBootReinit, NULL);
     }

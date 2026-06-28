@@ -20,6 +20,7 @@ set(SAR_DRIVER_SOURCES
     recovery.c
     state.c
     processnotify.c
+    phantom.c
     feature.c
     bypassio.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/msg.c

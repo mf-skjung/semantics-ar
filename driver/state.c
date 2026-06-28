@@ -173,6 +173,9 @@ NTSTATUS SarStateIdentityInsert(_Inout_ PSAR_STATE State,
     if (Identity != NULL)
         RtlCopyMemory(&entry->identity, Identity, sizeof(entry->identity));
 
+    entry->phantom_trust = 0;
+    entry->phantom_evidence = 0;
+
     if (IdentityValid && Identity != NULL)
         whitelist_hit = SarStateWhitelistMatch(State, Identity) ? 1 : 0;
     entry->id_state = sar_identity_resolve(IdentityValid ? 1 : 0, whitelist_hit);

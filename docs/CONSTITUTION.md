@@ -46,9 +46,9 @@ is how false certainty enters a specification.
 While implementing, you will discover new-looking attack surfaces. Before treating
 any as open work, classify it:
 
-1. Does it require kernel-code execution? → **CLOSED** by Part VIII (boundary).
+1. Does it require kernel-code execution? → **CLOSED** by Part IX (boundary).
 2. Is it a case where the Oracle simply does not capture a key? → **CLOSED** by
-   Part VIII (confirmed limit).
+   Part IX (confirmed limit).
 3. Is it already governed by an existing [INVARIANT] or [DECISION]? → **CLOSED.**
 
 If and only if it escapes all three is it a genuine open item.
@@ -102,7 +102,12 @@ This is the heart. Protection has **two assets, ranked by the certainty of the e
 that feeds them**: the **Oracle** (key capture, Part II) is the definitive asset and the
 only one whose recovery is unbounded; **preservation** (bounded copy-on-first-write,
 Part III) is the circumstantial fallback for the residue the Oracle cannot reach. The
-rest of the document is their detail.
+rest of the document is their detail. A third evidence channel — the **Phantom Witness
+Layer** (Part VIII) — operates in parallel: virtual files that exist only in minifilter IRP
+responses trap indiscriminate file-walking, providing behavioral evidence that is independent
+of what the Oracle captures or preservation holds. Its evidence is cumulative (K independent
+phantom touches convict) and feeds the response system as circumstantial conviction; it is
+never a recovery source.
 
 **[INVARIANT] I.1 — Response is graduated to evidence, never beyond it.**
 The Oracle is the primary locus of protection; where it reaches, nothing else is needed,
@@ -118,15 +123,18 @@ from circumstantial evidence, no key in hand treated as a verdict without the fo
 proof (II.2).
 
 **What derives from the proposition.** The gate (Part IV) decides what to ask the Oracle
-about and what to preserve. Recovery (Part III) is decryption with the captured key or
-restoration of the preserved original. Response (Part V) is the system's evidence plus
-the user's intent. Identity discipline (Part VI) ensures neither asset can be evaded by
-who issues a write.
+about and what to preserve. The Phantom Witness Layer (Part VIII) detects indiscriminate
+file enumeration through virtual files that no legitimate process would touch, providing a
+behavioral evidence channel parallel to the Oracle's cryptographic proof. Recovery
+(Part III) is decryption with the captured key or restoration of the preserved original.
+Response (Part V) is the system's evidence — from both the Oracle's cryptographic proof
+and the Phantom Witness's behavioral proof — plus the user's intent. Identity discipline
+(Part VI) ensures neither asset can be evaded by who issues a write.
 
 **Why both assets exist, and why preservation is bounded.** The Oracle's reach is
 irreducible: a key computed, used, and discarded faster than any memory snapshot can see
 it — the regime of fast small-file and partial encryption, and of an adversary that
-zeroizes the key before it writes — is not capturable (Part VIII). Preservation covers
+zeroizes the key before it writes — is not capturable (Part IX). Preservation covers
 exactly that residue and only it, and it can, because the attacker must read the original
 plaintext before it can encrypt: the original is therefore in hand at the destructive
 write and can be held aside. It is **bounded** because holding originals without bound is
@@ -138,7 +146,7 @@ resource only where the Oracle failed.
 **Where the proposition stops.** When neither the key was captured nor the original held
 within its window — a destruction the Oracle could not see whose preserved original has
 aged or been pushed out of the bounded store, or a write whose original could not be
-copied at all — the data is not protected. This is the **confirmed limit** (Part VIII):
+copied at all — the data is not protected. This is the **confirmed limit** (Part IX):
 the honest edge of a system that holds keys and a *bounded* window of originals, not an
 infinite backup. It is stated rather than papered over.
 
@@ -196,7 +204,7 @@ capture target at that write: the write names the process to read, and because t
 in committed-private memory at the moment the write executes, the Oracle reads that memory once —
 deferred from the write — while the key is still live. The dominant case (a heap key object reused
 across writes) means the key is resident at every write in the campaign; a key zeroed before the
-deferred snapshot can reach it falls to the irreducible floor (VIII.2). The write tells the Oracle
+deferred snapshot can reach it falls to the irreducible floor (IX.2). The write tells the Oracle
 which process to read; each capture-eligible write is an independent capture opportunity.
 
 **[INVARIANT] II.3.2 — The memory capture runs off the IRP; nothing scans the writer's memory from the write path.**
@@ -231,7 +239,7 @@ there. The permitted shape:
 > a heap key object reused across writes, since the key persists in committed-private memory across
 > the encryption window. A key zeroed before the deferred snapshot can reach it — computed, used,
 > and destroyed faster than the worker can attach, or the process exited before the snapshot — is
-> not captured by the memory path (VIII.2). The register grab provides a secondary channel for keys
+> not captured by the memory path (IX.2). The register grab provides a secondary channel for keys
 > transiently in registers; what remains beyond both is the confirmed limit.
 
 ### II.4 Conviction-rate levers
@@ -250,7 +258,7 @@ limitation, not a fundamental limit. Keys with no such structure — stream-ciph
 block-cipher master keys (ChaCha/Salsa, and a bare AES master not accompanied by its
 schedule) — are indistinguishable from random in memory and are located only by bounded
 `(P,C)` trial over the snapshot; a key whose location falls outside that bounded trial
-reduces to the confirmed limit (VIII.2).
+reduces to the confirmed limit (IX.2).
 
 **[DECISION] II.4.2 — cumulative-N over writes.**
 Each capture-eligible write is an independent capture opportunity for the key it uses. For a
@@ -344,7 +352,7 @@ so a wrong key, geometry, or key↔target pairing never reaches the atomic repla
 > That verdict — "never captured" — never terminates, so an *unbounded* preserved copy
 > would be retain-everything, which I.1 refuses. The resolution is the bounded window
 > (III.5): the original is held only long enough to make the destruction reversible while
-> the user can still notice and act, and beyond that window the confirmed limit (VIII.2)
+> the user can still notice and act, and beyond that window the confirmed limit (IX.2)
 > applies honestly. The thing worth holding forever is still the key; the original is held
 > only briefly, and only when the key was missed.
 
@@ -381,7 +389,7 @@ of the same stream from within its own write re-enters the cache and memory mana
 under locks already held and wedges the volume; the originator's read is the honest,
 hazard-free source, because a writer that overwrites a file in place must first read
 the plaintext it destroys. A write whose plaintext was never observed yields no Oracle
-attempt — a missed attempt inside the confirmed limit (VIII.2), never a read forced
+attempt — a missed attempt inside the confirmed limit (IX.2), never a read forced
 onto the IRP. A single block suffices to verify a key. This sample lives in memory
 only, for the span of the proof attempt. It is **not** a backup, has no recovery role,
 and is never persisted.
@@ -415,7 +423,7 @@ overwrite a file with a result it cannot confirm is the original, and recovery o
 intermittently encrypted file can never corrupt the plaintext spans the attacker left
 untouched (they have no record and are never rewritten). If no region verifies for the
 target, recovery declines and the file is left byte-for-byte intact. A region the Oracle
-never captured stays as on-disk ciphertext — an honest **partial recovery** (VIII.2), the
+never captured stays as on-disk ciphertext — an honest **partial recovery** (IX.2), the
 same edge as the confirmed limit, never a destructive replace. This is the recovery
 direction's analogue of the Oracle's forward proof: conviction never trusts a key in hand
 (II.2.2), and recovery never trusts a decryption in hand.
@@ -426,7 +434,7 @@ record and is covered by that record's keyed MAC (VII.1.1), and the Oracle captu
 for each file it observes, so each file recovers against its own anchor. Where recovery
 is directed at a target for which no verification anchor was captured, it declines rather
 than perform an unverifiable destructive replace — the same honest edge as the confirmed
-limit (VIII.2): the system replaces only what it can prove it is restoring.
+limit (IX.2): the system replaces only what it can prove it is restoring.
 
 ### III.5 Preservation — the circumstantial asset
 
@@ -454,7 +462,7 @@ two deadlock-free sources, in order:
    operation. A delete, rename-over, or truncate exposes the whole original on disk at the moment
    it is requested, so the copy precedes the destruction; an in-place overwrite whose region was
    not read is copied best-effort before the write commits, and where that copy loses the race the
-   region reduces to the confirmed limit (VIII.2), never to a held resource on the IRP.
+   region reduces to the confirmed limit (IX.2), never to a held resource on the IRP.
 
 Every destruction member of IV.1.2 — overwrite, truncate, delete, rename-over, hardlink-replace,
 clone, section write — is a preservation trigger by the same enumeration that makes it a capture
@@ -534,11 +542,11 @@ on this path is a capture candidate):
 
 > The legacy/`Ex` pairing is not two code paths for compatibility's sake; it is one
 > classifier the OS feeds via whichever info-class it emits. Codes an OS does not
-> implement are never delivered and are inert there (Part IX).
+> implement are never delivered and are inert there (Part X).
 
 **[DECISION] IV.1.3 — Destruction without encryption is out of scope.**
 A destruction that is not encryption (a plain delete, a wiper, a truncate-to-zero)
-yields no recoverable key and is not a target of this system (Part VIII, wiper
+yields no recoverable key and is not a target of this system (Part IX, wiper
 boundary). D-completeness exists to make every *encryption-bearing* destruction a
 capture candidate, not to act on destruction in itself. A missed member is therefore
 a missed capture opportunity (confirmed limit), not a data loss — there was never a
@@ -667,7 +675,7 @@ decides *when* proven or capacity-exhausting destruction should be treated as an
 > else; whether it is blocked is the mode's and the user's call. In AUDIT it proceeds and is
 > recoverable; in ENFORCE the user has chosen to block unrecognized mass encryption.
 
-**[DECISION] V.1.2 — Under ENFORCE a block originates from exactly two triggers, each matched to its evidence.**
+**[DECISION] V.1.2 — Under ENFORCE a block originates from exactly three triggers, each matched to its evidence.**
 1. **Forward conviction (definitive).** A forward Oracle proof (II.2) blocks the originator
    at its **first** instance — the strongest response, because the evidence is certain and
    the blocked files are independently recoverable by the captured key.
@@ -675,16 +683,24 @@ decides *when* proven or capacity-exhausting destruction should be treated as an
    exhausted by unreconciled held originals — destructions the Oracle never convicted — and a
    further such destruction would force the window to slide and lose an original, the active
    destructive writers are blocked rather than that original lost. This is the cautious
-   extreme: the only key-less block, it fires only at the bound the user set (V.1.3), only
-   under ENFORCE, and it convicts nothing — it refuses to spend the last of a resource the
-   user reserved for reversibility. Preservation never blocks below this bound; below it, it
+   extreme: a key-less block, it fires only at the bound the user set (V.1.3), only under
+   ENFORCE, and it convicts nothing — it refuses to spend the last of a resource the user
+   reserved for reversibility. Preservation never blocks below this bound; below it, it
    only holds.
+3. **Phantom conviction (behavioral).** When a process accumulates K ≥ 3 independent
+   phantom-file touches — writes, renames, or deletes against virtual files that no
+   legitimate process would encounter (Part VIII) — the pattern establishes indiscriminate
+   file-walking. This is circumstantial evidence: stronger than capacity exhaustion (it
+   identifies the specific destructive process rather than a general resource pressure) but
+   weaker than the Oracle's key-based proof. The blocked process's files are recoverable
+   only by the Oracle's captured key or a held original, not by the phantom layer itself.
 
 The set blocked is the behavioral set of active destructive writers (VI.1), never a requestor
 identity. No other quantity blocks: not a count, not a byte percentage, not elapsed time. The
 capacity trigger is not a "fill up and it must be an attack" inference — it is the explicit
 exhaustion of a declared resource envelope, and the choice it forces (block vs slide) is the
-mode's, not the system's guess.
+mode's, not the system's guess. The phantom trigger is not a heuristic count — it is the
+structural impossibility of K independent false phantom touches (VIII.4.2).
 
 **[DECISION] V.1.3 — The preservation resource envelope.**
 The window's bounds (III.5.5) — a **retention time** and a **total capacity** — are a resource
@@ -749,7 +765,7 @@ whitelist is the only identity-based exemption:
 > (incomplete arms race, and a different discipline from this minifilter). The only
 > place hijack *prevention* belongs is the protection of the system's **own** process
 > (Part VII), where it is OS-provided, incomplete, and bounded by the kernel line
-> (Part VIII).
+> (Part IX).
 
 ---
 
@@ -790,7 +806,7 @@ store key held in non-paged pool and rooted exactly as the keystore's MAC key is
 unsealed once at boot by the protected service, delivered over the authenticated port, never
 persisted in the clear. To any in-scope actor (user mode up to SYSTEM without kernel code) the
 store is therefore ciphertext — the same confidentiality the keystore has — and its plaintext
-is reachable only across the kernel line (VIII.1). Each held original carries an integrity tag
+is reachable only across the kernel line (IX.1). Each held original carries an integrity tag
 and its (file, region) binding (III.5.6) so a tampered or substituted entry is detected and not
 applied. The store key never leaves the kernel, and no operation exports a held original to
 user mode.
@@ -840,7 +856,7 @@ hardware-rooted guarantee is not claimed there (VII.5).
 kernel-code execution — this is the CPU's user/kernel privilege boundary and holds
 whether or not HVCI is present. HVCI's role is upstream: by blocking unsigned and
 vulnerable kernel code it makes *obtaining* that kernel-code execution harder, keeping
-the attacker inside the in-scope user-mode zone (Part VIII). Where HVCI is absent on a
+the attacker inside the in-scope user-mode zone (Part IX). Where HVCI is absent on a
 supported OS the pool's secrecy against a user-mode attacker is unchanged, but the ease
 of escalating past the kernel line rises; that descent is recorded (VII.5), not
 silently weakened and not synthesized in software.
@@ -859,14 +875,14 @@ early-launch (ELAM) driver that registers the signer of the service binaries; th
 bar against ordinary user-mode tampering (no handle injection, termination, or user-mode debug
 of the service). It is **defense-in-depth, not a boundary against SYSTEM**: the platform itself
 treats an administrator as inside the trusted base, so PPL is used where eligible, and its
-absence — or its bypass by a SYSTEM actor — descends to the kernel line (VIII.1) and is recorded
+absence — or its bypass by a SYSTEM actor — descends to the kernel line (IX.1) and is recorded
 (VII.5), never claimed as a guarantee against SYSTEM. The recovery assets do not depend on it.
 
 ### VII.4 Our own process is where hijack-prevention lives
 **[DECISION] VII.4.1.** Code-integrity guards (e.g. CIG / ACG where the platform and
 the process model allow) and PPL protect the **system's own** service and driver
 against injection. This is OS-provided, incomplete, and explicitly bounded by the
-kernel line (Part VIII). It is **not** extended to arbitrary user processes, and it is
+kernel line (Part IX). It is **not** extended to arbitrary user processes, and it is
 **not** required for the recovery guarantee — universal capture already covers a
 hijacked non-whitelisted process (VI.3.1).
 
@@ -882,12 +898,318 @@ capture) does not depend on any of these and is unaffected.
 
 ---
 
-## PART VIII — BOUNDARIES (declared non-defenses)
+## PART VIII — THE PHANTOM WITNESS LAYER
+
+The Phantom Witness Layer supplements the gate (Part IV) with an orthogonal evidence
+channel: virtual files that exist only in minifilter IRP responses and are invisible to
+trusted processes. Any process that touches a phantom provides evidence of indiscriminate
+enumeration — the behavioral signature of ransomware directory-walking — independent of
+what it does next. This evidence is cumulative: each phantom touch raises a per-process
+counter, and conviction requires K independent touches (K ≥ 3), so a single false positive
+does not reach the threshold. The layer produces **only** evidence; it does not block or
+convict on its own — it feeds the response system (Part V) with an additional signal
+graduated to its certainty.
+
+**[INVARIANT] VIII.0 — Kernel-privilege closure.**
+The phantom witness layer closes every user-mode path by which a process could distinguish
+a phantom from a real file. Without kernel-code execution (Part IX), a process that
+enumerates a directory, opens a file, queries its attributes, reads the USN journal, or
+inspects file identity receives results that are indistinguishable from those a real file
+would produce. The closure covers the IRP response path (VIII.3), the metadata query path
+(VIII.6), and the raw-access blocking path (VIII.3.3, VIII.9). A process that can load a
+kernel driver or execute code in ring 0 can read the MFT directly and discover the
+absence — this falls to the kernel-code boundary (IX.1) and is not defended.
+
+Three axioms constrain the design:
+
+### VIII.1 Axioms
+
+**[INVARIANT] VIII.1.1 — Physical absence (P.1).**
+A phantom file has no MFT entry, no disk clusters, no USN journal history prior to the
+minifilter's intervention. It exists **only** as entries injected into
+directory-enumeration IRP responses, as synthetic file objects redirected through
+STATUS_REPARSE to hidden backing files, and as synthetic USN records injected into
+journal-read responses. The filesystem never learns of the phantom's existence; the
+minifilter fabricates it entirely within the filter stack.
+
+**[INVARIANT] VIII.1.2 — Indistinguishability (P.2).**
+Every observable attribute of a phantom — name, extension, size, timestamps, content,
+reported file identity, security descriptor — is drawn from the same distribution as
+legitimate files in the containing directory. The name is deterministic but unpredictable
+(VIII.2); timestamps and sizes are derived from the directory's real entries; content is
+plausible for the chosen extension. No attribute may distinguish a phantom from a real file
+to a process that has not been told which files are phantoms.
+
+**[INVARIANT] VIII.1.3 — Transparency (P.3).**
+Trusted processes — those on the whitelist (V.2) and the system's own processes — never
+see phantoms. The minifilter suppresses phantom entries in directory enumerations, rejects
+phantom creates, omits synthetic USN records, and hides phantom metadata for all trusted
+processes. The phantom layer is invisible to normal operation and adds no files to any view
+a trusted process sees.
+
+> **[NEGATIVE] VIII.1.4** Do not break transparency to gather evidence against a trusted
+> process. A whitelisted process is exempt (V.2); undermining that exemption through the
+> phantom layer is the same forbidden re-assumption of risk the identity discipline
+> prohibits (VI.3.2).
+
+### VIII.2 Phantom file generation
+
+**[DECISION] VIII.2.1 — Deterministic, unpredictable naming.**
+The phantom name for a given directory is:
+
+```
+phantom_name[i] = HMAC-SHA256(volume_secret, canonical_dir_path || i)
+```
+
+where `volume_secret` is a per-volume key derived from the keystore MAC key and the volume
+serial number at keystore load, held in kernel pool alongside the MAC key (VII.1), and `i`
+is the phantom index (0-based). The HMAC output is truncated and encoded to produce a
+filename matching the naming conventions of real files in the directory. The result is
+deterministic (the same directory always yields the same phantoms across reboots) and
+unpredictable to any process that does not hold `volume_secret`.
+
+**[DECISION] VIII.2.2 — Density rules.**
+The number of phantoms per directory scales with directory population:
+
+| Real file count | Phantom count |
+|:-:|:-:|
+| 0 | 0 |
+| 1–5 | 1 |
+| 6–20 | 2 |
+| 21+ | 3 |
+
+Empty directories receive no phantoms. Three is the ceiling.
+
+> **[NEGATIVE] VIII.2.3** Do not inject more than 3 phantoms per directory. Higher density
+> increases the false-positive surface without improving detection and risks violating the
+> indistinguishability axiom (VIII.1.2).
+
+**[DECISION] VIII.2.4 — Extension and content generation.**
+The phantom's extension is sampled from extensions present among the directory's real
+files, preferring document and media types that ransomware targets. The content of the
+backing file is generated once at first enumeration and persisted: it is plausible for the
+chosen extension (e.g. a minimal valid document or media structure) so that ransomware
+that inspects content before encrypting does not reject it. Content size is drawn from the
+size distribution of real files in the directory, clamped to [4 KiB, 16 MiB] [DESIGN].
+
+### VIII.3 Interception surface
+
+The minifilter intercepts four priority tiers of I/O to maintain phantom consistency.
+Higher tiers close progressively rarer detection vectors. All four are mandatory for the
+kernel-privilege closure of VIII.0.
+
+**[DECISION] VIII.3.1 — P0 (core IRP).**
+- **IRP_MJ_DIRECTORY_CONTROL (post-op):** Inject phantom entries into
+  directory-enumeration output buffers via a SwapBuffers technique: pre-op allocates an
+  oversized NonPagedPool buffer and replaces the caller's DirectoryBuffer and MdlAddress;
+  post-op appends phantom entries after NTFS fills the swapped buffer, maintaining 8-byte
+  alignment and correct NextEntryOffset linking, then copies back. All six
+  FILE_INFORMATION_CLASS types used by directory enumeration are handled:
+  FileDirectoryInformation, FileFullDirectoryInformation, FileBothDirectoryInformation,
+  FileNamesInformation, FileIdFullDirectoryInformation, FileIdBothDirectoryInformation.
+  Generic offset helpers abstract across info classes via a DIRECTORY_CONTROL_OFFSETS
+  structure. Phantom entries are merged in sorted order.
+- **IRP_MJ_CREATE (pre-op):** When an untrusted process opens a phantom name, redirect
+  to the hidden backing file via STATUS_REPARSE (VIII.7). When a trusted process opens a
+  phantom name, return STATUS_OBJECT_NAME_NOT_FOUND. DASD opens (empty filename on a
+  volume device) by untrusted processes are denied (VIII.3.3).
+- **IRP_MJ_READ, IRP_MJ_WRITE (pre-op):** For handles redirected to phantom backing
+  files, reads return backing-file content; writes increment the per-process phantom
+  evidence counter (VIII.4).
+
+**[DECISION] VIII.3.2 — P1 (metadata).**
+- **FSCTL_ENUM_USN_DATA:** The minifilter injects synthetic USN_RECORD_V2 entries for
+  phantoms whose parent directory appears in the NTFS output, using synthetic
+  FileReferenceNumbers in a reserved range (VIII.8).
+- **FSCTL_READ_USN_JOURNAL:** Sequential journal reads receive synthetic USN records for
+  phantoms, timestamped consistently with the phantom's declared creation time.
+- Both FSCTLs go through IRP_MJ_FILE_SYSTEM_CONTROL and are intercepted in post-op.
+  Trusted processes are exempt — the minifilter suppresses synthetic record injection for
+  them to avoid breaking system services that monitor the journal.
+
+**[DECISION] VIII.3.3 — P2 (advanced).**
+- **FSCTL_GET_NTFS_FILE_RECORD:** Denied for untrusted processes. No shipping ransomware
+  uses this path; the block is a closure.
+- **DASD opens:** IRP_MJ_CREATE on a volume device object (empty filename, no related
+  file object) is denied for untrusted processes. A successful DASD open permits raw disk
+  reads that bypass the minifilter stack entirely; blocking the handle prevents the gap
+  from opening.
+
+**[DECISION] VIII.3.4 — P3 (memory-mapped).**
+- Memory-mapped file access to phantom backing files is observed through
+  IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION. The section creation is an evidence event
+  (VIII.4).
+
+> **[NEGATIVE] VIII.3.5** Do not attempt to intercept below the minifilter stack. Raw disk
+> reads after a DASD open, direct NTFS metadata manipulation via kernel drivers, and
+> hardware DMA are beyond the minifilter's reach and fall to the kernel-code boundary
+> (Part IX). The DASD-open block (VIII.3.3) is the minifilter's last line.
+
+### VIII.4 Conviction mechanism
+
+**[DECISION] VIII.4.1 — Cumulative K-threshold conviction.**
+The phantom layer maintains a per-process evidence accumulator
+`phantom_evidence[pid]`, initially zero. Each of the following events increments it by 1:
+a write to any phantom backing file, a rename targeting a phantom backing file, a delete
+targeting a phantom backing file, or a section-map of a phantom backing file. When
+`phantom_evidence[pid] ≥ K`, the process is **phantom-convicted**. K = 3 [DESIGN].
+
+**[INVARIANT] VIII.4.2 — False-positive bound.**
+If the per-phantom false-touch probability is `p`, the K-threshold false-conviction
+probability is `p^K`. With phantoms generated at the density of VIII.2.2 and K = 3, the
+false-conviction rate is bounded at `p^3 ≈ 10^(-9)` [DERIVED] — a structural consequence
+of cumulative independent evidence, not a measured quantity.
+
+**[DECISION] VIII.4.3 — Phantom conviction feeds the response system.**
+A phantom conviction is an evidence event delivered to the response system (Part V)
+as the third blocking trigger (V.1.2). Under AUDIT it is logged; under ENFORCE it blocks
+the convicted process. The Oracle remains the definitive evidence channel; phantom
+conviction is the behavioral fallback. It proves *indiscriminate file modification*, not
+*encryption*; recovery depends on the Oracle's key or the preservation window.
+
+**[DECISION] VIII.4.4 — Evidence counter is process-scoped and monotonic.**
+The counter follows the process, not the thread. It is monotonic: no event decreases it;
+process exit zeroes it. Child processes do not inherit the parent's counter. A process
+that spawns children to distribute touches achieves nothing: each child that touches K
+phantoms is independently convicted; a child below K is not convicted.
+
+### VIII.5 Trust model
+
+**[DECISION] VIII.5.1 — Three trust states.**
+Every process is in exactly one of three phantom-visibility states:
+
+| State | Sees phantoms? | Touches counted? | Entry condition |
+|:------|:-:|:-:|:---|
+| TRUSTED | No | No | Whitelist (V.2) or system's own process |
+| UNTRUSTED | Yes | Yes | Default for all non-whitelisted processes |
+| TAINTED | Yes | Yes | Demotion from TRUSTED on unsigned module load |
+
+TAINTED is triggered by `PsSetLoadImageNotifyRoutine`: when a TRUSTED process loads a
+module whose `ImageSignatureLevel` is below SE_SIGNING_LEVEL_AUTHENTICODE, it is demoted
+to TAINTED and begins seeing phantoms.
+
+**[INVARIANT] VIII.5.2 — Demotion is irreversible within a process lifetime.**
+Once TAINTED, a process remains TAINTED until exit. The demotion is recorded.
+
+> **[NEGATIVE] VIII.5.3** Do not promote untrusted processes to trusted on the basis of
+> behavior. Trust is conferred by the whitelist at creation time (V.2, VI.2.1), never
+> earned.
+
+### VIII.6 Metadata query fixup
+
+**[INVARIANT] VIII.6.1 — Opened phantom handles report phantom identity, not backing-file identity.**
+When an untrusted process holds a handle to a phantom backing file (obtained through
+STATUS_REPARSE redirection) and queries its metadata, the minifilter fixes up the
+response to report the phantom's declared identity rather than the backing file's:
+
+- **FileNameInformation, FileNormalizedNameInformation, FileAllInformation:** the
+  minifilter's IRP_MJ_QUERY_INFORMATION post-op replaces the returned path with the
+  phantom's declared directory and name.
+- **FileInternalInformation:** the file ID is replaced with the synthetic
+  FileReferenceNumber assigned to this phantom (the same ID that appears in
+  FileIdBothDirectoryInformation and in synthetic USN records).
+- **FileHardLinkInformation:** the link count is reported as 1 and the sole name is the
+  phantom's declared name and parent directory.
+
+Without these fixups, a process could call `GetFinalPathNameByHandle` or
+`NtQueryInformationFile` on an opened phantom and observe the backing store path,
+revealing the phantom's nature. This is the metadata-query closure required by VIII.0.
+
+### VIII.7 Backing-file management
+
+**[DECISION] VIII.7.1 — STATUS_REPARSE redirection to hidden store.**
+When an untrusted process opens a phantom name, the minifilter's pre-create callback:
+1. Calls `IoReplaceFileObjectName` to replace the target with the hidden backing file path.
+2. Sets `Data->IoStatus.Status = STATUS_REPARSE`, `Information = IO_REPARSE`.
+3. Calls `FltSetCallbackDataDirty`, returns `FLT_PREOP_COMPLETE`.
+
+The I/O manager re-issues the create against the backing file, which is a real file in a
+hidden directory protected by the minifilter's anti-deletion mechanism (VII.1.4). The
+calling process receives a valid handle and observes normal file semantics.
+
+**[DECISION] VIII.7.2 — Backing-file store layout.**
+Backing files are stored under the minifilter's protected directory alongside the
+keystore and preservation store. Each backing file is named by the HMAC of its phantom
+identity and is created lazily on first enumeration of the containing directory. The
+store's disk footprint is bounded by density rules (VIII.2.2) and the per-file size cap
+(VIII.2.4).
+
+**[DECISION] VIII.7.3 — IoReplaceFileObjectName availability.**
+`IoReplaceFileObjectName` is available since Windows 7. On the supported floor it is
+always present. The routine is resolved via `MmGetSystemRoutineAddress` at initialization;
+if absent the phantom layer is disabled entirely and the descent is recorded (VII.5).
+
+> **[NEGATIVE] VIII.7.4** Do not implement a manual name-replacement fallback for systems
+> where `IoReplaceFileObjectName` is absent. The supported floor guarantees its presence.
+
+### VIII.8 USN journal closure
+
+**[DECISION] VIII.8.1 — Synthetic USN records.**
+For each phantom the minifilter maintains a synthetic USN_RECORD_V2 containing:
+- A synthetic `FileReferenceNumber` from a reserved range (`0xFFFF_xxxx_xxxx_xxxx`) that
+  does not collide with real MFT entries (real references use the low 48 bits; the
+  reserved range sets the high 16 bits as a discriminator).
+- The phantom's declared file name, parent directory reference, timestamps, and a
+  plausible Reason field.
+
+These records are injected into FSCTL_ENUM_USN_DATA and FSCTL_READ_USN_JOURNAL output
+in post-op via SwapBuffers. They are invisible to trusted processes (VIII.1.3).
+
+**[INVARIANT] VIII.8.2 — No integrity mechanism protects USN records.**
+USN records carry no signature, checksum, or integrity seal. Injection of syntactically
+correct records is indistinguishable from genuine records to any consumer that does not
+independently verify against the raw MFT — and raw MFT access is blocked for untrusted
+processes (VIII.3.3).
+
+> **[NEGATIVE] VIII.8.3** Do not inject records into the on-disk USN journal
+> ($UsnJrnl:$J). The minifilter intercepts the query path (FSCTL responses), not the
+> storage path. On-disk injection requires NTFS-internal writes below the minifilter stack
+> and would violate the kernel-code boundary (Part IX).
+
+### VIII.9 MFT defense
+
+**[DECISION] VIII.9.1 — The MFT gap is closed by blocking, not by faking.**
+Phantoms have no MFT entries. The minifilter blocks the two paths by which an untrusted
+process could discover the absence:
+1. **FSCTL_GET_NTFS_FILE_RECORD** is denied for untrusted processes (VIII.3.3).
+2. **DASD opens** are denied for untrusted processes (VIII.3.3).
+
+No shipping ransomware uses MFT parsing for file enumeration; only the DriveSlayer wiper
+has been observed using FSCTL_GET_NTFS_FILE_RECORD, and wipers are out of scope
+(IX.3). The block closes a theoretical vector.
+
+> **[NEGATIVE] VIII.9.2** Do not inject fake MFT entries. MFT manipulation requires
+> filesystem-internal writes architecturally below the minifilter. The blocking strategy
+> is complete: an untrusted process that cannot read the MFT cannot discover the absence.
+
+### VIII.10 Integration with the pipeline
+
+**[DECISION] VIII.10.1 — Position in the defense pipeline.**
+The phantom layer operates **in parallel with** the gate–Oracle–preservation chain, not
+in series. A process that enumerates directories encounters phantoms regardless of whether
+its writes pass the gate. The two evidence channels converge at the response system
+(Part V).
+
+**[INVARIANT] VIII.10.2 — The phantom layer does not alter the gate, the Oracle, or preservation.**
+Phantom files are not real files. They do not pass through the gate (their backing-file
+writes are internal). The Oracle does not scan phantom writes. Preservation does not hold
+phantom originals. The phantom layer is an evidence source, not a participant in the
+capture–recovery pipeline.
+
+> **Rationale.** If the Oracle scanned phantom writes it would find ciphertext produced by
+> ransomware encrypting the phantom's content — and the key capture would succeed. But the
+> "original" is fabricated, and "recovering" it serves no purpose; it would inflate the
+> keystore with entries that recover nothing the user owns. The phantom layer feeds
+> *conviction evidence*, not *recovery data*.
+
+---
+
+## PART IX — BOUNDARIES (declared non-defenses)
 
 Two lines bound this system. The default state of any newly found gap is closed unless
 it escapes both (0.3).
 
-### VIII.1 [BOUNDARY] Kernel-code execution is game over
+### IX.1 [BOUNDARY] Kernel-code execution is game over
 A user-mode service plus minifilter structurally cannot defend against an
 equal-or-higher-privilege kernel attacker: such an attacker bypasses the hooks, reads
 the pool, and can destroy the keystore. Every "what if the attacker gets below us"
@@ -900,7 +1222,7 @@ reading the kernel pool, deleting the keystore directly — reduces here.
 > compromise is loss of *future* observation, not retroactive undoing of past captures
 > (subject to keystore survival, VII.1).
 
-### VIII.2 [BOUNDARY] The confirmed limit — beyond both assets
+### IX.2 [BOUNDARY] The confirmed limit — beyond both assets
 Where the Oracle does not capture the key **and** preservation does not hold the original
 within its window, the data is not protected. An Oracle miss **alone** is not the limit: the
 same destructive write the Oracle could not key-capture had its original held by preservation
@@ -958,38 +1280,38 @@ within the window and reduces to this limit only beyond it. They are **not** new
 > the system refuses. The edge is stated, not hidden: recovery is offered only where a key or a
 > held original can prove it.
 
-### VIII.3 [BOUNDARY] Wiper / no-key destruction
+### IX.3 [BOUNDARY] Wiper / no-key destruction
 Plaintext-over-plaintext destruction, pure deletion, and zeroing produce no recoverable
 key and are not targets. A wiper is not viable ransomware (no key, no ransom). Disguised
 encryption still fails the conditional test toward the high end and is captured like any
 encryption; a genuine no-key wipe is out of scope.
 
-### VIII.4 [BOUNDARY] Out-of-volume / geometry corruption
+### IX.4 [BOUNDARY] Out-of-volume / geometry corruption
 Partition-table or out-of-volume corruption makes a volume unaddressable but does not
 destroy file *data* (recoverable by partition repair). Defending partition geometry is a
 different product.
 
-> **[NEGATIVE] VIII.5** Do not add any defense past these lines, and do not escalate
+> **[NEGATIVE] IX.5** Do not add any defense past these lines, and do not escalate
 > threat vectors above them. A scenario that requires kernel access, or that is simply
 > "the Oracle did not capture the key," is closed here — not an invitation to invent a
 > new mechanism.
 
 ---
 
-## PART IX — COMPATIBILITY AND DEPLOYMENT
+## PART X — COMPATIBILITY AND DEPLOYMENT
 
-### IX.1 [DECISION] Single binary, runtime feature detection
+### X.1 [DECISION] Single binary, runtime feature detection
 One source tree, one binary per CPU architecture, targeting every minifilter-capable
 Windows release. Newer DDIs / structures / info-classes are visible at compile time and
 gated at runtime; any routine that would otherwise fail to resolve on a down-level
 kernel is resolved at runtime with a down-level alternative.
 
-> **[NEGATIVE] IX.1.1** No dead code and no compatibility fallback for its own sake. A
+> **[NEGATIVE] X.1.1** No dead code and no compatibility fallback for its own sake. A
 > down-level branch exists only where the up-level path would fail to load or function on
 > a supported OS. A superset of operation callbacks, FSCTL codes, and info-classes is
 > correct: a code an OS never issues never reaches the handler and is inert there.
 
-### IX.2 [DEPLOY] Load, signing, and primitive preconditions
+### X.2 [DEPLOY] Load, signing, and primitive preconditions
 - The driver is linked with `/integritycheck`; the boot-start signature is embedded in
   the `.sys`. Failure of the process-notify registration (which the
   identity-at-creation logic of V.2.2 depends on) is fatal-to-feature, not swallowed.
@@ -1012,7 +1334,7 @@ kernel is resolved at runtime with a down-level alternative.
 
 ---
 
-## PART X — CONFORMANCE CHECKLIST
+## PART XI — CONFORMANCE CHECKLIST
 
 An implementation is constitutional iff all hold.
 
@@ -1102,22 +1424,44 @@ An implementation is constitutional iff all hold.
 - [ ] Each primitive is runtime-detected; absence descends the boundary explicitly
       (VII.5).
 
-**Boundaries (Part VIII)**
+**Phantom Witness (Part VIII)**
+- [ ] Physical absence: phantoms have no MFT entry, no disk clusters, no USN history prior
+      to minifilter intervention; they exist only in IRP responses (VIII.1.1).
+- [ ] Indistinguishability: phantom names, sizes, timestamps, content, reported file
+      identity, and security descriptors match the containing directory's distribution;
+      no observable attribute distinguishes a phantom from a real file (VIII.1.2).
+- [ ] Transparency: trusted processes never see phantoms in any enumeration, create,
+      metadata query, or USN read (VIII.1.3).
+- [ ] Naming is HMAC-SHA256(volume_secret, path || index), deterministic and
+      unpredictable (VIII.2.1).
+- [ ] Conviction is cumulative K-threshold (K ≥ 3); a single phantom touch does not
+      convict; phantom conviction feeds the response system as the third blocking
+      trigger (VIII.4, V.1.2).
+- [ ] The phantom layer does not alter the gate, the Oracle, or preservation
+      (VIII.10.2).
+- [ ] Every user-mode metadata query on an opened phantom (file name, file ID, hard
+      links) reports phantom identity, not backing-file identity (VIII.6.1).
+- [ ] DASD opens and FSCTL_GET_NTFS_FILE_RECORD are denied for untrusted processes
+      (VIII.3.3); no fake MFT entries are injected (VIII.9).
+- [ ] Kernel-privilege closure: without kernel-code execution, no user-mode path
+      distinguishes a phantom from a real file (VIII.0).
+
+**Boundaries (Part IX)**
 - [ ] No defense is added past the kernel line or the confirmed limit; threats are not
-      escalated above them (VIII.5).
+      escalated above them (IX.5).
 - [ ] The confirmed limit is "beyond both assets": an Oracle miss is reversibly protected by
       preservation within the window and reduces to the limit only beyond it; held-only data
-      lost to a SYSTEM store-destruction is detected and reported, never silently dropped (VIII.2).
+      lost to a SYSTEM store-destruction is detected and reported, never silently dropped (IX.2).
 
-**Compatibility (Part IX)**
+**Compatibility (Part X)**
 - [ ] One binary per architecture; down-level branches only where a routine would
-      otherwise fail; no fallback for its own sake (IX.1).
+      otherwise fail; no fallback for its own sake (X.1).
 
 **Process (Part 0)**
 - [ ] Every quantitative claim is tagged MEASURED / DERIVED / DESIGN and none is deferred
       to runtime configuration (0.2, 0.5).
 - [ ] No CLOSED conclusion is reopened on a basis already inside the boundaries of
-      Part VIII (0.3).
+      Part IX (0.3).
 
 ---
 
@@ -1127,8 +1471,12 @@ This document has one load-bearing sentence (Part I) and nothing that contradict
 strength of the response is proportional to the certainty of the evidence. The gate asks one
 question; the Oracle answers it by capturing a key, and where it does the key recovers every
 file under it without bound; where the key is too fleeting to catch, the original the attacker
-had to read is held aside in a bounded window so the destruction can be undone; the user decides
-when proven or capacity-exhausting destruction is an attack; and where neither the key nor a
-held original remains, the system says so instead of pretending otherwise. The two assets are
-ranked, not redundant — the definitive key capture and the bounded reversible hold — and nothing
-in the system responds more strongly than the evidence it has.
+had to read is held aside in a bounded window so the destruction can be undone; where the
+attacker walks files indiscriminately, virtual witnesses that it cannot distinguish from real
+files detect the pattern and the system blocks the walker; the user decides when proven,
+capacity-exhausting, or behaviorally convicted destruction is an attack; and where neither the
+key nor a held original remains, the system says so instead of pretending otherwise. The two
+recovery assets are ranked, not redundant — the definitive key capture and the bounded
+reversible hold — and the behavioral witness is orthogonal to both, providing evidence for
+conviction but never for recovery. Nothing in the system responds more strongly than the
+evidence it has.

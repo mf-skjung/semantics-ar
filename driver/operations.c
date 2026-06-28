@@ -2,6 +2,7 @@
 #include "seam.h"
 #include "state.h"
 #include "capture.h"
+#include "phantom.h"
 
 _IRQL_requires_max_(APC_LEVEL)
 FLT_PREOP_CALLBACK_STATUS SarPreManageBypassIo(_Inout_ PFLT_CALLBACK_DATA Data,
@@ -281,11 +282,15 @@ SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
                                               &info)))
         return FLT_POSTOP_FINISHED_PROCESSING;
 
-    if (NT_SUCCESS(FltParseFileNameInformation(info)) && SarNameIsOwnStore(&info->Name)) {
-        context = SarGetStreamContext(FltObjects);
-        if (context != NULL) {
-            InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_OWN_STORE);
-            FltReleaseContext(context);
+    if (NT_SUCCESS(FltParseFileNameInformation(info))) {
+        if (SarNameIsOwnStore(&info->Name)) {
+            context = SarGetStreamContext(FltObjects);
+            if (context != NULL) {
+                InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_OWN_STORE);
+                if (SarPhantomIsPhantomPath(&info->Name))
+                    InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_PHANTOM_BACKING);
+                FltReleaseContext(context);
+            }
         }
     }
 
@@ -346,6 +351,16 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_PREOP_COMPLETE;
     }
 
+    {
+        PSAR_STREAM_CONTEXT sc = NULL;
+        if (NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                           (PFLT_CONTEXT *)&sc))) {
+            if (sc->flags & SAR_STREAMCTX_FLAG_PHANTOM_BACKING)
+                SarPhantomRecordEvidence(PsGetProcessId(process));
+            FltReleaseContext(sc);
+        }
+    }
+
     member = SarClassifyWrite(Data->Iopb->IrpFlags);
 
     offset = Data->Iopb->Parameters.Write.ByteOffset;
@@ -400,6 +415,19 @@ SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
 
     if (control_code == FSCTL_MANAGE_BYPASS_IO)
         return SarPreManageBypassIo(Data, FltObjects, CompletionContext);
+
+    if (control_code == FSCTL_GET_NTFS_FILE_RECORD && SarPhantomActive(g_sar.phantom)) {
+        PETHREAD thr = Data->Thread;
+        if (thr == NULL) thr = PsGetCurrentThread();
+        PEPROCESS proc = IoThreadToProcess(thr);
+        if (proc == NULL) proc = PsGetCurrentProcess();
+        HANDLE pid = PsGetProcessId(proc);
+        if (!SarPhantomIsTrustedProcess(pid)) {
+            Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
+    }
 
     member = SarClassifyFsControl(control_code);
     if (member == SAR_DESTRUCT_NONE)

@@ -33,6 +33,7 @@
 #define SAR_POOL_TAG_PRESFREE  'fPrS'
 #define SAR_POOL_TAG_PRESBUF   'bPrS'
 #define SAR_POOL_TAG_PRESKEY   'kPrS'
+#define SAR_POOL_TAG_PHANTOM  'hPrS'
 
 #define SAR_WHITELIST_CAPACITY    256u
 #define SAR_IDENTITY_BUCKET_COUNT 1024u
@@ -96,6 +97,7 @@ typedef struct _SAR_POSTURE {
     BOOLEAN keystore_persistent;
     BOOLEAN keystore_tamper_detected;
     BOOLEAN preserve_active;
+    BOOLEAN phantom_active;
 } SAR_POSTURE, *PSAR_POSTURE;
 
 struct _SAR_STATE;
@@ -104,6 +106,7 @@ struct _SAR_FEATURE_FNS;
 struct _SAR_CAPTURE_CTX;
 struct _SAR_KEYSTORE;
 struct _SAR_PRESERVE;
+struct _SAR_PHANTOM;
 
 typedef struct _SAR_GLOBALS {
     PDRIVER_OBJECT driver_object;
@@ -113,6 +116,7 @@ typedef struct _SAR_GLOBALS {
     struct _SAR_KEYSTORE *keystore;
     struct _SAR_CAPTURE_CTX *capture;
     struct _SAR_PRESERVE *preserve;
+    struct _SAR_PHANTOM *phantom;
     SAR_POSTURE posture;
     BOOLEAN process_notify_registered;
 } SAR_GLOBALS, *PSAR_GLOBALS;
