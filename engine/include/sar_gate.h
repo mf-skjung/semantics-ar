@@ -7,6 +7,7 @@
 #define SAR_GATE_BLOCK_SIZE 256u
 #define SAR_GATE_THETA_NUM  10u
 #define SAR_GATE_THETA_DEN  100u
+#define SAR_GATE_MIN_NOVELTY_BIGRAMS 12u
 
 #define SAR_GATE_MAP_BYTES  ((1u << 16) / 8u)
 

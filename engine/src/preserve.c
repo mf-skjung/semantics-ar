@@ -43,6 +43,7 @@ void sar_preserve_record_init(sar_preserve_record_t *rec,
                               uint64_t capture_time,
                               uint64_t payload_offset,
                               uint64_t payload_length,
+                              uint64_t actor_id,
                               const uint8_t *iv, uint8_t iv_length,
                               const uint8_t *plaintext, uint64_t plaintext_length) {
     sar_memset(rec, 0, sizeof(*rec));
@@ -57,6 +58,8 @@ void sar_preserve_record_init(sar_preserve_record_t *rec,
     rec->capture_time = capture_time;
     rec->payload_offset = payload_offset;
     rec->payload_length = payload_length;
+    rec->actor_id = actor_id;
+    rec->state = SAR_PRESERVE_PROBATION;
     uint8_t ivl = iv_length > SEMANTICS_AR_IV_MAX ? SEMANTICS_AR_IV_MAX : iv_length;
     if (iv) sar_memcpy(rec->iv, iv, ivl);
     rec->iv_length = ivl;
@@ -88,6 +91,19 @@ int sar_preserve_append(sar_preserve_record_t *records,
     return 1;
 }
 
+uint64_t sar_preserve_promote(sar_preserve_record_t *records, uint64_t count,
+                              uint64_t actor_id) {
+    uint64_t promoted = 0;
+    for (uint64_t i = 0; i < count; i++) {
+        if (records[i].state == SAR_PRESERVE_PROBATION &&
+            records[i].actor_id == actor_id) {
+            records[i].state = SAR_PRESERVE_PROTECTED;
+            promoted++;
+        }
+    }
+    return promoted;
+}
+
 uint64_t sar_preserve_reconcile(sar_preserve_record_t *records, uint64_t *count,
                                 const uint16_t *provenance_path,
                                 uint64_t key_offset, uint64_t key_length) {
@@ -115,6 +131,24 @@ uint64_t sar_preserve_total_bytes(const sar_preserve_record_t *records,
     return total;
 }
 
+uint64_t sar_preserve_protected_bytes(const sar_preserve_record_t *records,
+                                      uint64_t count) {
+    uint64_t total = 0;
+    for (uint64_t i = 0; i < count; i++)
+        if (records[i].state == SAR_PRESERVE_PROTECTED)
+            total += records[i].payload_length;
+    return total;
+}
+
+uint64_t sar_preserve_probation_bytes(const sar_preserve_record_t *records,
+                                      uint64_t count) {
+    uint64_t total = 0;
+    for (uint64_t i = 0; i < count; i++)
+        if (records[i].state == SAR_PRESERVE_PROBATION)
+            total += records[i].payload_length;
+    return total;
+}
+
 uint64_t sar_preserve_evict_aged(sar_preserve_record_t *records, uint64_t *count,
                                  uint64_t now, uint64_t retention) {
     uint64_t w = 0, removed = 0;
@@ -131,16 +165,23 @@ uint64_t sar_preserve_evict_aged(sar_preserve_record_t *records, uint64_t *count
     return removed;
 }
 
-uint64_t sar_preserve_evict_oldest(sar_preserve_record_t *records, uint64_t *count,
-                                   uint64_t capacity_bytes) {
+uint64_t sar_preserve_evict_probation_oldest(sar_preserve_record_t *records,
+                                             uint64_t *count,
+                                             uint64_t probation_cap_bytes) {
     uint64_t removed = 0;
-    while (*count > 0 &&
-           sar_preserve_total_bytes(records, *count) > capacity_bytes) {
-        uint64_t oldest = 0;
-        for (uint64_t i = 1; i < *count; i++) {
-            if (records[i].capture_time < records[oldest].capture_time)
+    for (;;) {
+        if (sar_preserve_probation_bytes(records, *count) <= probation_cap_bytes)
+            break;
+        uint64_t oldest = *count;
+        for (uint64_t i = 0; i < *count; i++) {
+            if (records[i].state != SAR_PRESERVE_PROBATION)
+                continue;
+            if (oldest == *count ||
+                records[i].capture_time < records[oldest].capture_time)
                 oldest = i;
         }
+        if (oldest == *count)
+            break;
         for (uint64_t i = oldest + 1; i < *count; i++)
             sar_memcpy(&records[i - 1], &records[i], sizeof(records[i]));
         (*count)--;

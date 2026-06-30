@@ -25,7 +25,9 @@ void sar_gate_block_counts(sar_gate_map_t *scratch,
 
     uint32_t nq = 0;
     uint32_t nc = 0;
-    for (size_t k = 0; k + 1 < block_len; k += 2) {
+    for (size_t k = 0; k + 1 < block_len; k++) {
+        if (written[k] == original[k] && written[k + 1] == original[k + 1])
+            continue;
         uint32_t pair = ((uint32_t)written[k] << 8) | (uint32_t)written[k + 1];
         nq++;
         if ((scratch->present[pair >> 3] >> (pair & 7u)) & 1u)
@@ -40,7 +42,10 @@ int sar_gate_fires(uint32_t n_query, uint32_t n_covered)
 {
     if (n_query == 0)
         return 0;
-    return (n_query - n_covered) * SAR_GATE_THETA_DEN >= n_query * SAR_GATE_THETA_NUM;
+    uint32_t novel = n_query - n_covered;
+    if (novel < SAR_GATE_MIN_NOVELTY_BIGRAMS)
+        return 0;
+    return novel * SAR_GATE_THETA_DEN >= n_query * SAR_GATE_THETA_NUM;
 }
 
 void sar_gate_classify(sar_gate_map_t *scratch,

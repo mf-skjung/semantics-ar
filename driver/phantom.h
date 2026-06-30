@@ -10,7 +10,6 @@
 #define SAR_PHANTOM_NAME_CHARS       32
 #define SAR_PHANTOM_MIN_SIZE         (4u * 1024u)
 #define SAR_PHANTOM_MAX_SIZE         (16u * 1024u * 1024u)
-#define SAR_PHANTOM_SWAP_EXTRA       (4u * 1024u)
 #define SAR_PHANTOM_SYNTH_REF_MASK   0xFFFF000000000000ULL
 #define SAR_PHANTOM_BACKING_SUBDIR   L"\\phantom"
 
@@ -21,15 +20,6 @@ typedef enum _SAR_PHANTOM_TRUST {
     SAR_PHANTOM_TRUSTED   = 1,
     SAR_PHANTOM_TAINTED   = 2
 } SAR_PHANTOM_TRUST;
-
-typedef struct _SAR_PHANTOM_DIR_SWAP_CTX {
-    PVOID  original_buffer;
-    PMDL   original_mdl;
-    PVOID  swap_buffer;
-    PMDL   swap_mdl;
-    ULONG  swap_length;
-    FILE_INFORMATION_CLASS info_class;
-} SAR_PHANTOM_DIR_SWAP_CTX, *PSAR_PHANTOM_DIR_SWAP_CTX;
 
 typedef struct _SAR_DIR_OFFSETS {
     ULONG next_entry;
@@ -47,8 +37,17 @@ typedef struct _SAR_DIR_OFFSETS {
     LONG  short_name_length;
     LONG  short_name;
     LONG  file_id;
+    LONG  file_id_128;
     ULONG base_record_size;
 } SAR_DIR_OFFSETS;
+
+typedef struct _SAR_PHANTOM_ENUM_CONTEXT {
+    BOOLEAN emitted;
+    BOOLEAN pattern_captured;
+    ULONG   real_seen;
+    USHORT  pattern_bytes;
+    WCHAR   pattern[260];
+} SAR_PHANTOM_ENUM_CONTEXT, *PSAR_PHANTOM_ENUM_CONTEXT;
 
 typedef struct _SAR_PHANTOM {
     PFLT_FILTER filter;

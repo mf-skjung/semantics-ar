@@ -278,8 +278,39 @@ static VOID SarRecResolveNtPath(_In_ PCWSTR DosPath,
     if (!NT_SUCCESS(ZwCreateFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb, NULL,
                                   FILE_ATTRIBUTE_NORMAL,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                  FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0)))
+                                  FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0))) {
+        UNICODE_STRING link;
+        UNICODE_STRING dev;
+        OBJECT_ATTRIBUTES loa;
+        HANDLE lh;
+        WCHAR linkBuf[8];
+        WCHAR devBuf[128];
+        ULONG i;
+        ULONG n;
+
+        if (name.Length < 7 * sizeof(WCHAR))
+            return;
+        RtlCopyMemory(linkBuf, DosPath, 6 * sizeof(WCHAR));
+        linkBuf[6] = 0;
+        RtlInitUnicodeString(&link, linkBuf);
+        InitializeObjectAttributes(&loa, &link, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+        if (!NT_SUCCESS(ZwOpenSymbolicLinkObject(&lh, SYMBOLIC_LINK_QUERY, &loa)))
+            return;
+        dev.Buffer = devBuf;
+        dev.Length = 0;
+        dev.MaximumLength = sizeof(devBuf);
+        if (NT_SUCCESS(ZwQuerySymbolicLinkObject(lh, &dev, NULL))) {
+            ULONG dchars = dev.Length / sizeof(WCHAR);
+            n = 0;
+            for (i = 0; i < dchars && n < SEMANTICS_AR_PROVENANCE_PATH_MAX - 1; i++)
+                NtPath[n++] = (UINT16)devBuf[i];
+            for (i = 6; DosPath[i] != 0 && n < SEMANTICS_AR_PROVENANCE_PATH_MAX - 1; i++)
+                NtPath[n++] = (UINT16)DosPath[i];
+            NtPath[n] = 0;
+        }
+        ZwClose(lh);
         return;
+    }
 
     if (NT_SUCCESS(ObReferenceObjectByHandle(h, 0, *IoFileObjectType, KernelMode,
                                               (PVOID *)&fo, NULL))) {
@@ -312,8 +343,10 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
     PWCHAR target;
     PWCHAR temp;
     PUCHAR ct = NULL;
+    PUCHAR out = NULL;
     PUCHAR region = NULL;
     SIZE_T len = 0;
+    SIZE_T outlen;
     UINT64 off = Request->offset;
     UINT64 rlen = Request->length;
     NTSTATUS status;
@@ -324,7 +357,7 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
 
     if (g_sar.preserve == NULL)
         return SAR_RECOVER_DECLINED_TARGET_IO;
-    if (rlen == 0 || rlen > SAR_RECOVERY_MAX_BYTES)
+    if (rlen == 0 || rlen > SAR_RECOVERY_MAX_BYTES || off + rlen < off)
         return SAR_RECOVER_INVALID;
 
     target = (PWCHAR)ExAllocatePool2(POOL_FLAG_PAGED, 2 * SAR_REC_PATH_CCH * sizeof(WCHAR),
@@ -344,19 +377,36 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
         goto cleanup;
     }
     if (!NT_SUCCESS(status)) {
-        result = SAR_RECOVER_DECLINED_TARGET_IO;
-        goto cleanup;
+        if (status == STATUS_OBJECT_NAME_NOT_FOUND ||
+            status == STATUS_OBJECT_PATH_NOT_FOUND ||
+            status == STATUS_NO_SUCH_FILE ||
+            status == STATUS_DELETE_PENDING) {
+            ct = NULL;
+            len = 0;
+        } else {
+            result = SAR_RECOVER_DECLINED_TARGET_IO;
+            goto cleanup;
+        }
     }
-    if (off >= (UINT64)len || rlen > (UINT64)len - off) {
-        result = SAR_RECOVER_DECLINED_MISMATCH;
+
+    outlen = (SIZE_T)(off + rlen);
+    if ((SIZE_T)len > outlen)
+        outlen = (SIZE_T)len;
+    if (outlen > SAR_RECOVERY_MAX_BYTES) {
+        result = SAR_RECOVER_DECLINED_TOO_LARGE;
         goto cleanup;
     }
 
     region = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)rlen, SAR_POOL_TAG_RECOVER);
-    if (region == NULL) {
+    out = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, outlen, SAR_POOL_TAG_RECOVER);
+    if (region == NULL || out == NULL) {
         result = SAR_RECOVER_INVALID;
         goto cleanup;
     }
+
+    RtlZeroMemory(out, outlen);
+    if (ct != NULL && len > 0)
+        RtlCopyMemory(out, ct, len <= outlen ? len : outlen);
 
     {
         UINT16 resolved[SEMANTICS_AR_PROVENANCE_PATH_MAX];
@@ -370,9 +420,9 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
         goto cleanup;
     }
 
-    RtlCopyMemory(ct + off, region, (SIZE_T)rlen);
+    RtlCopyMemory(out + off, region, (SIZE_T)rlen);
 
-    if (!NT_SUCCESS(SarRecWriteTemp(temp, ct, len))) {
+    if (!NT_SUCCESS(SarRecWriteTemp(temp, out, outlen))) {
         result = SAR_RECOVER_DECLINED_TARGET_IO;
         goto cleanup;
     }
@@ -384,6 +434,10 @@ cleanup:
     if (region != NULL) {
         RtlSecureZeroMemory(region, (SIZE_T)rlen);
         ExFreePoolWithTag(region, SAR_POOL_TAG_RECOVER);
+    }
+    if (out != NULL) {
+        RtlSecureZeroMemory(out, outlen);
+        ExFreePoolWithTag(out, SAR_POOL_TAG_RECOVER);
     }
     if (ct != NULL) {
         RtlSecureZeroMemory(ct, len);

@@ -29,6 +29,7 @@ void sar_preserve_record_init(sar_preserve_record_t *rec,
                               uint64_t capture_time,
                               uint64_t payload_offset,
                               uint64_t payload_length,
+                              uint64_t actor_id,
                               const uint8_t *iv, uint8_t iv_length,
                               const uint8_t *plaintext, uint64_t plaintext_length);
 
@@ -40,6 +41,9 @@ int sar_preserve_append(sar_preserve_record_t *records,
                         uint64_t *count, uint64_t capacity,
                         const sar_preserve_record_t *rec);
 
+uint64_t sar_preserve_promote(sar_preserve_record_t *records, uint64_t count,
+                              uint64_t actor_id);
+
 uint64_t sar_preserve_reconcile(sar_preserve_record_t *records, uint64_t *count,
                                 const uint16_t *provenance_path,
                                 uint64_t key_offset, uint64_t key_length);
@@ -47,11 +51,18 @@ uint64_t sar_preserve_reconcile(sar_preserve_record_t *records, uint64_t *count,
 uint64_t sar_preserve_total_bytes(const sar_preserve_record_t *records,
                                   uint64_t count);
 
+uint64_t sar_preserve_protected_bytes(const sar_preserve_record_t *records,
+                                      uint64_t count);
+
+uint64_t sar_preserve_probation_bytes(const sar_preserve_record_t *records,
+                                      uint64_t count);
+
 uint64_t sar_preserve_evict_aged(sar_preserve_record_t *records, uint64_t *count,
                                  uint64_t now, uint64_t retention);
 
-uint64_t sar_preserve_evict_oldest(sar_preserve_record_t *records, uint64_t *count,
-                                   uint64_t capacity_bytes);
+uint64_t sar_preserve_evict_probation_oldest(sar_preserve_record_t *records,
+                                             uint64_t *count,
+                                             uint64_t probation_cap_bytes);
 
 int sar_preserve_would_exceed(const sar_preserve_record_t *records, uint64_t count,
                               uint64_t capacity_bytes, uint64_t incoming_bytes);

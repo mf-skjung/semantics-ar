@@ -11,10 +11,11 @@ x64 Native Tools prompt (or `vcvars64.bat`), static CRT so no runtime DLL is nee
 the target:
 
 ```
-cl /O2 /MT partial_encryptor.c /link bcrypt.lib
-cl /O2 /MT ransom_sim.c        /link bcrypt.lib
-cl /O2 /MT splitter.c          /link bcrypt.lib
-cl /O2 /MT wipe_encryptor.c    /link bcrypt.lib
+cl /O2 /MT partial_encryptor.c   /link bcrypt.lib
+cl /O2 /MT ransom_sim.c          /link bcrypt.lib
+cl /O2 /MT splitter.c            /link bcrypt.lib
+cl /O2 /MT wipe_encryptor.c      /link bcrypt.lib
+cl /O2 /MT noninplace_destroyer.c /link bcrypt.lib
 ```
 
 All encrypt AES-256-CBC with a fixed IV; the captured key is recovered by the driver via
@@ -36,6 +37,17 @@ IV-location at conviction.
   <count>` is spawned internally) — spreads encryption across many short-lived worker
   processes to evade the **per-process ENFORCE block**. Quantifies block degradation vs
   split count; the identity-independent capture floor still holds.
+
+- **noninplace_destroyer** `<newdelete|renameover|truncate|mmap|setzero> <dir> <count> [sizeKB]`
+  — the **non-in-place destruction paths**, the one family the four in-place harnesses above do
+  not exercise. Per file it creates a known-plaintext victim, reads it (arming the read→destroy
+  gate), then destroys the original by: writing `<file>.locked` and `DeleteFile` (newdelete);
+  `MoveFileEx(REPLACE_EXISTING)` of a ciphertext temp over it (renameover); writing a ciphertext
+  head then `SetEndOfFile` to drop the tail (truncate); a `PAGE_READWRITE` section map overwritten
+  and flushed (mmap); or `FSCTL_SET_ZERO_DATA` over the body (setzero). Each must leave the
+  pre-destruction original recoverable from the preservation store (probation hold). Verify by
+  enumerating the preserve store / running operator restore after each mode and diffing against the
+  known plaintext; under ENFORCE, a convicted actor's holds are promoted and survive capacity slide.
 
 - **wipe_encryptor** `<dir> <count> <postHoldMs>` — the **pre-write-wipe evasion**: per
   file it encrypts in memory, then `BCryptDestroyKey` + `SecureZeroMemory` of the key

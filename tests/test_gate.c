@@ -80,7 +80,7 @@ int main(void)
     for (int i = 0; i < 256; i++) wrote[i] = orig[i];
     for (int i = 100; i < 106; i++) wrote[i] = (uint8_t)(orig[i] ^ 0xA5);
     sar_gate_block_counts(&scratch, orig, wrote, 256, &nq, &nc);
-    CHECK(novelty(nq, nc) < 0.10, "point-change: novelty < theta");
+    CHECK(nq - nc < SAR_GATE_MIN_NOVELTY_BIGRAMS, "point-change: novel volume below floor");
     sar_gate_classify(&scratch, orig, wrote, 256, &r);
     CHECK(r.candidate == 0, "point-change: classify skip");
 
@@ -99,12 +99,37 @@ int main(void)
     CHECK(r.candidate == 1, "intermittent: fires");
     CHECK(r.novelty_off == 1024 && r.novelty_len == 256, "intermittent: novelty slice located at the cipher block");
 
+    printf("[diff-restricted: 16B cipher per 256B block (6.25%%) -> fires despite dilution]\n");
+    fill_text(orig, 4096);
+    for (int i = 0; i < 4096; i++) wrote[i] = orig[i];
+    for (int s = 0; s < 4096; s += 256) fill_random(wrote + s, 16, 0x1700u + (uint32_t)s);
+    sar_gate_classify(&scratch, orig, wrote, 4096, &r);
+    CHECK(r.candidate == 1, "sub-10%/block intermittent: fires (original excluded from novelty)");
+
+    printf("[benign high-volume same-vocabulary edit (256B rewritten with in-vocab content) -> skip]\n");
+    fill_text(orig, 4096);
+    for (int i = 0; i < 4096; i++) wrote[i] = orig[i];
+    for (int i = 1024; i < 1280; i++) wrote[i] = orig[i + 13];
+    sar_gate_block_counts(&scratch, orig + 1024, wrote + 1024, 256, &nq, &nc);
+    CHECK(nq >= SAR_GATE_MIN_NOVELTY_BIGRAMS && novelty(nq, nc) < 0.10,
+          "same-vocabulary rewrite: high changed volume but novelty < theta");
+    sar_gate_classify(&scratch, orig, wrote, 4096, &r);
+    CHECK(r.candidate == 0, "same-vocabulary edit: classify skip (ratio gate, not volume gate)");
+
+    printf("[targeted header-only encryption: first 512B of a 4KB file -> fires]\n");
+    fill_text(orig, 4096);
+    for (int i = 0; i < 4096; i++) wrote[i] = orig[i];
+    fill_random(wrote, 512, 0xDEAD2);
+    sar_gate_classify(&scratch, orig, wrote, 4096, &r);
+    CHECK(r.candidate == 1 && r.novelty_off == 0,
+          "header-only encryption: fires at the encrypted header");
+
     printf("[Black Basta-style 64B run inside a 256B block -> fires]\n");
     fill_text(orig, 256);
     for (int i = 0; i < 256; i++) wrote[i] = orig[i];
     fill_random(wrote + 100, 64, 0x6464);
     sar_gate_block_counts(&scratch, orig, wrote, 256, &nq, &nc);
-    CHECK(novelty(nq, nc) >= 0.20, "64B run: novelty ~0.25");
+    CHECK(novelty(nq, nc) >= 0.20, "64B run: changed-only novelty high");
     CHECK(sar_gate_fires(nq, nc), "64B run: fires");
 
     printf("[base64-armored ciphertext over text -> still fires (hard floor ~0.938)]\n");

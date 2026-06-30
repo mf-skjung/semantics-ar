@@ -314,6 +314,11 @@ static VOID SarPresPersistIndex(_Inout_ PSAR_PRESERVE P)
         return;
     }
 
+    if (P->data_handle != NULL) {
+        IO_STATUS_BLOCK fiosb;
+        ZwFlushBuffersFile(P->data_handle, &fiosb);
+    }
+
     if (!NT_SUCCESS(SarStoreWriteAtomic(SAR_PRES_INDEXTMP, SAR_PRES_INDEX, buf, (ULONG)out_len,
                                         SAR_POOL_TAG_PRESBUF)))
         InterlockedExchange(&P->dirty, 1);
@@ -569,13 +574,12 @@ BOOLEAN SarPreserveReady(_In_opt_ PSAR_PRESERVE Preserve)
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
-                          _In_ UINT64 Offset, _In_ UINT64 Length,
+                          _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
                           _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
                           _In_ ULONG PlaintextLen)
 {
     UINT64 ct_len;
     UINT64 off;
-    UINT64 target;
     UCHAR iv[SAR_PRESERVE_AES_BLOCK];
     PUCHAR ctbuf;
     ULONG produced = 0;
@@ -614,9 +618,15 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
                                 (uint64_t)now.QuadPart, Preserve->retention_100ns) > 0)
         Preserve->free_dirty = TRUE;
 
-    target = Preserve->capacity_bytes - ct_len;
-    if (sar_preserve_total_bytes(Preserve->records, Preserve->record_count) > target) {
-        if (sar_preserve_evict_oldest(Preserve->records, &Preserve->record_count, target) > 0)
+    {
+        UINT64 prot = sar_preserve_protected_bytes(Preserve->records, Preserve->record_count);
+        if (prot + ct_len > Preserve->capacity_bytes) {
+            FltReleasePushLock(&Preserve->lock);
+            ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
+            return STATUS_SUCCESS;
+        }
+        if (sar_preserve_evict_probation_oldest(Preserve->records, &Preserve->record_count,
+                                                Preserve->capacity_bytes - prot - ct_len) > 0)
             Preserve->free_dirty = TRUE;
     }
 
@@ -661,13 +671,29 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     }
 
     sar_preserve_record_init(&rec, Path, Offset, Length, (uint64_t)now.QuadPart, off, ct_len,
-                             iv, SAR_PRESERVE_AES_BLOCK, Plaintext, PlaintextLen);
+                             ActorId, iv, SAR_PRESERVE_AES_BLOCK, Plaintext, PlaintextLen);
     if (sar_preserve_append(Preserve->records, &Preserve->record_count, Preserve->record_capacity,
                             &rec) == 1)
         InterlockedExchange(&Preserve->dirty, 1);
 
     FltReleasePushLock(&Preserve->lock);
     return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarPreservePromote(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 ActorId)
+{
+    uint64_t promoted;
+
+    if (Preserve == NULL || Preserve->ready == 0)
+        return;
+
+    FltAcquirePushLockExclusive(&Preserve->lock);
+    promoted = sar_preserve_promote(Preserve->records, Preserve->record_count, ActorId);
+    FltReleasePushLock(&Preserve->lock);
+
+    if (promoted > 0)
+        InterlockedExchange(&Preserve->dirty, 1);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -699,8 +725,8 @@ BOOLEAN SarPreserveWouldExceed(_In_opt_ PSAR_PRESERVE Preserve, _In_ UINT64 Inco
         return FALSE;
 
     FltAcquirePushLockShared(&Preserve->lock);
-    exceed = sar_preserve_total_bytes(Preserve->records, Preserve->record_count) + IncomingBytes >
-             Preserve->capacity_bytes;
+    exceed = sar_preserve_total_bytes(Preserve->records, Preserve->record_count) +
+             IncomingBytes > Preserve->capacity_bytes;
     FltReleasePushLock(&Preserve->lock);
     return exceed;
 }

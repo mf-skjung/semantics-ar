@@ -442,31 +442,52 @@ limit (IX.2): the system replaces only what it can prove it is restoring.
 A write that passes the gate (D ∧ T, Part IV) by an unexempted process is, by construction, a
 destruction of an existing original whose content is unpredictable from that original — the same
 population the Oracle is asked about. Before that original is destroyed, a copy of the destroyed
-region is taken **once** and placed in the preservation store. Preservation runs on the gate's
-output, never as a second classifier: it adds a *holding*, it does not judge, it never blocks
-(IV.3), and a held original is never a conviction (I.1).
+region is taken **once** and placed in the preservation store as a *probation* hold, bound to the
+destroying actor. Preservation runs on the gate's output, never as a second classifier: it adds a
+*holding*, it does not judge, it never blocks (IV.3), and a held original is never a conviction
+(I.1). The two pools a hold may occupy — probation and protected (III.5.5) — are a resource-and-
+retention distinction, not an evidence distinction: nothing about which pool a copy sits in is ever
+read back as a signal.
 
-**[INVARIANT] III.5.2 — The copy is taken off the IRP and never reads the file from the write path.**
-The original is obtained without the in-IRP same-file read that wedges the volume (III.2.1), from
-two deadlock-free sources, in order:
+**[INVARIANT] III.5.2 — The copy is taken off a deadlock-free path, never via the cached same-file read.**
+The original is obtained without the cached in-IRP same-file read that wedges the volume (III.2.1),
+from sources chosen by destruction shape:
 
-1. **The originator's own read.** Because read → encrypt → write is causal, the attacker has
-   already read the plaintext it is about to destroy; that read is sampled at the read seam and,
-   for preservation, the **whole** read region — not merely the proof sample — is correlated to
-   the write by stream and offset and staged to the store. This is the primary source: it costs no
-   extra file I/O and cannot deadlock, because the bytes are already in hand.
-2. **A separate file object, off the IRP.** For a destruction whose original the read did not
-   yield in full — a truncate or delete/rename-over of a region not recently read, or a mapped-
-   section write — a worker copies the still-intact original through a *distinct* kernel file
-   object opened unbuffered, at PASSIVE level, holding no filesystem resource of the destroying
-   operation. A delete, rename-over, or truncate exposes the whole original on disk at the moment
-   it is requested, so the copy precedes the destruction; an in-place overwrite whose region was
-   not read is copied best-effort before the write commits, and where that copy loses the race the
-   region reduces to the confirmed limit (IX.2), never to a held resource on the IRP.
+1. **In-place overwrite — the write region read non-cached at the write seam, before the cached write
+   lands.** In the write pre-operation, before the file system applies the write, the doomed region is
+   read through **non-cached paging I/O** on the operation's own file object. Non-cached paging reads
+   bypass the cache-manager recursion that makes a *cached* same-file read wedge (III.2.1) and return
+   the committed on-disk original coherently — never a torn mix of pre- and post-write bytes — so the
+   pre-image is captured intact in one synchronous read and frozen in a kernel buffer for the worker
+   to stage. The copy is taken only when the write is *novel against the actor's own prior read* of
+   that region: read → encrypt → write is causal, so the head of the write is compared to the head the
+   actor last read, and a write that barely changes what was read is a benign identical rewrite, not a
+   destruction, and never reaches the copy path. This causal pre-screen, not a second file read, is
+   what keeps benign in-place rewriters off the preservation path.
+2. **The doomed region, read at the destruction seam while still intact.** A delete, truncate,
+   allocation-shrink, range-zero, block-clone, or ODX offload-write is observed in its pre-operation
+   before the file system has processed it, so the region it is about to discard is still fully on
+   disk; the destroyed extent — whole file for a delete, the shrunk tail for a truncate or allocation
+   cut, the target extent for a clone or offload — is read by a worker through a distinct file object
+   and staged. The read is gated on the object having been read by an untrusted actor (the read →
+   destroy causality of encryption), so a content-less benign delete that never consumed the original
+   is not held.
+3. **A distinct file object, off the IRP.** For a destruction whose original does not live on the
+   handle in hand — a rename-over or hardlink-replace, where the doomed file is the *destination*,
+   and a mapped-section write, where the modification flushes asynchronously — a worker copies the
+   still-intact original through a *distinct* kernel file object, at PASSIVE level, holding no
+   filesystem resource of the destroying operation. The destination of a replace is opened below
+   our own instance and read before the rename commits; a mapped file is read by a deferred worker
+   on its own handle, best-effort before the dirtied pages flush, and where that copy loses the race
+   the region reduces to the confirmed limit (IX.2), never to a held resource on the IRP.
 
-Every destruction member of IV.1.2 — overwrite, truncate, delete, rename-over, hardlink-replace,
-clone, section write — is a preservation trigger by the same enumeration that makes it a capture
-candidate; the original is held under whichever source applies.
+Every destruction member of IV.1.2 that has a recoverable file region — in-place overwrite,
+truncate, allocation-shrink, delete, rename-over, hardlink-replace, block-clone, ODX offload-write,
+range-zero, file-level-trim, and mapped-section write — is a preservation trigger by the same
+enumeration that makes it a capture candidate; the original is held under whichever source applies.
+Volume-level destructions (volume lock, dismount) have no single-file region to hold and are met by
+detection and the capacity response alone (V.1.2); making a file sparse destroys nothing by itself
+(its zeroing arrives as a separate range-zero, which is held).
 
 **[INVARIANT] III.5.3 — First write wins; a held original is never overwritten by what destroys it.**
 The store holds **one copy per (file, region)** — the earliest observed state of that region within
@@ -481,17 +502,34 @@ The preserved original hedges against the key being missed; the moment a key tha
 enters the keystore — at a convicting write or via a sibling region under a reused key (II.4.2) — the hedge is spent and the held original for that region is discarded.
 Reconciliation is driven by keystore append: each new record cancels the preserved originals its
 (file, region) now covers. Preservation therefore consumes its bounded resource only on the residue
-the Oracle never caught, and where the Oracle succeeds the store trends to empty.
+the Oracle never caught, and where the Oracle succeeds the store trends to empty. Beyond cancelling
+the recovered region, a conviction **promotes**: when the Oracle forward-proves any write of an actor,
+every remaining probation hold of that actor is moved to the protected pool (III.5.5). A proven
+encryptor's originals whose keys were never captured are the residue most worth keeping; promotion
+exempts them from capacity reclamation while leaving an unconvicted actor's holds in probation.
 
-**[DECISION] III.5.5 — The window is a bounded resource envelope: time and capacity.**
+**[DECISION] III.5.5 — The window is a bounded resource envelope: time and capacity, across two pools.**
 Held originals live under two bounds, a recorded [DESIGN] default the user may set as a resource
-envelope (0.5, V.1.3): a **retention time**, after which a held original is reclaimed (the destruction
-is old enough that the user has had the window to notice and recover), and a **total capacity**,
-accounted by held-region bytes (II.5.1's region model, not a file count). Reclamation orders by age.
-What happens at capacity exhaustion is the response question and belongs to the mode (V.1.2): AUDIT
-slides the window — commits the oldest, accepting that beyond the envelope a capacity-exceeding attack
-is not prevented; ENFORCE blocks. The bounds size reversible holding; they are never a detection or
-conviction signal.
+envelope (0.5, V.1.3): a **retention time**, after which any held original is reclaimed (the
+destruction is old enough that the user has had the window to notice and recover), and a **total
+capacity**, accounted by held-region bytes (II.5.1's region model, not a file count). Within that
+envelope a hold sits in one of two pools:
+
+- **Probation** — the default on staging (III.5.1). Probation absorbs the large benign population of
+  high-novelty in-place rewrites (a compressor or transcoder rewriting in place, a database or image
+  store) that the gate cannot tell from encryption and the Oracle never convicts. Probation is bounded
+  by oldest-first slide and **excluded from the capacity-exhaustion block**: under pressure it yields
+  silently, newest-first-kept, so a benign bulk rewrite never blocks the user and never evicts a
+  protected original.
+- **Protected** — entered only by promotion on conviction (III.5.4). Protected holds are reclaimed by
+  retention age alone, never by capacity pressure, and it is the **protected** bytes against the total
+  capacity that constitute the exhaustion condition.
+
+What happens at protected-pool exhaustion is the response question and belongs to the mode (V.1.2):
+AUDIT slides — commits the oldest protected original, accepting that beyond the envelope a
+capacity-exceeding attack by an already-convicted actor is not prevented; ENFORCE blocks that actor.
+Probation never reaches this question. The bounds size reversible holding; the pool a hold occupies is
+never a detection or conviction signal.
 
 **[INVARIANT] III.5.6 — Restore is operator-directed, verified, and metadata-preserving; the store never leaves the kernel.**
 Restoration of a held original is initiated by the operator, never automatically — circumstantial
@@ -580,19 +618,30 @@ not, and must not, attempt to separate edit from encryption, benign from malicio
 or one direction from another. Everything above the floor — edit or ciphertext, in
 either direction — goes to the Oracle. Discrimination is the Oracle's job.
 
-**[DECISION] IV.2.2 — The measure is conditional novelty, not absolute entropy.**
+**[DECISION] IV.2.2 — The measure is diff-restricted conditional novelty, not absolute entropy.**
 The signal is
 
 ```
     novelty  = 1 − coverage
-    coverage = ( the written range's non-overlapping 2-grams found in the
-                 original block's 2-gram set ) / ( the written range's
-                 non-overlapping 2-gram count )
+    coverage = ( the changed bytes' overlapping 2-grams found in the
+                 original block's 2-gram set ) / ( the changed bytes'
+                 overlapping 2-gram count )
 ```
 
-measured on the **written range** (not a file average) in fixed blocks. The judgment
-question is *"given the original, is the new content predictable?"* — never *"is the
-new content random?"*
+A 2-gram is *changed* when at least one of its two bytes differs from the co-located
+original at the same offset. Coverage is measured only over changed 2-grams, in fixed
+blocks (not a file average): bytes the writer left byte-identical to the original
+contribute to neither numerator nor denominator. The judgment question is *"given the
+original, is the newly written content predictable?"* — never *"is the new content
+random?"*
+
+Restricting the measure to the changed bytes is what makes partial and intermittent
+encryption visible without a co-located original to compare against being optional. A
+writer that leaves most of a block untouched and rewrites only a thin ciphertext
+stripe cannot dilute the score with the unchanged majority: the unchanged bytes are
+excluded by construction, and the stripe's 2-grams stand alone at novelty ≈ 1. This
+holds down to a single stripe per block — a 16-byte cipher run in a 256-byte block
+(6.25% of the block) fires exactly as a full-block overwrite does.
 
 > **[NEGATIVE] IV.2.3** Absolute entropy, entropy-delta, an ML classifier as the
 > gate, and an always-preserve / always-pass stub are all forbidden as the gate. The
@@ -601,29 +650,36 @@ new content random?"*
 > by unrelated high-entropy ciphertext. An entropy gate sees "high → high" and
 > passes; the conditional measure sees unrelated 2-gram sets and fires.
 
-#### IV.2.4 The lower-bound mathematics (settled by derivation; do not reopen)
-- **[MEASURED]** Full-ciphertext novelty is ≥ ~0.97 across thousands of trials,
-  including high-entropy originals (compressed → cipher, cipher → cipher); the mean
-  is ~0.998 at a 256-byte block. A `k`-byte change yields novelty ≈ `k` / (block
-  2-gram count), with very low variance. The measured variance matches the binomial
-  prediction at every block size from 64 B to 4096 B.
+#### IV.2.4 The firing rule and its lower-bound mathematics (settled by derivation; do not reopen)
+A block fires when **both** hold over its changed 2-grams: the novelty ratio is at or
+above the skip threshold `θ`, **and** the count of novel changed 2-grams is at or above
+a volume floor `μ`. The ratio test rejects in-place edits that rewrite bytes with
+content drawn from the original's own 2-gram vocabulary; the volume floor rejects a
+handful of high-novelty changed bytes (a point edit to a structureless file) that would
+otherwise satisfy the ratio on a near-empty denominator. Encryption — which rewrites
+whole regions, or thin stripes that recur across every block — clears both.
+
+- **[MEASURED]** Full-ciphertext novelty (every byte changed) is ≥ ~0.97 across
+  thousands of trials, including high-entropy originals (compressed → cipher,
+  cipher → cipher); the mean is ~0.998 at a 256-byte block. A contiguous `k`-byte
+  ciphertext run yields ~`k` novel changed 2-grams at novelty ≈ 1, independent of how
+  much of the block is left untouched.
 - **[DERIVED]** For uniform ciphertext, `E[novelty] = 1 − |S| / 2^16`, where `|S|` is
-  the original's distinct-2-gram count (≤ 255 at 256 B), giving `E[novelty] ≥ 0.996`.
-  By a Hoeffding bound, the probability that a true ciphertext write is mistaken for a
-  meaningless change at skip threshold `θ` is
-  `≤ exp( −2·n·( min_cipher_novelty − θ )^2 )`; at a 256 B block (`n = 128`) and
-  `θ = 0.10`, this is on the order of `10^−90` per block. The meaningful-change floor
-  is `≤ k/128` for a `k`-byte change. The admissible band for `θ` is therefore wide;
-  the binding constraint is the lower (meaningless) end, not the ciphertext end.
-- **[DESIGN]** The skip threshold is **`θ = 0.10`**, chosen at the low end of the
-  derived safe band, biasing toward asking the Oracle (asking more is cheap; missing
-  a real encryption is forbidden). The band and its safety are derived; this point
-  within the band is the recorded decision. The judgment unit is the **written
-  range**, capped at a small fixed block (256 B). The small block is chosen so that an
-  intermittently-encrypted slice is not diluted below the floor by an unchanged
-  majority — **not** to keep the concentration bound valid (the bound holds at every
-  block size; only the mean drifts with size). The earlier conjecture that a larger
-  block "breaks the bound" is incorrect and is not carried forward.
+  the original block's distinct-2-gram count (≤ 255 at 256 B), giving `E[novelty] ≥
+  0.996`. Because only changed 2-grams enter the ratio, the unchanged majority cannot
+  pull the ratio down; a true ciphertext write therefore clears `θ` with probability
+  `≥ 1 − exp( −2·n_c·( min_cipher_novelty − θ )^2 )` over its `n_c` changed 2-grams,
+  on the order of `1 − 10^−90` once `n_c ≥ μ`. A benign point edit of `j` changed
+  bytes produces ≤ `j+1` changed 2-grams and is rejected by the floor whenever
+  `j + 1 < μ`.
+- **[DESIGN]** The skip threshold is **`θ = 0.10`** and the volume floor is
+  **`μ = 12` novel 2-grams** (≈ one 16-byte cipher block). `θ` sits at the low end of
+  the derived safe band, biasing toward asking the Oracle (asking more is cheap;
+  missing a real encryption is forbidden); `μ` is set just under the novel-2-gram
+  yield of a single AES block so that the smallest unit of real encryption fires while
+  sub-block point edits do not. The judgment unit is a small fixed block (256 B), used
+  to locate the novelty slice within a large write; dilution is defeated by the
+  diff restriction (IV.2.2), not by block size.
 
 > **[NEGATIVE] IV.2.5** Do not push directionality into T (it would require the
 > forbidden absolute-entropy measure and would inherit its false positives, false
@@ -688,8 +744,9 @@ decides *when* proven or capacity-exhausting destruction should be treated as an
    reserved for reversibility. Preservation never blocks below this bound; below it, it
    only holds.
 3. **Phantom conviction (behavioral).** When a process accumulates K ≥ 3 independent
-   phantom-file touches — writes, renames, or deletes against virtual files that no
-   legitimate process would encounter (Part VIII) — the pattern establishes indiscriminate
+   content writes to phantom backing files — virtual files that no legitimate process would
+   write to (Part VIII); reconnaissance such as listing or opening a phantom is not scored —
+   the pattern establishes indiscriminate destructive
    file-walking. This is circumstantial evidence: stronger than capacity exhaustion (it
    identifies the specific destructive process rather than a general resource pressure) but
    weaker than the Oracle's key-based proof. The blocked process's files are recoverable
@@ -902,13 +959,15 @@ capture) does not depend on any of these and is unaffected.
 
 The Phantom Witness Layer supplements the gate (Part IV) with an orthogonal evidence
 channel: virtual files that exist only in minifilter IRP responses and are invisible to
-trusted processes. Any process that touches a phantom provides evidence of indiscriminate
-enumeration — the behavioral signature of ransomware directory-walking — independent of
-what it does next. This evidence is cumulative: each phantom touch raises a per-process
-counter, and conviction requires K independent touches (K ≥ 3), so a single false positive
-does not reach the threshold. The layer produces **only** evidence; it does not block or
-convict on its own — it feeds the response system (Part V) with an additional signal
-graduated to its certainty.
+trusted processes. A process that *writes* to a phantom provides evidence of indiscriminate
+destruction — the behavioral signature of ransomware encrypting its way through a directory —
+because an invisible decoy has no legitimate writer. Passive contact (listing, opening,
+reading) is reconnaissance and is deliberately not scored: it has benign sources and this
+system convicts destruction, not traversal. The evidence is cumulative: each content write to
+a phantom raises a per-process counter, and conviction requires K independent writes (K ≥ 3),
+so a single incidental write does not reach the threshold. The layer produces **only**
+evidence; it does not block or convict on its own — it feeds the response system (Part V) with
+an additional signal graduated to its certainty.
 
 **[INVARIANT] VIII.0 — Kernel-privilege closure.**
 The phantom witness layer closes every user-mode path by which a process could distinguish
@@ -919,6 +978,15 @@ would produce. The closure covers the IRP response path (VIII.3), the metadata q
 (VIII.6), and the raw-access blocking path (VIII.3.3, VIII.9). A process that can load a
 kernel driver or execute code in ring 0 can read the MFT directly and discover the
 absence — this falls to the kernel-code boundary (IX.1) and is not defended.
+
+This is the closure the layer is built to. Three user-mode surfaces are specified but not
+yet active in the current build and are **declared residuals**, each enumerated at its
+section and each backstopped by the core engine (Parts II–IV), which detects real-file
+destruction independently of the phantom layer: USN-journal injection (VIII.8.1a), the
+`FileAllInformation`/`FileHardLinkInformation` query classes (VIII.6.3), and structural
+image validity for image-decoding selectors (VIII.7.3b). They do not breach data
+protection; they let a sufficiently specialized user-mode actor *identify and avoid* the
+decoy, after which it is caught by the core rather than by the phantom.
 
 Three axioms constrain the design:
 
@@ -954,19 +1022,58 @@ a trusted process sees.
 
 ### VIII.2 Phantom file generation
 
-**[DECISION] VIII.2.1 — Deterministic, unpredictable naming.**
-The phantom name for a given directory is:
+**[DECISION] VIII.2.1 — Keyed realistic naming, recomputed for recognition.**
+The phantom name for index `i` in a directory is *generated*, never stored:
 
 ```
-phantom_name[i] = HMAC-SHA256(volume_secret, canonical_dir_path || i)
+seed  = HMAC-SHA256(volume_secret, canonical_dir_path || i)
+stem  = G_stem(seed)
+ext   = palette[ seed mod |palette| ]
+name  = stem "." ext
 ```
 
 where `volume_secret` is a per-volume key derived from the keystore MAC key and the volume
-serial number at keystore load, held in kernel pool alongside the MAC key (VII.1), and `i`
-is the phantom index (0-based). The HMAC output is truncated and encoded to produce a
-filename matching the naming conventions of real files in the directory. The result is
-deterministic (the same directory always yields the same phantoms across reboots) and
-unpredictable to any process that does not hold `volume_secret`.
+serial number at keystore load, held in kernel pool alongside the MAC key (VII.1); `G_stem`
+is a deterministic generator that emits a pronounceable, file-like stem (syllabic
+consonant–vowel structure with occasional numeric or compound-word templates) of varying
+length and shape; and `palette` is a fixed set of common, high-value file extensions
+(VIII.2.4). The construction is:
+
+- **deterministic** — the same `(volume_secret, directory, index)` always yields the same
+  name, across reboots, with no stored per-directory state;
+- **unpredictable** — without `volume_secret` the name cannot be computed (HMAC), so the
+  phantom set cannot be enumerated, forged, or brute-forced by a key-less process;
+- **fingerprint-free** — there is no fixed name shape to filter on (a fixed hex-string form
+  would itself be a fingerprint), so a process that knows the algorithm still cannot
+  distinguish a phantom from a real file by the form of its name;
+- **collision-safe** — the stem carries enough keyed entropy that a real user file
+  independently colliding with a phantom stem is negligible (an integrity concern, since a
+  collision would shadow a real file, so the keyspace floor is set by collision-avoidance,
+  not by guessing-resistance, which the key already provides).
+
+Recognition is by **recomputation, not lookup**: at a create whose name could be a phantom,
+the minifilter recomputes the directory's `name[0..K)` and compares case-insensitively
+(matching filesystem semantics). No name cache or persistent naming state exists. A cheap
+extension-in-palette pre-filter — not a phantom fingerprint, since real files share those
+extensions — gates the recompute so the common create path is untouched.
+
+**[INVARIANT] VIII.2.1.1 — `canonical_dir_path` is the volume-relative path.**
+The name is derived at two independent sites: directory enumeration (VIII.3.1), where the
+target directory is open and its name resolves to the full normalized form
+(`\Device\HarddiskVolumeN\docs`), and the pre-create that recognizes a phantom open
+(VIII.7), where the target is not yet opened and the volume device prefix is **not
+resolvable** — only the volume-relative form (`\docs\`) is available. For the two sites to
+produce the same name, both reduce the path to a single canonical form before hashing:
+the device prefix (`\Device\<volume>\`, when present) is stripped and any trailing
+separator is removed, yielding the volume-relative path with no trailing separator
+(`\docs`). The per-volume `volume_secret` keeps names unique within the volume despite the
+dropped prefix; cross-volume name reuse is immaterial because backing files redirect
+per-directory (VIII.7) and conviction is per-process (VIII.4.4).
+
+> **[NEGATIVE] VIII.2.1.2** Do not derive the name from the full device path at either
+> site. The pre-create site cannot reconstruct the device prefix, so a full-path derivation
+> makes the enumeration name and the open-recognition name disagree and the phantom becomes
+> an inert decoy that is never recognized when touched.
 
 **[DECISION] VIII.2.2 — Density rules.**
 The number of phantoms per directory scales with directory population:
@@ -984,13 +1091,43 @@ Empty directories receive no phantoms. Three is the ceiling.
 > increases the false-positive surface without improving detection and risks violating the
 > indistinguishability axiom (VIII.1.2).
 
-**[DECISION] VIII.2.4 — Extension and content generation.**
-The phantom's extension is sampled from extensions present among the directory's real
-files, preferring document and media types that ransomware targets. The content of the
-backing file is generated once at first enumeration and persisted: it is plausible for the
-chosen extension (e.g. a minimal valid document or media structure) so that ransomware
-that inspects content before encrypting does not reject it. Content size is drawn from the
-size distribution of real files in the directory, clamped to [4 KiB, 16 MiB] [DESIGN].
+**[DECISION] VIII.2.4 — Extension from a keyed palette; content materialized.**
+The extension is selected deterministically — `palette[seed mod |palette|]` (VIII.2.1) —
+from a fixed palette spanning the common, high-value file types ransomware targets
+(documents, spreadsheets, presentations, PDFs, images, archives, media, databases). It is
+**not** sampled from the directory's live contents: a content-derived extension could not be
+recomputed at the recognition, metadata-query (VIII.6), and USN (VIII.8) sites, which see
+only the backing handle and not the directory's files. A comprehensive palette closes the
+"encrypt only the types you don't cover" bypass for every valuable type; per-directory
+variety comes from the key, not from sampling. (Residual: the extension follows the key, not
+the directory's exact present mix, so a single-type directory may host a phantom of a
+plausible but different common type — a defense-in-depth tell, not a breach, bounded by the
+conviction asymmetry.)
+
+The backing file is **materialized on first access** (VIII.7.3) so the phantom is openable
+and reads back consistently:
+- a valid magic / structural header for the chosen type at the front, so a header- or
+  image-validating selector accepts it;
+- a body of **low-entropy** synthetic bytes filling to the reported size — low entropy is
+  required, since a high-entropy body would look already-encrypted and be skipped by an
+  entropy-screening encryptor, which would then never write the phantom and never convict
+  (VIII.4);
+- timestamps set to the phantom's keyed metadata (VIII.2.5).
+
+The body is synthesized from the per-volume key alone (a keyed deterministic byte stream
+shaped to a low-entropy distribution); it never copies any real user file — a verbatim copy
+would both duplicate-content-tell the phantom and place real data in the hidden store.
+
+**[DECISION] VIII.2.5 — Per-phantom metadata is keyed, varied, and plausibly aged.**
+Each phantom's reported size and timestamps derive deterministically from
+`HMAC-SHA256(volume_secret, canonical_dir_path || i)`: size from a realistic range above
+common ransomware size floors (never a uniform constant); creation/modify/access times
+spread across a believable past window (never the deploy instant), ordered
+create ≤ modify ≤ access. The same values are reported in enumeration **and** set on the
+materialized backing, so an attacker who screens by size or recency without opening, or who
+opens the handle and queries times, sees consistent real-file-like metadata. Uniform or
+freshly-stamped metadata is both a tell and a metadata selection filter that would route
+around the entire phantom field without ever touching a backing file.
 
 ### VIII.3 Interception surface
 
@@ -999,20 +1136,40 @@ Higher tiers close progressively rarer detection vectors. All four are mandatory
 kernel-privilege closure of VIII.0.
 
 **[DECISION] VIII.3.1 — P0 (core IRP).**
-- **IRP_MJ_DIRECTORY_CONTROL (post-op):** Inject phantom entries into
-  directory-enumeration output buffers via a SwapBuffers technique: pre-op allocates an
-  oversized NonPagedPool buffer and replaces the caller's DirectoryBuffer and MdlAddress;
-  post-op appends phantom entries after NTFS fills the swapped buffer, maintaining 8-byte
-  alignment and correct NextEntryOffset linking, then copies back. All six
-  FILE_INFORMATION_CLASS types used by directory enumeration are handled:
+- **IRP_MJ_DIRECTORY_CONTROL / IRP_MN_QUERY_DIRECTORY (swap-buffer):** the pre-op swaps in
+  a private NonPagedPool buffer (with its MDL) so the filesystem fills it instead of the
+  caller's; the post-op rebuilds the caller's buffer as a **sorted merge** of the real
+  entries and the phantom entries, preserving 8-byte alignment and NextEntryOffset linking
+  (generic offset helpers abstract the layout across info classes). The merge is:
+  - **sort-correct** — each phantom is inserted at its collation position relative to the
+    filesystem's own returned entries (compared with the system case-insensitive
+    comparison), never appended at the end where its order would betray it;
+  - **emit-once** — phantoms are injected exactly once per enumeration, tracked in a
+    per-handle `FLT_STREAMHANDLE_CONTEXT` and reset on `SL_RESTART_SCAN`, never duplicated
+    across the multiple `QUERY_DIRECTORY` calls of one enumeration (a duplicate would be an
+    immediate tell, since real files do not repeat across chunks);
+  - **pattern-honoring** — the first-call search expression is captured and a phantom is
+    presented only when its name matches it (`FsRtlIsNameInExpression`), so a filtered query
+    never returns a non-matching phantom.
+
+  **Every** directory-information class the object store will answer is handled identically,
+  so a process cannot diff one class against another to find an entry that appears under one
+  but is absent under another — a cross-class detection oracle. The covered classes are
   FileDirectoryInformation, FileFullDirectoryInformation, FileBothDirectoryInformation,
-  FileNamesInformation, FileIdFullDirectoryInformation, FileIdBothDirectoryInformation.
-  Generic offset helpers abstract across info classes via a DIRECTORY_CONTROL_OFFSETS
-  structure. Phantom entries are merged in sorted order.
-- **IRP_MJ_CREATE (pre-op):** When an untrusted process opens a phantom name, redirect
-  to the hidden backing file via STATUS_REPARSE (VIII.7). When a trusted process opens a
-  phantom name, return STATUS_OBJECT_NAME_NOT_FOUND. DASD opens (empty filename on a
-  volume device) by untrusted processes are denied (VIII.3.3).
+  FileNamesInformation, FileIdFullDirectoryInformation, FileIdBothDirectoryInformation,
+  FileIdExtdDirectoryInformation, FileIdExtdBothDirectoryInformation, and
+  FileIdGlobalTxDirectoryInformation; the ID-bearing classes receive a synthetic 64-bit and
+  128-bit FileId (VIII.8). (Residual: the Windows 11 23H2 `FileIdAllExtd*` classes are added
+  when that platform floor is targeted; they are not queryable below it.)
+- **IRP_MJ_CREATE (pre-op):** When an untrusted process opens an *existing* phantom name
+  (any disposition that opens or overwrites), the minifilter materializes the backing if
+  absent (VIII.7.3) and redirects to it via STATUS_REPARSE (VIII.7). A pure `FILE_CREATE`
+  (create-new) of a phantom name is **yielded** — it is benign by construction (creating a
+  new file is not destruction of an existing original, V/IV), so the minifilter does not
+  reparse and lets the real file be created; the negligible-probability name collision is
+  resolved in favor of the user's data. A trusted process opening a phantom name receives
+  STATUS_OBJECT_NAME_NOT_FOUND. DASD opens (empty filename on a volume device) by untrusted
+  processes are denied (VIII.3.3).
 - **IRP_MJ_READ, IRP_MJ_WRITE (pre-op):** For handles redirected to phantom backing
   files, reads return backing-file content; writes increment the per-process phantom
   evidence counter (VIII.4).
@@ -1047,18 +1204,24 @@ kernel-privilege closure of VIII.0.
 
 ### VIII.4 Conviction mechanism
 
-**[DECISION] VIII.4.1 — Cumulative K-threshold conviction.**
+**[DECISION] VIII.4.1 — Cumulative K-threshold conviction on the encryption-chain touch.**
 The phantom layer maintains a per-process evidence accumulator
-`phantom_evidence[pid]`, initially zero. Each of the following events increments it by 1:
-a write to any phantom backing file, a rename targeting a phantom backing file, a delete
-targeting a phantom backing file, or a section-map of a phantom backing file. When
-`phantom_evidence[pid] ≥ K`, the process is **phantom-convicted**. K = 3 [DESIGN].
+`phantom_evidence[pid]`, initially zero. The single event that increments it by 1 is a
+**content write to a phantom backing file** — the encryption-chain touch of a decoy. Merely
+listing a directory, opening, querying, or reading a phantom is reconnaissance and is **never
+scored**: passive traversal has too many benign sources (backup, search indexing, a one-off
+`grep`) to carry evidence, and it is destruction, not enumeration, that this system convicts.
+An invisible decoy has no legitimate writer, so a content write to one is near-conclusive on
+its own; the K-threshold exists only to absorb the rare incidental write (a wildcard tool that
+happens to overwrite a decoy that surfaced in a listing). When `phantom_evidence[pid] ≥ K`, the
+process is **phantom-convicted**. K = 3 [DESIGN].
 
 **[INVARIANT] VIII.4.2 — False-positive bound.**
-If the per-phantom false-touch probability is `p`, the K-threshold false-conviction
-probability is `p^K`. With phantoms generated at the density of VIII.2.2 and K = 3, the
-false-conviction rate is bounded at `p^3 ≈ 10^(-9)` [DERIVED] — a structural consequence
-of cumulative independent evidence, not a measured quantity.
+If the per-phantom false-write probability is `p`, the K-threshold false-conviction
+probability is `p^K`. Because the scored event is a content write to an invisible decoy — not a
+mere touch — `p` is already vanishing; with phantoms generated at the density of VIII.2.2 and
+K = 3, the false-conviction rate is bounded at `p^3 ≈ 10^(-9)` [DERIVED] — a structural
+consequence of cumulative independent evidence, not a measured quantity.
 
 **[DECISION] VIII.4.3 — Phantom conviction feeds the response system.**
 A phantom conviction is an evidence event delivered to the response system (Part V)
@@ -1066,6 +1229,17 @@ as the third blocking trigger (V.1.2). Under AUDIT it is logged; under ENFORCE i
 the convicted process. The Oracle remains the definitive evidence channel; phantom
 conviction is the behavioral fallback. It proves *indiscriminate file modification*, not
 *encryption*; recovery depends on the Oracle's key or the preservation window.
+
+**[INVARIANT] VIII.4.4a — Blocking a convicted originator is full destructive containment.**
+Under ENFORCE, blocking a phantom-convicted (or otherwise blocked, V.1) originator denies
+**every** path by which it could destroy an existing original, not writes alone: content
+writes (IRP_MJ_WRITE), truncating opens (IRP_MJ_CREATE with a SUPERSEDE / OVERWRITE /
+OVERWRITE_IF disposition), and destructive metadata (IRP_MJ_SET_INFORMATION — delete,
+rename, set-EOF, set-allocation) are all refused with STATUS_ACCESS_DENIED. A block that
+denied only writes would leave the truncate-on-open and the metadata-delete paths open, so
+a convicted actor could still zero or remove a file; closing all three is what makes
+containment complete. Decoy backing writes by an unconvicted process are exempt from the
+protected-store guard and proceed normally so the deception remains convincing (VIII.3.1).
 
 **[DECISION] VIII.4.4 — Evidence counter is process-scoped and monotonic.**
 The counter follows the process, not the thread. It is monotonic: no event decreases it;
@@ -1099,21 +1273,37 @@ Once TAINTED, a process remains TAINTED until exit. The demotion is recorded.
 
 **[INVARIANT] VIII.6.1 — Opened phantom handles report phantom identity, not backing-file identity.**
 When an untrusted process holds a handle to a phantom backing file (obtained through
-STATUS_REPARSE redirection) and queries its metadata, the minifilter fixes up the
-response to report the phantom's declared identity rather than the backing file's:
+STATUS_REPARSE redirection) and queries its name or id, the minifilter's
+IRP_MJ_QUERY_INFORMATION post-op rewrites the response to the phantom's declared identity:
 
-- **FileNameInformation, FileNormalizedNameInformation, FileAllInformation:** the
-  minifilter's IRP_MJ_QUERY_INFORMATION post-op replaces the returned path with the
-  phantom's declared directory and name.
-- **FileInternalInformation:** the file ID is replaced with the synthetic
-  FileReferenceNumber assigned to this phantom (the same ID that appears in
-  FileIdBothDirectoryInformation and in synthetic USN records).
-- **FileHardLinkInformation:** the link count is reported as 1 and the sole name is the
-  phantom's declared name and parent directory.
+- **FileNameInformation, FileNormalizedNameInformation:** the returned path is replaced
+  with the phantom's directory and name.
+- **FileInternalInformation:** the file id is replaced with the synthetic
+  FileReferenceNumber assigned to this phantom (the same id that appears in the ID-bearing
+  directory classes and in synthetic USN records).
 
-Without these fixups, a process could call `GetFinalPathNameByHandle` or
-`NtQueryInformationFile` on an opened phantom and observe the backing store path,
-revealing the phantom's nature. This is the metadata-query closure required by VIII.0.
+Without this, a process could call `GetFinalPathNameByHandle` or `NtQueryInformationFile`
+on an opened phantom and observe the hidden backing path, revealing the phantom's nature.
+This is the metadata-query closure required by VIII.0.
+
+**[DECISION] VIII.6.2 — Identity recovery via a keyed reparse map.**
+The backing filename is a one-way HMAC of `(canonical_dir_path, index)` (VIII.7.2) and is
+therefore not reversible to the phantom's directory or name. To rewrite the query response,
+the pre-create that performs the reparse (VIII.7.1) — where the original phantom directory,
+name, and index are all in hand — records the mapping `backing-filename → (directory, name,
+index)` in a bounded, lock-protected in-memory table; the query-info post-op looks the
+backing handle's leaf name up in that table. The table is a fixed-size ring (entries are
+deterministic, so eviction merely forces a recompute on the next open); it holds no secret
+and survives only in memory. This is the **only** state the phantom layer keeps beyond the
+per-volume key, and it exists solely because the backing identifier is intentionally
+irreversible.
+
+> **[NEGATIVE] VIII.6.3** `FileAllInformation` (which embeds a name sub-field) and
+> `FileHardLinkInformation` are not yet rewritten; a process querying those specific classes
+> on an opened phantom can still observe the backing path. They are closed by extending the
+> VIII.6.2 mechanism to those classes; until then they are a declared residual, bounded by
+> the conviction asymmetry (a process that opens and inspects but does not destroy is
+> unscored, and one that destroys is convicted regardless of what it learned).
 
 ### VIII.7 Backing-file management
 
@@ -1130,16 +1320,46 @@ calling process receives a valid handle and observes normal file semantics.
 **[DECISION] VIII.7.2 — Backing-file store layout.**
 Backing files are stored under the minifilter's protected directory alongside the
 keystore and preservation store. Each backing file is named by the HMAC of its phantom
-identity and is created lazily on first enumeration of the containing directory. The
+identity `(canonical_dir_path, index)` and is materialized on first access (VIII.7.3). The
 store's disk footprint is bounded by density rules (VIII.2.2) and the per-file size cap
-(VIII.2.4).
+(VIII.2.5).
 
-**[DECISION] VIII.7.3 — IoReplaceFileObjectName availability.**
+**[DECISION] VIII.7.3 — Backing materialization on first access.**
+The reparse (VIII.7.1) requires the backing file to exist with consistent content and
+metadata, so that an `FILE_OPEN` of a phantom — the ordinary "open existing to read/encrypt"
+path that ransomware uses — succeeds rather than failing with OBJECT_NAME_NOT_FOUND (a tell,
+and a conviction miss). At the recognizing pre-create, before the reparse, the minifilter
+materializes the backing file if absent: it writes the type's magic/structural header, fills
+to the keyed reported size (VIII.2.5) with low-entropy synthetic body bytes, and stamps the
+keyed timestamps. Materialization is a kernel-mode write to the backing; the write path
+treats kernel-mode phantom-backing writes as non-evidence (VIII.4) so the minifilter's own
+materialization can never accrue conviction against the opening process. The work is
+one-time per phantom (subsequent opens find the file) and bounded by the per-file size cap.
+
+> **[NEGATIVE] VIII.7.3a** Backing content is synthesized from the per-volume key only; it
+> must never be copied from a real user file (a verbatim copy both creates a duplicate-content
+> tell and stages real data in the hidden store).
+
+> **[NEGATIVE] VIII.7.3b — Residual: structural image validity.** A minority of selective
+> encryptors (the documented case is Cerber) *decode* candidate images and skip a directory
+> whose image is malformed, treating it as a canary. For image-extension phantoms the body
+> currently carries the type's magic header but is not a fully decodable image, so such an
+> encryptor skips the directory — the user's real files there are incidentally protected, but
+> the phantom is not written and no conviction fires. Closing this requires materializing a
+> structurally valid minimal image per image type (a data-table template, attached to the
+> low-entropy body), which must be added with image-decode verification so an invalid blob is
+> never shipped. Until then it is a declared residual: data is protected by directory-skip,
+> and any encryption that proceeds elsewhere is caught by the core gate/Oracle/preservation
+> (Part III–IV), which are independent of the phantom layer. A fully content-parsing encryptor
+> (validating ZIP central directories, decoding every format) is not observed in the
+> ransomware population and is a forensic-adversary behavior outside this model.
+
+**[DECISION] VIII.7.4 — IoReplaceFileObjectName availability.**
 `IoReplaceFileObjectName` is available since Windows 7. On the supported floor it is
 always present. The routine is resolved via `MmGetSystemRoutineAddress` at initialization;
 if absent the phantom layer is disabled entirely and the descent is recorded (VII.5).
 
-> **[NEGATIVE] VIII.7.4** Do not implement a manual name-replacement fallback for systems
+> **[NEGATIVE] VIII.7.5** Do not implement a manual name-replacement fallback for systems
 > where `IoReplaceFileObjectName` is absent. The supported floor guarantees its presence.
 
 ### VIII.8 USN journal closure
@@ -1154,6 +1374,18 @@ For each phantom the minifilter maintains a synthetic USN_RECORD_V2 containing:
 
 These records are injected into FSCTL_ENUM_USN_DATA and FSCTL_READ_USN_JOURNAL output
 in post-op via SwapBuffers. They are invisible to trusted processes (VIII.1.3).
+
+> **[NEGATIVE] VIII.8.1a — Residual: USN injection is not yet active.** The current build
+> intercepts the FSCTL post-op but does not yet inject the synthetic records, so an untrusted
+> process that enumerates via the USN journal (a fast-enumeration technique some encryptors
+> use) sees the directory's real files but not the phantoms — a cross-reference tell against
+> directory enumeration, and a path by which a USN-driven encryptor reaches real files without
+> encountering a phantom. The closure (the SwapBuffers injection specified above) is pending
+> and must be built to the same once/sorted discipline as VIII.3.1. It is bounded by the
+> conviction asymmetry and, decisively, by the **core engine**: a USN-driven encryptor that
+> avoids every phantom still destroys real originals, which the gate / Oracle / preservation
+> (Parts II–IV) detect, preserve, and (under ENFORCE at capacity) block independently of the
+> phantom layer. The phantom layer is one evidence channel, not the sole defense.
 
 **[INVARIANT] VIII.8.2 — No integrity mechanism protects USN records.**
 USN records carry no signature, checksum, or integrity seal. Injection of syntactically
@@ -1362,10 +1594,11 @@ An implementation is constitutional iff all hold.
 - [ ] Recovery has two assets: decryption with the captured key (definitive, unbounded), and
       restoration of a bounded copy-on-first-write preserved original (circumstantial); a
       captured key cancels the held original for its region (III.1, III.5.4).
-- [ ] Preservation copies the original off the IRP (the originator's own read, else a separate
-      file object), one copy per (file, region), first-write-wins, never overwriting a held
-      original with what destroys it; it triggers on every IV.1.2 destruction member and never
-      blocks (III.5.1–III.5.3).
+- [ ] Preservation copies the original off a deadlock-free path (in-place: the write region read
+      non-cached/paging at the write seam before the cached write lands; destruction seams and
+      replace/mapped: a distinct file object), one copy per (file, region), first-write-wins, never
+      overwriting a held original with what destroys it; it triggers on every IV.1.2 destruction
+      member and never blocks (III.5.1–III.5.3).
 - [ ] The window is bounded by a time + capacity resource envelope; reclamation is by age;
       restore is operator-directed, verified, and metadata-preserving, and the store never
       leaves the kernel (III.5.5, III.5.6).
@@ -1386,9 +1619,10 @@ An implementation is constitutional iff all hold.
 **The gate (Part IV)**
 - [ ] The gate is `D ∧ T`; D requires destruction of an existing original; every
       enumerated destruction member (legacy and `Ex`) is a capture candidate (IV.1).
-- [ ] T is conditional novelty = 1 − coverage on the written range, floor `θ = 0.10`; it
-      is direction-blind and is not a classifier; absolute-entropy / entropy-delta /
-      ML-as-gate / always-pass are absent (IV.2).
+- [ ] T is diff-restricted conditional novelty = 1 − coverage over the changed bytes only,
+      ratio floor `θ = 0.10` and volume floor `μ = 12` novel 2-grams; it is direction-blind
+      and is not a classifier; absolute-entropy / entropy-delta / ML-as-gate / always-pass are
+      absent (IV.2).
 - [ ] The gate never blocks (IV.3).
 - [ ] `gzip`-style compression is handled as an ordinary delete-plus-new-file candidate
       with no special case (IV.1).
@@ -1432,10 +1666,19 @@ An implementation is constitutional iff all hold.
       no observable attribute distinguishes a phantom from a real file (VIII.1.2).
 - [ ] Transparency: trusted processes never see phantoms in any enumeration, create,
       metadata query, or USN read (VIII.1.3).
-- [ ] Naming is HMAC-SHA256(volume_secret, path || index), deterministic and
-      unpredictable (VIII.2.1).
-- [ ] Conviction is cumulative K-threshold (K ≥ 3); a single phantom touch does not
-      convict; phantom conviction feeds the response system as the third blocking
+- [ ] Naming is a keyed realistic generator over HMAC-SHA256(volume_secret,
+      canonical_dir_path || index): pronounceable stem + palette extension, deterministic,
+      unpredictable, fingerprint-free, recomputed (not cached) for recognition (VIII.2.1).
+- [ ] Per-phantom size and timestamps are keyed, varied, plausibly aged, and consistent
+      between enumeration and the materialized backing; backing is materialized on first
+      access with a valid header + low-entropy body sized to the reported size (VIII.2.4,
+      VIII.2.5, VIII.7.3).
+- [ ] Enumeration injects exactly once per scan (per-handle state), in sorted order, only
+      for names matching the query pattern, across every directory-information class the
+      object store answers — no duplicate, mis-ordered, or cross-class-diff tell (VIII.3.1).
+- [ ] Conviction is cumulative K-threshold (K ≥ 3) over content writes to phantom backing
+      files; reconnaissance (listing/opening/reading a phantom) is not scored; a single
+      write does not convict; phantom conviction feeds the response system as the third blocking
       trigger (VIII.4, V.1.2).
 - [ ] The phantom layer does not alter the gate, the Oracle, or preservation
       (VIII.10.2).

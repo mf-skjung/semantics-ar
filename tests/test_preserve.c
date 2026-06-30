@@ -43,10 +43,10 @@ int main(void) {
     printf("[first-write-wins; double-encryption never overwrites the held original]\n");
     {
         sar_preserve_record_t r0, r1;
-        sar_preserve_record_init(&r0, pa, 0, 256, 1000, 0, 256, iv, 16, orig, 256);
+        sar_preserve_record_init(&r0, pa, 0, 256, 1000, 0, 256, 1, iv, 16, orig, 256);
         uint8_t ct1[256];
         fill(ct1, sizeof ct1, 0x33);
-        sar_preserve_record_init(&r1, pa, 0, 256, 1001, 256, 256, iv, 16, ct1, 256);
+        sar_preserve_record_init(&r1, pa, 0, 256, 1001, 256, 256, 1, iv, 16, ct1, 256);
 
         int a0 = sar_preserve_append(recs, &count, 16, &r0);
         int a1 = sar_preserve_append(recs, &count, 16, &r1);
@@ -60,8 +60,8 @@ int main(void) {
     printf("[distinct region of same file is a new hold; distinct file too]\n");
     {
         sar_preserve_record_t r2, r3;
-        sar_preserve_record_init(&r2, pa, 256, 256, 1002, 512, 256, iv, 16, orig, 256);
-        sar_preserve_record_init(&r3, pb, 0, 256, 1003, 768, 256, iv, 16, orig, 256);
+        sar_preserve_record_init(&r2, pa, 256, 256, 1002, 512, 256, 1, iv, 16, orig, 256);
+        sar_preserve_record_init(&r3, pb, 0, 256, 1003, 768, 256, 2, iv, 16, orig, 256);
         int a2 = sar_preserve_append(recs, &count, 16, &r2);
         int a3 = sar_preserve_append(recs, &count, 16, &r3);
         CHECK(a2 == 1 && a3 == 1 && count == 3,
@@ -84,14 +84,14 @@ int main(void) {
         sar_preserve_record_t r4;
         uint64_t c2 = 0;
         sar_preserve_record_t s2[4];
-        sar_preserve_record_init(&r4, pa, 0, 256, 2000, 0, 256, iv, 16, orig, 256);
+        sar_preserve_record_init(&r4, pa, 0, 256, 2000, 0, 256, 1, iv, 16, orig, 256);
         sar_preserve_append(s2, &c2, 4, &r4);
         uint64_t removed = sar_preserve_reconcile(s2, &c2, pa, 0, 128);
         CHECK(removed == 0 && c2 == 1,
               "key covering only [0,128) does not discard the held [0,256) (containment, not overlap)");
     }
 
-    printf("[budget: time eviction and capacity slide]\n");
+    printf("[budget: time eviction; probation slide leaves protected untouched]\n");
     {
         sar_preserve_record_t s3[8];
         uint64_t c3 = 0;
@@ -102,7 +102,8 @@ int main(void) {
             nm[0] = (char)('a' + i); nm[1] = 0;
             path_of(p, nm);
             sar_preserve_record_init(&r, p, 0, 100, (uint64_t)(1000 + i * 100),
-                                     (uint64_t)(i * 100), 100, iv, 16, orig, 100);
+                                     (uint64_t)(i * 100), 100, (uint64_t)(10 + i),
+                                     iv, 16, orig, 100);
             sar_preserve_append(s3, &c3, 8, &r);
         }
         CHECK(c3 == 5 && sar_preserve_total_bytes(s3, c3) == 500, "five holds, 500 bytes");
@@ -111,18 +112,61 @@ int main(void) {
         CHECK(aged == 2 && c3 == 3,
               "retention=300 at now=1450 reclaims the two oldest (t=1000,1100)");
 
-        uint64_t slid = sar_preserve_evict_oldest(s3, &c3, 150);
-        CHECK(slid == 2 && c3 == 1 && sar_preserve_total_bytes(s3, c3) == 100,
-              "capacity slide to 150 bytes drops oldest-first until under cap");
+        uint64_t promoted = sar_preserve_promote(s3, c3, 12);
+        CHECK(promoted == 1 && sar_preserve_protected_bytes(s3, c3) == 100 &&
+              sar_preserve_probation_bytes(s3, c3) == 200,
+              "promote actor 12 pins c (t=1200) to protected; 100 protected / 200 probation");
 
-        int over = sar_preserve_would_exceed(s3, c3, 150, 100);
-        CHECK(over == 1, "would_exceed reports the ENFORCE block condition before adding");
+        uint64_t slid = sar_preserve_evict_probation_oldest(s3, &c3, 100);
+        CHECK(slid == 1 && c3 == 2 &&
+              sar_preserve_protected_bytes(s3, c3) == 100 &&
+              sar_preserve_probation_bytes(s3, c3) == 100,
+              "probation slide to 100B drops oldest probation (d, t=1300); protected c survives");
+
+        int over = sar_preserve_would_exceed(s3, c3, 200, 1);
+        int under = sar_preserve_would_exceed(s3, c3, 200, 0);
+        CHECK(over == 1 && under == 0,
+              "ENFORCE block keys on total store bytes (200 held + 1 incoming > 200)");
+    }
+
+    printf("[promote-by-actor: conviction pins all of an attacker's holds to protected]\n");
+    {
+        sar_preserve_record_t s4[8];
+        uint64_t c4 = 0;
+        sar_preserve_record_t q0, q1, q2;
+        uint16_t pq[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+        path_of(pq, "q.txt");
+        sar_preserve_record_init(&q0, pa, 0, 100, 100, 0, 100, 7, iv, 16, orig, 100);
+        sar_preserve_record_init(&q1, pb, 0, 100, 101, 100, 100, 7, iv, 16, orig, 100);
+        sar_preserve_record_init(&q2, pq, 0, 100, 102, 200, 100, 9, iv, 16, orig, 100);
+        sar_preserve_append(s4, &c4, 8, &q0);
+        sar_preserve_append(s4, &c4, 8, &q1);
+        sar_preserve_append(s4, &c4, 8, &q2);
+        uint64_t promoted = sar_preserve_promote(s4, c4, 7);
+        CHECK(promoted == 2 && sar_preserve_protected_bytes(s4, c4) == 200 &&
+              sar_preserve_probation_bytes(s4, c4) == 100,
+              "convicting actor 7 protects both its holds; actor 9 stays in probation");
+    }
+
+    printf("[captured key discards even a promoted (protected) hold]\n");
+    {
+        sar_preserve_record_t s5[4];
+        uint64_t c5 = 0;
+        sar_preserve_record_t z0;
+        sar_preserve_record_init(&z0, pa, 0, 256, 100, 0, 256, 5, iv, 16, orig, 256);
+        sar_preserve_append(s5, &c5, 4, &z0);
+        sar_preserve_promote(s5, c5, 5);
+        CHECK(sar_preserve_protected_bytes(s5, c5) == 256 && c5 == 1,
+              "hold promoted to protected");
+        uint64_t removed = sar_preserve_reconcile(s5, &c5, pa, 0, 256);
+        CHECK(removed == 1 && c5 == 0,
+              "a captured key reconciles a hold regardless of pool (protected is not exempt from key)");
     }
 
     printf("[verify-before-restore: tag + binding]\n");
     {
         sar_preserve_record_t r;
-        sar_preserve_record_init(&r, pa, 4096, 256, 3000, 0, 256, iv, 16, orig, 256);
+        sar_preserve_record_init(&r, pa, 4096, 256, 3000, 0, 256, 1, iv, 16, orig, 256);
         int ok = sar_preserve_verify_restore(&r, pa, 4096, orig, 256);
         uint8_t bad[256];
         fill(bad, sizeof bad, 0x80);

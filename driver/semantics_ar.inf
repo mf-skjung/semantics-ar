@@ -37,9 +37,9 @@ LoadOrderGroup = "FSFilter Activity Monitor"
 AddReg         = SemanticsArDriver.AddRegistry
 
 [SemanticsArDriver.AddRegistry]
-HKR,"Parameters\Instances","DefaultInstance",0x00000000,%DefaultInstance%
-HKR,"Parameters\Instances\"%InstanceName%,"Altitude",0x00000000,%Altitude%
-HKR,"Parameters\Instances\"%InstanceName%,"Flags",0x00010001,0
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%InstanceName%,"Altitude",0x00000000,%Altitude%
+HKR,"Instances\"%InstanceName%,"Flags",0x00010001,0
 
 [SemanticsArDriver.Copy]
 semantics_ar.sys

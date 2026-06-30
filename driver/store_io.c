@@ -200,6 +200,8 @@ static NTSTATUS SarStoreRename(_In_ PCWSTR Tmp, _In_ PCWSTR Final, _In_ ULONG Bu
     RtlCopyMemory(info->FileName, final_name.Buffer, final_name.Length);
 
     status = ZwSetInformationFile(h, &iosb, info, info_len, FileRenameInformation);
+    if (NT_SUCCESS(status))
+        ZwFlushBuffersFile(h, &iosb);
 
     ExFreePoolWithTag(info, BufTag);
     ZwClose(h);
