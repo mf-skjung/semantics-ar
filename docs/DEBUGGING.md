@@ -13,6 +13,11 @@ fault. Document them so we never pay that cost twice.
 > two breakthroughs below — dedicated dump file, and NMI to convert a silent hang into a
 > bugcheck — **compose**: neither alone is sufficient for a hang that drops no dump.
 
+> **Where this fits.** TESTING.md governs *how and when* to verify (the cheap host tier vs. the
+> slow VM tier, Part 6). This document is its slow-tier failure runbook: what to do when a
+> driver test in the VM **crashes** — bugchecks or hard-hangs — and you need a kernel dump to
+> diagnose it.
+
 ---
 
 ## 0. The environment (facts, not assumptions)

@@ -116,106 +116,110 @@ static void rc4_ksa(const sar_recovery_key_t *rk, uint8_t S[256]) {
 }
 
 static void rec_ecb(block_cipher_ctx_t *bc, const uint8_t *ct, uint8_t *pt,
-                    uint64_t start, uint64_t length) {
+                    uint64_t start, uint64_t length, uint64_t base) {
     uint32_t bs = bc->block_size;
     uint8_t tmp[16];
     for (uint64_t o = start; o + bs <= start + length; o += bs) {
-        bc->decrypt(bc->ctx, ct + o, tmp);
-        for (uint32_t i = 0; i < bs; i++) pt[o + i] = tmp[i];
+        bc->decrypt(bc->ctx, ct + (o - base), tmp);
+        for (uint32_t i = 0; i < bs; i++) pt[o - base + i] = tmp[i];
     }
 }
 
 static int range_iv_block(const sar_recovery_key_t *rk, uint32_t policy,
-                          uint64_t o, uint64_t start, uint32_t bs,
-                          const uint8_t *ct, const uint8_t **prev) {
-    if (o == 0 || (policy == SAR_CTR_RESET_PER_CHUNK && o == start)) {
+                          uint64_t o, uint64_t origin, uint32_t bs,
+                          const uint8_t *ct, uint64_t base, const uint8_t **prev) {
+    if (o == 0 || (policy == SAR_CTR_RESET_PER_CHUNK && o == origin)) {
         if (rk->iv_length < bs) return 0;
         *prev = rk->iv;
     } else {
-        *prev = ct + (o - bs);
+        *prev = ct + (o - bs - base);
     }
     return 1;
 }
 
 static void rec_cbc(block_cipher_ctx_t *bc, const sar_recovery_key_t *rk, uint32_t policy,
-                    const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length) {
+                    const uint8_t *ct, uint8_t *pt, uint64_t origin, uint64_t start,
+                    uint64_t length, uint64_t base) {
     uint32_t bs = bc->block_size;
     uint8_t tmp[16];
     for (uint64_t o = start; o + bs <= start + length; o += bs) {
         const uint8_t *prev;
-        if (!range_iv_block(rk, policy, o, start, bs, ct, &prev)) continue;
-        bc->decrypt(bc->ctx, ct + o, tmp);
-        for (uint32_t i = 0; i < bs; i++) pt[o + i] = (uint8_t)(tmp[i] ^ prev[i]);
+        if (!range_iv_block(rk, policy, o, origin, bs, ct, base, &prev)) continue;
+        bc->decrypt(bc->ctx, ct + (o - base), tmp);
+        for (uint32_t i = 0; i < bs; i++) pt[o - base + i] = (uint8_t)(tmp[i] ^ prev[i]);
     }
 }
 
 static void rec_cfb(block_cipher_ctx_t *bc, const sar_recovery_key_t *rk, uint32_t policy,
-                    const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length) {
+                    const uint8_t *ct, uint8_t *pt, uint64_t origin, uint64_t start,
+                    uint64_t length, uint64_t base) {
     uint32_t bs = bc->block_size;
     uint8_t ks[16];
     uint64_t o = start;
     for (; o + bs <= start + length; o += bs) {
         const uint8_t *prev;
-        if (!range_iv_block(rk, policy, o, start, bs, ct, &prev)) continue;
+        if (!range_iv_block(rk, policy, o, origin, bs, ct, base, &prev)) continue;
         bc->encrypt(bc->ctx, prev, ks);
-        for (uint32_t i = 0; i < bs; i++) pt[o + i] = (uint8_t)(ct[o + i] ^ ks[i]);
+        for (uint32_t i = 0; i < bs; i++) pt[o - base + i] = (uint8_t)(ct[o - base + i] ^ ks[i]);
     }
     uint64_t rem = start + length - o;
     if (rem > 0) {
         const uint8_t *prev;
-        if (range_iv_block(rk, policy, o, start, bs, ct, &prev)) {
+        if (range_iv_block(rk, policy, o, origin, bs, ct, base, &prev)) {
             bc->encrypt(bc->ctx, prev, ks);
-            for (uint64_t i = 0; i < rem; i++) pt[o + i] = (uint8_t)(ct[o + i] ^ ks[i]);
+            for (uint64_t i = 0; i < rem; i++) pt[o - base + i] = (uint8_t)(ct[o - base + i] ^ ks[i]);
         }
     }
 }
 
 static void rec_ofb(block_cipher_ctx_t *bc, const sar_recovery_key_t *rk, uint32_t policy,
-                    const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length) {
+                    const uint8_t *ct, uint8_t *pt, uint64_t origin, uint64_t start,
+                    uint64_t length, uint64_t base) {
     uint32_t bs = bc->block_size;
     uint8_t O[16];
-    uint64_t first_blk = (policy == SAR_CTR_RESET_PER_CHUNK) ? 0 : (start / bs);
+    uint64_t first_blk = (policy == SAR_CTR_RESET_PER_CHUNK) ? ((start - origin) / bs) : (start / bs);
     bc->encrypt(bc->ctx, rk->iv, O);
     for (uint64_t m = 0; m < first_blk; m++) bc->encrypt(bc->ctx, O, O);
     for (uint64_t o = start; o < start + length; o += bs) {
         uint64_t rem = start + length - o;
         uint32_t n = (rem < bs) ? (uint32_t)rem : bs;
-        for (uint32_t i = 0; i < n; i++) pt[o + i] = (uint8_t)(ct[o + i] ^ O[i]);
+        for (uint32_t i = 0; i < n; i++) pt[o - base + i] = (uint8_t)(ct[o - base + i] ^ O[i]);
         bc->encrypt(bc->ctx, O, O);
     }
 }
 
 static void rec_ctr(block_cipher_ctx_t *bc, const sar_recovery_key_t *rk, uint32_t policy,
-                    const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length) {
+                    const uint8_t *ct, uint8_t *pt, uint64_t origin, uint64_t start,
+                    uint64_t length, uint64_t base) {
     uint32_t bs = bc->block_size;
     const sar_ctr_layout_t *L = &SAR_CTR_LAYOUTS[rk->ctr_layout_tag - 1];
-    uint64_t base_blk = (policy == SAR_CTR_RESET_PER_CHUNK) ? 0 : (start / bs);
     uint64_t v0 = sar_ctr_field_read(rk->iv, L);
     uint8_t counter[16], ks[16];
     for (uint64_t o = start; o < start + length; o += bs) {
-        uint64_t n = base_blk + (o - start) / bs;
+        uint64_t n = (policy == SAR_CTR_RESET_PER_CHUNK) ? ((o - origin) / bs) : (o / bs);
         for (uint32_t i = 0; i < bs; i++) counter[i] = rk->iv[i];
         sar_ctr_field_write(counter, L, v0 + n);
         bc->encrypt(bc->ctx, counter, ks);
         uint64_t rem = start + length - o;
         uint32_t cnt = (rem < bs) ? (uint32_t)rem : bs;
-        for (uint32_t i = 0; i < cnt; i++) pt[o + i] = (uint8_t)(ct[o + i] ^ ks[i]);
+        for (uint32_t i = 0; i < cnt; i++) pt[o - base + i] = (uint8_t)(ct[o - base + i] ^ ks[i]);
     }
 }
 
 static void rec_stream(const sar_recovery_key_t *rk, uint32_t policy,
-                       const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length) {
+                       const uint8_t *ct, uint8_t *pt, uint64_t origin, uint64_t start,
+                       uint64_t length, uint64_t base) {
     uint8_t ks[64];
     uint64_t o = start;
     while (o < start + length) {
-        uint64_t eo = (policy == SAR_CTR_RESET_PER_CHUNK) ? (o - start) : o;
+        uint64_t eo = (policy == SAR_CTR_RESET_PER_CHUNK) ? (o - origin) : o;
         uint64_t bi = eo / 64;
         uint32_t within = (uint32_t)(eo % 64);
         stream_block(rk, bi, ks);
         uint64_t rem = start + length - o;
         uint32_t span = 64 - within;
         if ((uint64_t)span > rem) span = (uint32_t)rem;
-        for (uint32_t i = 0; i < span; i++) pt[o + i] = (uint8_t)(ct[o + i] ^ ks[within + i]);
+        for (uint32_t i = 0; i < span; i++) pt[o - base + i] = (uint8_t)(ct[o - base + i] ^ ks[within + i]);
         o += span;
     }
 }
@@ -238,7 +242,7 @@ static void rec_rc4(const sar_recovery_key_t *rk, uint32_t policy,
 }
 
 static void rec_xts(block_cipher_ctx_t *bc1, block_cipher_ctx_t *bc2, uint64_t data_unit,
-                    const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length) {
+                    const uint8_t *ct, uint8_t *pt, uint64_t start, uint64_t length, uint64_t base) {
     uint8_t tin[16], tweak[16], tmp[16], dec[16];
     for (uint64_t o = start; o + 16 <= start + length; o += 16) {
         uint64_t du = o / data_unit;
@@ -247,9 +251,9 @@ static void rec_xts(block_cipher_ctx_t *bc1, block_cipher_ctx_t *bc2, uint64_t d
         for (int i = 0; i < 8; i++) tin[i] = (uint8_t)(du >> (8 * i));
         bc2->encrypt(bc2->ctx, tin, tweak);
         for (uint32_t b = 0; b < biu; b++) gf128_mul_alpha(tweak);
-        for (int i = 0; i < 16; i++) tmp[i] = (uint8_t)(ct[o + i] ^ tweak[i]);
+        for (int i = 0; i < 16; i++) tmp[i] = (uint8_t)(ct[o - base + i] ^ tweak[i]);
         bc1->decrypt(bc1->ctx, tmp, dec);
-        for (int i = 0; i < 16; i++) pt[o + i] = (uint8_t)(dec[i] ^ tweak[i]);
+        for (int i = 0; i < 16; i++) pt[o - base + i] = (uint8_t)(dec[i] ^ tweak[i]);
     }
 }
 
@@ -558,41 +562,59 @@ static sar_recover_status_t precheck(const sar_recovery_key_t *rk) {
     }
 }
 
+static sar_recover_status_t build_ciphers(const sar_recovery_key_t *rk,
+                                          cipher_slot_t *s1, cipher_slot_t *s2,
+                                          block_cipher_ctx_t *bc, block_cipher_ctx_t *bc1,
+                                          block_cipher_ctx_t *bc2) {
+    if (rk->mode == SAR_MODE_XTS) {
+        if (!make_xts(s1, s2, rk->algorithm, rk->key, rk->key_length, bc1, bc2))
+            return SAR_RECOVER_DECLINED_KEY;
+    } else if (is_block_alg(rk->algorithm)) {
+        if (!make_block(s1, rk->algorithm, rk->key, rk->key_length, bc))
+            return SAR_RECOVER_DECLINED_KEY;
+    }
+    return SAR_RECOVER_OK;
+}
+
+static void recover_one_range(const sar_recovery_key_t *rk, uint32_t policy,
+                              block_cipher_ctx_t *bc, block_cipher_ctx_t *bc1,
+                              block_cipher_ctx_t *bc2, const uint8_t *ct, uint8_t *pt,
+                              uint64_t origin, uint64_t start, uint64_t length, uint64_t base) {
+    switch (rk->mode) {
+        case SAR_MODE_ECB: rec_ecb(bc, ct, pt, start, length, base); break;
+        case SAR_MODE_CBC: rec_cbc(bc, rk, policy, ct, pt, origin, start, length, base); break;
+        case SAR_MODE_CFB: rec_cfb(bc, rk, policy, ct, pt, origin, start, length, base); break;
+        case SAR_MODE_OFB: rec_ofb(bc, rk, policy, ct, pt, origin, start, length, base); break;
+        case SAR_MODE_CTR: rec_ctr(bc, rk, policy, ct, pt, origin, start, length, base); break;
+        case SAR_MODE_XTS: rec_xts(bc1, bc2, rk->mode_params, ct, pt, start, length, base); break;
+        case SAR_MODE_STREAM:
+            if (rk->algorithm == SAR_ALG_RC4) rec_rc4(rk, policy, ct, pt, start, length);
+            else rec_stream(rk, policy, ct, pt, origin, start, length, base);
+            break;
+        default: break;
+    }
+}
+
 static sar_recover_status_t recover_ranges_into(const sar_recovery_key_t *rk,
                                                 const sar_range_t *ranges, uint32_t nr,
                                                 uint32_t policy,
                                                 const uint8_t *ct, uint8_t *pt,
-                                                uint64_t file_size) {
+                                                uint64_t file_size, uint64_t base) {
     sar_recover_status_t pc = precheck(rk);
     if (pc != SAR_RECOVER_OK) return pc;
 
+    if (base != 0 && rk->mode == SAR_MODE_STREAM && rk->algorithm == SAR_ALG_RC4)
+        return SAR_RECOVER_DECLINED_GEOMETRY;
+
     cipher_slot_t s1, s2;
     block_cipher_ctx_t bc, bc1, bc2;
-
-    if (rk->mode == SAR_MODE_XTS) {
-        if (!make_xts(&s1, &s2, rk->algorithm, rk->key, rk->key_length, &bc1, &bc2))
-            return SAR_RECOVER_DECLINED_KEY;
-    } else if (is_block_alg(rk->algorithm)) {
-        if (!make_block(&s1, rk->algorithm, rk->key, rk->key_length, &bc))
-            return SAR_RECOVER_DECLINED_KEY;
-    }
+    sar_recover_status_t cs = build_ciphers(rk, &s1, &s2, &bc, &bc1, &bc2);
+    if (cs != SAR_RECOVER_OK) return cs;
 
     for (uint32_t r = 0; r < nr; r++) {
         uint64_t start = ranges[r].offset, length = ranges[r].length;
         if (start > file_size || file_size - start < length) continue;
-        switch (rk->mode) {
-            case SAR_MODE_ECB: rec_ecb(&bc, ct, pt, start, length); break;
-            case SAR_MODE_CBC: rec_cbc(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_CFB: rec_cfb(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_OFB: rec_ofb(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_CTR: rec_ctr(&bc, rk, policy, ct, pt, start, length); break;
-            case SAR_MODE_XTS: rec_xts(&bc1, &bc2, rk->mode_params, ct, pt, start, length); break;
-            case SAR_MODE_STREAM:
-                if (rk->algorithm == SAR_ALG_RC4) rec_rc4(rk, policy, ct, pt, start, length);
-                else rec_stream(rk, policy, ct, pt, start, length);
-                break;
-            default: break;
-        }
+        recover_one_range(rk, policy, &bc, &bc1, &bc2, ct, pt, start, start, length, base);
     }
 
     return SAR_RECOVER_OK;
@@ -622,7 +644,7 @@ sar_recover_status_t sar_recover_buffer(const sar_recovery_key_t *rk,
 
     for (uint64_t i = 0; i < file_size; i++) pt[i] = ct[i];
 
-    return recover_ranges_into(rk, ranges, nr, policy, ct, pt, file_size);
+    return recover_ranges_into(rk, ranges, nr, policy, ct, pt, file_size, 0);
 }
 
 sar_recover_status_t sar_recover_range(const sar_recovery_key_t *rk,
@@ -634,5 +656,25 @@ sar_recover_status_t sar_recover_range(const sar_recovery_key_t *rk,
     if (range_length == 0) return SAR_RECOVER_OK;
     range.offset = range_offset;
     range.length = range_length;
-    return recover_ranges_into(rk, &range, 1, SAR_CTR_CONTINUOUS, ct, pt, file_size);
+    return recover_ranges_into(rk, &range, 1, SAR_CTR_CONTINUOUS, ct, pt, file_size, 0);
+}
+
+sar_recover_status_t sar_recover_chunk(const sar_recovery_key_t *rk, uint32_t policy,
+                                       const uint8_t *ct, uint8_t *pt,
+                                       uint64_t origin, uint64_t start, uint64_t length,
+                                       uint64_t base, uint64_t file_size) {
+    if (!rk || !ct || !pt) return SAR_RECOVER_INVALID;
+    if (length == 0) return SAR_RECOVER_OK;
+    if (start < origin || start > file_size || file_size - start < length)
+        return SAR_RECOVER_INVALID;
+    sar_recover_status_t pc = precheck(rk);
+    if (pc != SAR_RECOVER_OK) return pc;
+    if (rk->mode == SAR_MODE_STREAM && rk->algorithm == SAR_ALG_RC4)
+        return SAR_RECOVER_DECLINED_GEOMETRY;
+    cipher_slot_t s1, s2;
+    block_cipher_ctx_t bc, bc1, bc2;
+    sar_recover_status_t cs = build_ciphers(rk, &s1, &s2, &bc, &bc1, &bc2);
+    if (cs != SAR_RECOVER_OK) return cs;
+    recover_one_range(rk, policy, &bc, &bc1, &bc2, ct, pt, origin, start, length, base);
+    return SAR_RECOVER_OK;
 }

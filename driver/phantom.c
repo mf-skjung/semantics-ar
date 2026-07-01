@@ -6,6 +6,8 @@
 #include "store_io.h"
 #include "capture.h"
 
+#include <ntifs.h>
+
 extern SAR_GLOBALS g_sar;
 extern PSAR_STATE g_sar_state;
 
@@ -255,6 +257,32 @@ static DWORDLONG SarPhantomSyntheticRef(ULONG dir_hash, ULONG index)
     return SAR_PHANTOM_SYNTH_REF_MASK |
            ((DWORDLONG)(dir_hash & 0xFFFF) << 32) |
            ((DWORDLONG)(index & 0xFFFF));
+}
+
+static BOOLEAN SarPmIdMapLookupByRef(_In_ DWORDLONG Ref,
+                                     _Out_writes_bytes_(568) WCHAR *DirOut, _Out_ PUSHORT DirLen,
+                                     _Out_writes_bytes_(SAR_PHANTOM_NAME_CHARS * 2) WCHAR *NameOut,
+                                     _Out_ PUSHORT NameLen, _Out_ PULONG Index)
+{
+    ULONG i;
+    BOOLEAN found = FALSE;
+    FltAcquirePushLockShared(&g_pm_idmap_lock);
+    for (i = 0; i < SAR_PM_IDMAP_SLOTS; i++) {
+        SAR_PM_IDENT *e = &g_pm_idmap[i];
+        if (!e->valid)
+            continue;
+        if (SarPhantomSyntheticRef((ULONG)(e->dirlen / sizeof(WCHAR)), e->index) == Ref) {
+            RtlCopyMemory(DirOut, e->dir, e->dirlen);
+            *DirLen = e->dirlen;
+            RtlCopyMemory(NameOut, e->name, e->namelen);
+            *NameLen = e->namelen;
+            *Index = e->index;
+            found = TRUE;
+            break;
+        }
+    }
+    FltReleasePushLock(&g_pm_idmap_lock);
+    return found;
 }
 
 static SAR_PHANTOM_TRUST SarPhantomProcessTrust(_In_ HANDLE ProcessId)
@@ -789,6 +817,43 @@ SarPhantomPreCreate(_Inout_ PFLT_CALLBACK_DATA Data,
             return FLT_PREOP_COMPLETE;
         }
         return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+    }
+
+    if (FlagOn(Data->Iopb->Parameters.Create.Options, FILE_OPEN_BY_FILE_ID) &&
+        fileObj->FileName.Length >= sizeof(DWORDLONG)) {
+        DWORDLONG frn;
+        RtlCopyMemory(&frn, fileObj->FileName.Buffer, sizeof(frn));
+        if ((frn & SAR_PHANTOM_SYNTH_REF_MASK) == SAR_PHANTOM_SYNTH_REF_MASK) {
+            WCHAR fidDir[284];
+            WCHAR fidName[SAR_PHANTOM_NAME_CHARS];
+            USHORT fidDirLen = 0, fidNameLen = 0;
+            ULONG fidIdx = 0;
+            if (SarPmIdMapLookupByRef(frn, fidDir, &fidDirLen, fidName, &fidNameLen, &fidIdx)) {
+                if (SarPhantomIsTrusted(pid)) {
+                    Data->IoStatus.Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                    Data->IoStatus.Information = 0;
+                    return FLT_PREOP_COMPLETE;
+                }
+                if (g_sar_io_replace_name != NULL) {
+                    UNICODE_STRING fidDirStr, fidNameStr;
+                    fidDirStr.Buffer = fidDir; fidDirStr.Length = fidDirLen;
+                    fidDirStr.MaximumLength = fidDirLen;
+                    fidNameStr.Buffer = fidName; fidNameStr.Length = fidNameLen;
+                    fidNameStr.MaximumLength = fidNameLen;
+                    SarPhantomBuildBackingPath(fidIdx, &fidDirStr, backingPath, &backingChars);
+                    SarPhantomMaterializeBacking(backingPath, &fidNameStr,
+                                                 g_sar.phantom->volume_secret, &fidDirStr, fidIdx);
+                    g_sar_io_replace_name(fileObj, backingPath, backingChars * sizeof(WCHAR));
+                    Data->IoStatus.Status = STATUS_REPARSE;
+                    Data->IoStatus.Information = IO_REPARSE;
+                    FltSetCallbackDataDirty(Data);
+                    return FLT_PREOP_COMPLETE;
+                }
+                Data->IoStatus.Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                Data->IoStatus.Information = 0;
+                return FLT_PREOP_COMPLETE;
+            }
+        }
     }
 
     if (FlagOn(Data->Iopb->OperationFlags, SL_OPEN_TARGET_DIRECTORY))
@@ -1366,14 +1431,175 @@ SarPhantomPostQueryInfo(_Inout_ PFLT_CALLBACK_DATA Data,
     return FLT_POSTOP_FINISHED_PROCESSING;
 }
 
+static BOOLEAN SarPhantomResolveDir(_In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ DWORDLONG Frn,
+                                    _Out_writes_(284) WCHAR *DirOut, _Out_ PUNICODE_STRING Dir)
+{
+    UNICODE_STRING idStr;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE h = NULL;
+    PFILE_OBJECT fo = NULL;
+    PFLT_FILE_NAME_INFORMATION ni = NULL;
+    BOOLEAN ok = FALSE;
+
+    idStr.Length = idStr.MaximumLength = sizeof(DWORDLONG);
+    idStr.Buffer = (PWSTR)&Frn;
+    InitializeObjectAttributes(&oa, &idStr, OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    if (!NT_SUCCESS(FltCreateFileEx(g_sar.phantom->filter, FltObjects->Instance, &h, &fo,
+                                    FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb, NULL,
+                                    FILE_ATTRIBUTE_NORMAL,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    FILE_OPEN, FILE_OPEN_BY_FILE_ID | FILE_SYNCHRONOUS_IO_NONALERT,
+                                    NULL, 0, 0)))
+        return FALSE;
+
+    if (NT_SUCCESS(FltGetFileNameInformationUnsafe(fo, FltObjects->Instance,
+                                                   FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+                                                   &ni)) &&
+        NT_SUCCESS(FltParseFileNameInformation(ni))) {
+        if (ni->Name.Length > 0 && ni->Name.Length <= 284 * sizeof(WCHAR) - sizeof(WCHAR)) {
+            RtlCopyMemory(DirOut, ni->Name.Buffer, ni->Name.Length);
+            Dir->Buffer = DirOut;
+            Dir->Length = ni->Name.Length;
+            Dir->MaximumLength = ni->Name.Length;
+            ok = TRUE;
+        }
+    }
+    if (ni != NULL)
+        FltReleaseFileNameInformation(ni);
+    FltClose(h);
+    ObDereferenceObject(fo);
+    return ok;
+}
+
+static VOID SarPhantomInjectUsn(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                _Inout_ PUCHAR Buf, _In_ ULONG Cap)
+{
+    ULONG used = (ULONG)Data->IoStatus.Information;
+    PUCHAR p, end;
+    DWORDLONG parents[8];
+    ULONG counts[8];
+    ULONG nParents = 0;
+    ULONG i, k, f;
+
+    if (used <= sizeof(DWORDLONG) || used > Cap)
+        return;
+
+    p = Buf + sizeof(DWORDLONG);
+    end = Buf + used;
+    while (p + FIELD_OFFSET(USN_RECORD_V2, FileName) <= end) {
+        USN_RECORD_V2 *r = (USN_RECORD_V2 *)p;
+        DWORDLONG par;
+        if (r->MajorVersion != 2 || r->RecordLength < FIELD_OFFSET(USN_RECORD_V2, FileName) ||
+            p + r->RecordLength > end)
+            break;
+        par = r->ParentFileReferenceNumber;
+        if ((par & SAR_PHANTOM_SYNTH_REF_MASK) != SAR_PHANTOM_SYNTH_REF_MASK) {
+            BOOLEAN seen = FALSE;
+            for (f = 0; f < nParents; f++)
+                if (parents[f] == par) { counts[f]++; seen = TRUE; break; }
+            if (!seen && nParents < RTL_NUMBER_OF(parents)) {
+                parents[nParents] = par;
+                counts[nParents] = 1;
+                nParents++;
+            }
+        }
+        p += r->RecordLength;
+    }
+
+    for (i = 0; i < nParents; i++) {
+        WCHAR dirbuf[284];
+        UNICODE_STRING dir;
+        ULONG kcount;
+
+        if (!SarPhantomResolveDir(FltObjects, parents[i], dirbuf, &dir))
+            continue;
+        if (SarPhantomIsPhantomPath(&dir))
+            continue;
+        kcount = SarPhantomCountForDir(counts[i]);
+        for (k = 0; k < kcount; k++) {
+            WCHAR nm[SAR_PHANTOM_NAME_CHARS];
+            USHORT nmchars;
+            ULONG namebytes, reclen;
+            DWORDLONG frn;
+            USN_RECORD_V2 *out;
+            WCHAR bpath[260];
+            USHORT bchars;
+            UNICODE_STRING nmStr;
+
+            SarPhantomNameForIndex(g_sar.phantom->volume_secret, &dir, k, nm, &nmchars);
+            namebytes = (ULONG)nmchars * sizeof(WCHAR);
+            reclen = (FIELD_OFFSET(USN_RECORD_V2, FileName) + namebytes + 7) & ~7u;
+            if (used + reclen > Cap)
+                break;
+
+            frn = SarPhantomSyntheticRef((ULONG)(dir.Length / sizeof(WCHAR)), k);
+            out = (USN_RECORD_V2 *)(Buf + used);
+            RtlZeroMemory(out, reclen);
+            out->RecordLength = reclen;
+            out->MajorVersion = 2;
+            out->MinorVersion = 0;
+            out->FileReferenceNumber = frn;
+            out->ParentFileReferenceNumber = parents[i];
+            out->Usn = (USN)0;
+            out->Reason = USN_REASON_DATA_OVERWRITE | USN_REASON_CLOSE;
+            out->FileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+            out->FileNameLength = (USHORT)namebytes;
+            out->FileNameOffset = (USHORT)FIELD_OFFSET(USN_RECORD_V2, FileName);
+            RtlCopyMemory((PUCHAR)out + FIELD_OFFSET(USN_RECORD_V2, FileName), nm, namebytes);
+            used += reclen;
+
+            nmStr.Buffer = nm;
+            nmStr.Length = (USHORT)namebytes;
+            nmStr.MaximumLength = nmStr.Length;
+            SarPhantomBuildBackingPath(k, &dir, bpath, &bchars);
+            if (bchars >= 32) {
+                UNICODE_STRING backHex;
+                backHex.Buffer = bpath + (bchars - 32);
+                backHex.Length = 32 * sizeof(WCHAR);
+                backHex.MaximumLength = backHex.Length;
+                SarPmIdMapInsert(&backHex, &dir, &nmStr, k);
+            }
+        }
+    }
+
+    Data->IoStatus.Information = used;
+}
+
+_Function_class_(PFLT_POST_OPERATION_CALLBACK)
+static FLT_POSTOP_CALLBACK_STATUS
+SarPhantomPostUsnWhenSafe(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                          _In_opt_ PVOID CompletionContext, _In_ FLT_POST_OPERATION_FLAGS Flags)
+{
+    PUCHAR buf;
+
+    UNREFERENCED_PARAMETER(CompletionContext);
+    UNREFERENCED_PARAMETER(Flags);
+
+    if (NT_SUCCESS(FltLockUserBuffer(Data))) {
+        buf = (PUCHAR)MmGetSystemAddressForMdlSafe(
+            Data->Iopb->Parameters.FileSystemControl.Neither.OutputMdlAddress,
+            NormalPagePriority | MdlMappingNoExecute);
+        if (buf != NULL) {
+            __try {
+                SarPhantomInjectUsn(Data, FltObjects, buf,
+                                    Data->Iopb->Parameters.FileSystemControl.Neither.OutputBufferLength);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+            }
+        }
+    }
+    return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
 FLT_POSTOP_CALLBACK_STATUS
 SarPhantomPostFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
                         _In_ PCFLT_RELATED_OBJECTS FltObjects,
                         _In_opt_ PVOID CompletionContext,
                         _In_ FLT_POST_OPERATION_FLAGS Flags)
 {
-    UNREFERENCED_PARAMETER(FltObjects);
-    UNREFERENCED_PARAMETER(CompletionContext);
+    HANDLE pid;
+    FLT_POSTOP_CALLBACK_STATUS ret;
 
     if (FlagOn(Flags, FLTFL_POST_OPERATION_DRAINING))
         return FLT_POSTOP_FINISHED_PROCESSING;
@@ -1381,8 +1607,20 @@ SarPhantomPostFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_POSTOP_FINISHED_PROCESSING;
     if (!NT_SUCCESS(Data->IoStatus.Status))
         return FLT_POSTOP_FINISHED_PROCESSING;
-    if (Data->Iopb == NULL)
+    if (Data->Iopb == NULL || Data->RequestorMode == KernelMode)
         return FLT_POSTOP_FINISHED_PROCESSING;
+    if (Data->Iopb->Parameters.FileSystemControl.Common.FsControlCode != FSCTL_ENUM_USN_DATA)
+        return FLT_POSTOP_FINISHED_PROCESSING;
+    if ((ULONG)Data->IoStatus.Information <= sizeof(DWORDLONG))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    pid = SarPhantomCurrentPid(Data);
+    if (SarPhantomIsTrusted(pid))
+        return FLT_POSTOP_FINISHED_PROCESSING;
+
+    if (FltDoCompletionProcessingWhenSafe(Data, FltObjects, CompletionContext, Flags,
+                                          SarPhantomPostUsnWhenSafe, &ret))
+        return ret;
 
     return FLT_POSTOP_FINISHED_PROCESSING;
 }

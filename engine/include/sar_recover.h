@@ -106,4 +106,9 @@ sar_recover_status_t sar_recover_range(const sar_recovery_key_t *rk,
                                        uint64_t file_size,
                                        uint64_t range_offset, uint64_t range_length);
 
+sar_recover_status_t sar_recover_chunk(const sar_recovery_key_t *rk, uint32_t policy,
+                                       const uint8_t *ct, uint8_t *pt,
+                                       uint64_t origin, uint64_t start, uint64_t length,
+                                       uint64_t base, uint64_t file_size);
+
 #endif

@@ -714,43 +714,6 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
                     !(vcmp >= SAR_CANDIDATE_SIZE && RtlEqualMemory(pbuf, work->written, vcmp)))
                     clean = TRUE;
 
-                if (!clean) {
-                    SIZE_T pc;
-                    for (pc = 0; pc < SEMANTICS_AR_PROVENANCE_PATH_MAX &&
-                                 work->provenance_path[pc] != 0; pc++) {
-                    }
-                    if (pc > 0) {
-                        UNICODE_STRING nm;
-                        OBJECT_ATTRIBUTES oa;
-                        IO_STATUS_BLOCK iosb;
-                        HANDLE h = NULL;
-                        LARGE_INTEGER off;
-                        nm.Buffer = (PWCH)work->provenance_path;
-                        nm.Length = (USHORT)(pc * sizeof(WCHAR));
-                        nm.MaximumLength = nm.Length;
-                        InitializeObjectAttributes(&oa, &nm, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
-                                                   NULL, NULL);
-                        off.QuadPart = (LONGLONG)Request->write_offset.QuadPart;
-                        if (NT_SUCCESS(ZwCreateFile(&h, FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
-                                                    FILE_ATTRIBUTE_NORMAL,
-                                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                                    FILE_OPEN,
-                                                    FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
-                                                    NULL, 0))) {
-                            IO_STATUS_BLOCK rb;
-                            if (NT_SUCCESS(ZwReadFile(h, NULL, NULL, NULL, &rb, pbuf,
-                                                      Request->write_length, &off, NULL)) &&
-                                rb.Information >= Request->write_length) {
-                                got = (ULONG)rb.Information;
-                                if (!(vcmp >= SAR_CANDIDATE_SIZE &&
-                                      RtlEqualMemory(pbuf, work->written, vcmp)))
-                                    clean = TRUE;
-                            }
-                            ZwClose(h);
-                        }
-                    }
-                }
-
                 if (clean) {
                     work->preserve_buf = pbuf;
                     work->preserve_len = got;
@@ -886,8 +849,10 @@ static VOID SarCaptureStageRegion(_In_ PSAR_CAPTURE_CTX Ctx, _In_opt_ PFLT_INSTA
                                             DelayedWorkQueue, work))) {
         ObDereferenceObject(Thread);
         ObDereferenceObject(Originator);
-        RtlSecureZeroMemory(work->preserve_buf, work->preserve_len);
-        ExFreePoolWithTag(work->preserve_buf, SAR_POOL_TAG_PRESBUF);
+        if (work->preserve_buf != NULL) {
+            RtlSecureZeroMemory(work->preserve_buf, work->preserve_len);
+            ExFreePoolWithTag(work->preserve_buf, SAR_POOL_TAG_PRESBUF);
+        }
         FltFreeGenericWorkItem(item);
         ExFreeToLookasideListEx(&Ctx->work_pool, work);
         ExReleaseRundownProtection(&Ctx->rundown);
@@ -907,8 +872,15 @@ VOID SarCaptureSubmitDestruction(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBA
         return;
 
     SarCaptureResolveProvenance(Data, path);
-    SarCaptureStageRegion(Ctx, FltObjects->Instance, FltObjects->FileObject, path,
-                          Originator, Thread, Offset, Length, FALSE);
+    {
+        UINT64 pos;
+        for (pos = 0; pos < Length; pos += SAR_PRESERVE_STAGE_MAX) {
+            UINT64 remaining = Length - pos;
+            ULONG chunk = remaining > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)remaining;
+            SarCaptureStageRegion(Ctx, FltObjects->Instance, FltObjects->FileObject, path,
+                                  Originator, Thread, Offset + pos, chunk, FALSE);
+        }
+    }
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -996,12 +968,69 @@ VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
             chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
         for (i = 0; i < chars; i++)
             path[i] = (UINT16)destName->Name.Buffer[i];
-        SarCaptureStageRegion(Ctx, FltObjects->Instance, fo, path, Originator, Thread, 0, size, FALSE);
+        {
+            UINT64 pos;
+            for (pos = 0; pos < size; pos += SAR_PRESERVE_STAGE_MAX) {
+                UINT64 remaining = size - pos;
+                ULONG chunk = remaining > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)remaining;
+                SarCaptureStageRegion(Ctx, FltObjects->Instance, fo, path, Originator, Thread,
+                                      pos, chunk, FALSE);
+            }
+        }
     }
 
     FltClose(h);
     ObDereferenceObject(fo);
     FltReleaseFileNameInformation(destName);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCaptureSubmitSectionBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                                     _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                     _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
+{
+    UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+    FILE_STANDARD_INFORMATION fsi;
+    UINT64 size, offset;
+    PUCHAR buf;
+    UINT64 actor;
+
+    UNREFERENCED_PARAMETER(Thread);
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+
+    SarCaptureResolveProvenance(Data, path);
+    if (path[0] == 0 || SarCaptureProvenanceIsOwn(path))
+        return;
+
+    if (!NT_SUCCESS(FltQueryInformationFile(FltObjects->Instance, FltObjects->FileObject, &fsi,
+                                            sizeof(fsi), FileStandardInformation, NULL)))
+        return;
+    size = (UINT64)fsi.EndOfFile.QuadPart;
+    if (size == 0)
+        return;
+    buf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_PRESERVE_STAGE_MAX, SAR_POOL_TAG_PRESBUF);
+    if (buf == NULL)
+        return;
+    actor = (UINT64)(ULONG_PTR)PsGetProcessId(Originator);
+    for (offset = 0; offset < size; offset += SAR_PRESERVE_STAGE_MAX) {
+        UINT64 rem = size - offset;
+        ULONG chunk = rem > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)rem;
+        ULONG aligned = (chunk + (SAR_PRESERVE_SECTOR - 1)) & ~(SAR_PRESERVE_SECTOR - 1);
+        LARGE_INTEGER off;
+        ULONG got = 0;
+        off.QuadPart = (LONGLONG)offset;
+        if (NT_SUCCESS(FltReadFile(FltObjects->Instance, FltObjects->FileObject, &off, aligned, buf,
+                                   FLTFL_IO_OPERATION_NON_CACHED, &got, NULL, NULL)) &&
+            got > 0) {
+            ULONG keep = got < chunk ? got : chunk;
+            SarPreserveStage(g_sar.preserve, path, offset, keep, actor, buf, keep);
+        }
+    }
+    ExFreePoolWithTag(buf, SAR_POOL_TAG_PRESBUF);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

@@ -673,8 +673,27 @@ SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
 
     context = SarGetStreamContext(FltObjects);
     if (context != NULL) {
+        BOOLEAN writable_create =
+            Data->Iopb->Parameters.AcquireForSectionSynchronization.SyncType == SyncTypeCreateSection &&
+            Data->Iopb->Parameters.AcquireForSectionSynchronization.PageProtection == PAGE_READWRITE &&
+            Data->RequestorMode == UserMode;
+
         InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_SECTION_DIRTY);
         SarSubmitMetadata(Data, FltObjects, SAR_DESTRUCT_SECTION_SYNC, 0);
+
+        if (writable_create) {
+            LONG prev = InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_MAPPED_CAPTURED);
+            if ((prev & (LONG)SAR_STREAMCTX_FLAG_MAPPED_CAPTURED) == 0) {
+                PETHREAD thread = Data->Thread;
+                PEPROCESS process;
+                if (thread == NULL)
+                    thread = PsGetCurrentThread();
+                process = IoThreadToProcess(thread);
+                if (process == NULL)
+                    process = PsGetCurrentProcess();
+                SarCaptureSubmitSectionBaseline(g_sar.capture, Data, FltObjects, process, thread);
+            }
+        }
         FltReleaseContext(context);
     }
 

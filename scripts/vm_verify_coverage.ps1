@@ -91,7 +91,7 @@ if (-not (Test-Path "$pkg\semantics_ar.sys")) { throw "Package failed" }
 try { VM { Stop-Service semantics_ar_service -Force -ErrorAction SilentlyContinue } } catch {}
 try { VM { fltmc unload semantics_ar 2>$null } } catch {}
 Start-Sleep -Seconds 2
-VM { $s="C:\Windows\System32\drivers\SemanticsAr"; if (Test-Path $s){ Remove-Item "$s\*" -Force -ErrorAction SilentlyContinue } }
+VM { $s="C:\Windows\System32\drivers\SemanticsAr"; if (Test-Path $s){ Remove-Item "$s\*" -Recurse -Force -ErrorAction SilentlyContinue } }
 
 $vmSar = "C:\sar"
 VM { if (-not (Test-Path $using:vmSar)) { New-Item -ItemType Directory -Path $using:vmSar -Force | Out-Null } }
@@ -103,7 +103,8 @@ if (Test-Path $svcExe) { CopyToVM $svcExe "$vmSar\semantics_ar_service.exe" }
 $sarctlExe = "$Repo\build\tools\Release\sarctl.exe"
 if (Test-Path $sarctlExe) { CopyToVM $sarctlExe "$vmSar\sarctl.exe" }
 foreach ($h in @("noninplace_destroyer.exe","benign_workload.exe","perf_bench.exe",
-                 "ransom_sim.exe","preserve_test.exe","partial_encryptor.exe")) {
+                 "ransom_sim.exe","preserve_test.exe","partial_encryptor.exe",
+                 "destroyer_matrix.exe","benign_novel.exe","phantom_enum.exe")) {
     $src = "$Repo\build_harness\$h"; if (Test-Path $src) { CopyToVM $src "$vmSar\$h" }
 }
 
@@ -185,12 +186,102 @@ foreach ($mode in @("newdelete","renameover","truncate","setzero","mmap")) {
     Metric "non-in-place[$mode] restored-region-correct" "$($res.recovered)/$AttackCount ($rate%)"
     foreach ($s in $res.samples) { Write-Host "      $s" -ForegroundColor DarkGray }
 }
-$nipHard = @("newdelete","renameover","truncate","setzero")
+$nipHard = @("newdelete","renameover","truncate","setzero","mmap")
 $hardOk = $true
 foreach ($m in $nipHard) { if ($modeRates[$m] -lt 95.0) { $hardOk = $false } }
-Assert "non-in-place FN=0 on synchronous paths (>=95% recovered)" $hardOk `
+Assert "non-in-place FN=0 on all paths incl. mmap (>=95% recovered)" $hardOk `
     ("rates: " + (($nipHard | ForEach-Object { "$_=$($modeRates[$_])%" }) -join " "))
-Write-Host "  (mmap is best-effort before async flush: $($modeRates['mmap'])% recovered)" -ForegroundColor DarkGray
+Write-Host "  (mmap captured at section-acquire, before first store)" -ForegroundColor DarkGray
+
+# ── Phase A2: destruction-member matrix (Track 2 gate completeness) ─────
+# Every user-mode destruction primitive noninplace_destroyer does not cover.
+# UNAVAILABLE (volume does not support the primitive, e.g. file-level TRIM /
+# block-clone on a plain-NTFS virtual disk) is an honest reachability gap, not
+# a gate miss: those modes are skipped, not failed. A PERFORMED destruction that
+# cannot be restored from the preserve store is the defect.
+Write-Host "`nPhase A2: Destruction-member matrix -> preserve -> restore (Track 2)" -ForegroundColor Yellow
+VM { & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null; & C:\sar\sarctl.exe budget 604800 10240 2>&1 | Out-Null }
+$dmModes = @("noncached","disposeex","allocshrink","setsparse","trim","blockclone",
+             "linkreplace","mmapclose","intermittent","copydelete","preoverwrite")
+$dmRates = @{}
+$dmErrors = 0
+$dmSkipped = @()
+foreach ($mode in $dmModes) {
+    $dir = "C:\sar\dm_$mode"
+    VMArgs { param($d) if (Test-Path $d){Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue}; New-Item -ItemType Directory $d -Force -ErrorAction SilentlyContinue|Out-Null } @($dir)
+    $dmOut = VMArgs { param($m,$d,$n,$k) (& C:\sar\destroyer_matrix.exe $m $d $n $k 2>&1) -join "`n" } @($mode,$dir,$AttackCount,$sizeKB)
+    $perf = 0; $unav = 0; $errs = 0
+    $mp = $dmOut | Select-String 'PERFORMED=(\d+) UNAVAILABLE=(\d+) ERRORS=(\d+)'
+    if ($mp) { $perf=[int]$mp.Matches[0].Groups[1].Value; $unav=[int]$mp.Matches[0].Groups[2].Value; $errs=[int]$mp.Matches[0].Groups[3].Value }
+    $dmErrors += $errs
+    if ($unav -eq $AttackCount) {
+        $dmSkipped += $mode
+        Metric "matrix[$mode] primitive on this volume" "UNAVAILABLE (skipped, reachability)"
+        continue
+    }
+    Start-Sleep -Seconds 6
+    $res = VMArgs { param($d,$n,$len)
+        $rec = 0
+        for ($i = 0; $i -lt $n; $i++) {
+            $v = "{0}\victim_{1:D5}.dat" -f $d, $i
+            (& C:\sar\sarctl.exe preserve-recover $v 0 $len 2>&1) | Out-Null
+            $ok = $false
+            if (Test-Path $v) {
+                try {
+                    $fb = [IO.File]::ReadAllBytes($v)
+                    if ($fb.Length -ge $len) {
+                        $ok = $true
+                        for ($k = 0; $k -lt $len; $k++) {
+                            if ($fb[$k] -ne [byte](65 + ($k % 26))) { $ok = $false; break }
+                        }
+                    }
+                } catch { $ok = $false }
+            }
+            if ($ok) { $rec++ }
+        }
+        return $rec
+    } @($dir,$AttackCount,$fbytes)
+    $rate = if ($AttackCount -gt 0) { [math]::Round(100.0 * $res / $AttackCount, 1) } else { 0 }
+    $dmRates[$mode] = $rate
+    Metric "matrix[$mode] performed/unavail/err" "$perf/$unav/$errs"
+    Metric "matrix[$mode] restored-region-correct" "$res/$AttackCount ($rate%)"
+}
+$dmHardOk = ($dmErrors -eq 0)
+foreach ($m in $dmRates.Keys) { if ($dmRates[$m] -lt 95.0) { $dmHardOk = $false } }
+Assert "destruction-member matrix: all performed paths preserved+restored (>=95%), 0 harness errors" $dmHardOk `
+    ("errors=$dmErrors skipped=[" + ($dmSkipped -join ",") + "] rates: " + (($dmRates.Keys | ForEach-Object { "$_=$($dmRates[$_])%" }) -join " "))
+
+# ── Phase P: phantom un-bypassability across enumeration paths (Track 3) ─
+# The metamorphic oracle: the same directory enumerated by every route
+# (9 NtQueryDirectoryFileEx info classes + FSCTL_ENUM_USN_DATA + OpenFileById)
+# must surface the IDENTICAL phantom set (same names, same synthetic FRNs).
+# A phantom present in one surface and absent/FRN-inconsistent in another is a
+# cross-reference tell that unmasks the decoys. First live-kernel exercise of the
+# open-by-FileId reparse (3-A) and USN injection (3-B).
+Write-Host "`nPhase P: Phantom un-bypassability (metamorphic enum consistency, Track 3)" -ForegroundColor Yellow
+$phDir = "C:\sar\phantom_probe"
+VMArgs { param($d)
+    if (Test-Path $d){Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue}
+    New-Item -ItemType Directory $d -Force -ErrorAction SilentlyContinue | Out-Null
+    for ($i=0;$i -lt 25;$i++){
+        $b=[byte[]]::new(4096); for($k=0;$k -lt 4096;$k++){ $b[$k]=[byte](65 + ($k % 26)) }
+        [IO.File]::WriteAllBytes(("{0}\real_{1:D3}.txt" -f $d,$i),$b)
+    }
+} @($phDir)
+Start-Sleep -Seconds 3
+$phOut = VMArgs { param($d) (& C:\sar\phantom_enum.exe $d 2>&1) -join "`n" } @($phDir)
+Write-Host $phOut -ForegroundColor DarkGray
+$phRef = 0; $m1 = $phOut | Select-String 'PHANTOM_REF_COUNT=(\d+)'; if ($m1){ $phRef=[int]$m1.Matches[0].Groups[1].Value }
+$phConsistent = ($phOut -match 'CONSISTENT=YES')
+$phTells = 99; $m2 = $phOut | Select-String 'tells=(\d+)'; if ($m2){ $phTells=[int]$m2.Matches[0].Groups[1].Value }
+$phOpenTotal = ([regex]::Matches($phOut, 'OPENBYID ')).Count
+$phOpenOk = ([regex]::Matches($phOut, 'OPENBYID .*result=OK')).Count
+Metric "phantoms surfaced (reference set, IdBoth)" "$phRef"
+Metric "cross-path tells (name-missing or FRN-inconsistent)" "$phTells"
+Metric "open-by-file-id reparsed to backing (3-A)" "$phOpenOk/$phOpenTotal"
+Assert "phantoms appear to an untrusted enumerator" ($phRef -gt 0) "ref=$phRef"
+Assert "phantom set is identical across all enumeration paths (metamorphic, 0 tells)" ($phConsistent -and $phTells -eq 0) "consistent=$phConsistent tells=$phTells"
+Assert "every phantom opens by file-id (3-A reparse)" ($phOpenTotal -gt 0 -and $phOpenOk -eq $phOpenTotal) "ok=$phOpenOk/$phOpenTotal"
 
 # ── Phase E: in-place encryption -> preserve -> restore (in-place FN) ───
 Write-Host "`nPhase E: In-place encryption -> preserve -> restore (deterministic per-victim)" -ForegroundColor Yellow
@@ -366,6 +457,24 @@ Metric "ENFORCE benign blocked operations (default budget)" "$benBlocked2"
 Assert "ENFORCE does not block normal usage at default budget" ($benBlocked2 -eq 0)
 VM { & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null }
 
+# ── Phase C2: high-novelty benign corpus under ENFORCE (Track 4 FP) ─────
+# The benign workloads that most resemble ransomware (high-entropy in-place
+# rewrite, atomic rename-over, copy-encrypt-delete, a genuine user encryptor,
+# bulk churn). Capture is acceptable (availability is preserved via probation);
+# a BLOCKED benign operation is a false positive and the defect.
+Write-Host "`nPhase C2: High-novelty benign corpus under ENFORCE (Track 4 false-positive)" -ForegroundColor Yellow
+VM { & C:\sar\sarctl.exe mode enforce 2>&1 | Out-Null; & C:\sar\sarctl.exe budget 604800 10240 2>&1 | Out-Null }
+$novDir = "C:\sar\benign_novel"
+VMArgs { param($d) if (Test-Path $d){Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue}; New-Item -ItemType Directory $d -Force -ErrorAction SilentlyContinue|Out-Null } @($novDir)
+$novN = [math]::Max(20, [int]($BenignCount / 4))
+$novOut = VMArgs { param($d,$n) & C:\sar\benign_novel.exe $d $n 32 2>&1 } @($novDir,$novN)
+foreach ($l in $novOut) { Write-Host "    $l" }
+$novBlocked = 0
+$nb = $novOut | Select-String 'BLOCKED_TOTAL=(\d+)'; if ($nb) { $novBlocked = [int]$nb.Matches[0].Groups[1].Value }
+Metric "ENFORCE high-novelty benign blocked operations (per-class corpus)" "$novBlocked"
+Assert "ENFORCE blocks no high-novelty benign work (availability, per-class FP)" ($novBlocked -eq 0) "blocked=$novBlocked"
+VM { & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null }
+
 # ── Phase G: ENFORCE capacity exhaustion -> fail-closed block ──────────
 Write-Host "`nPhase G: ENFORCE capacity exhaustion -> destruction blocked (fail-closed)" -ForegroundColor Yellow
 $ovfDir = "C:\sar\enforce_ovf"
@@ -417,7 +526,7 @@ Write-Host "`nPhase H: Reboot persistence of staged regions (new record struct)"
 VM { Stop-Service semantics_ar_service -Force -ErrorAction SilentlyContinue }
 VM { fltmc unload semantics_ar 2>$null | Out-Null }
 Start-Sleep -Seconds 2
-VM { $s="C:\Windows\System32\drivers\SemanticsAr"; if (Test-Path $s){ Remove-Item "$s\*" -Force -ErrorAction SilentlyContinue } }
+VM { $s="C:\Windows\System32\drivers\SemanticsAr"; if (Test-Path $s){ Remove-Item "$s\*" -Recurse -Force -ErrorAction SilentlyContinue } }
 VM { fltmc load semantics_ar 2>$null | Out-Null }
 Start-Sleep -Seconds 3
 VM { Start-Service semantics_ar_service -ErrorAction SilentlyContinue; Start-Sleep -Seconds 4 }
@@ -492,7 +601,7 @@ Assert "recovered region byte-matches golden after reboot" ([bool]($postHash -an
 # method calls inside VM scriptblocks (post-reboot session may be CLM).
 Write-Host "`nPhase D: Burden (passive overhead, benign file ops; clean store, median of 3)" -ForegroundColor Yellow
 $perfDir = "C:\sar\perf"
-$storeClr = { $s="C:\Windows\System32\drivers\SemanticsAr"; if (Test-Path $s){ Remove-Item "$s\*" -Force -ErrorAction SilentlyContinue } }
+$storeClr = { $s="C:\Windows\System32\drivers\SemanticsAr"; if (Test-Path $s){ Remove-Item "$s\*" -Recurse -Force -ErrorAction SilentlyContinue } }
 VMArgs { param($d) if (Test-Path $d){Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue}; New-Item -ItemType Directory $d -Force -ErrorAction SilentlyContinue|Out-Null } @($perfDir)
 $perfOne = { param($d,$n)
     Remove-Item "$d\*" -Force -ErrorAction SilentlyContinue

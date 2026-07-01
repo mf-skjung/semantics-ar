@@ -666,6 +666,145 @@ static void recover_range_api(void) {
           "only the requested range is modified; all other bytes untouched");
 }
 
+static sar_recover_status_t decrypt_windowed(const sar_recovery_key_t *rk, const sar_geometry_t *geom,
+                                             const uint8_t *ct, uint8_t *out, uint64_t L, uint64_t W) {
+    sar_range_t ranges[SAR_MAX_RANGES];
+    uint32_t nr = 0;
+    uint32_t policy = SAR_CTR_CONTINUOUS;
+    if (geom) {
+        if (sar_geometry_expand(geom, L, ranges, SAR_MAX_RANGES, &nr) != 0)
+            return SAR_RECOVER_DECLINED_GEOMETRY;
+        policy = geom->counter_policy;
+    } else {
+        ranges[0].offset = 0; ranges[0].length = L; nr = 1;
+    }
+    memcpy(out, ct, (size_t)L);
+    for (uint32_t i = 0; i < nr; i++) {
+        uint64_t rs = ranges[i].offset, re = ranges[i].offset + ranges[i].length;
+        for (uint64_t w = rs; w < re; w += W) {
+            uint64_t wlen = (re - w < W) ? (re - w) : W;
+            uint32_t prefix = (w > 0) ? 16u : 0u;
+            uint8_t ctwin[1040];
+            uint8_t ptwin[1024];
+            memcpy(ctwin, ct + (w - prefix), (size_t)(prefix + wlen));
+            memcpy(ptwin, ct + w, (size_t)wlen);
+            sar_recover_status_t st = sar_recover_chunk(rk, policy, ctwin + prefix, ptwin,
+                                                        rs, w, wlen, w, L);
+            if (st != SAR_RECOVER_OK) return st;
+            memcpy(out + w, ptwin, (size_t)wlen);
+        }
+    }
+    return SAR_RECOVER_OK;
+}
+
+static int win_matches(const sar_recovery_key_t *rk, const sar_geometry_t *geom,
+                       const uint8_t *ct, uint64_t L) {
+    static const uint64_t windows[4] = { 16, 64, 256, 512 };
+    uint8_t whole[1024], win[1024];
+    if (sar_recover_buffer(rk, geom, ct, whole, L) != SAR_RECOVER_OK) return 0;
+    for (int wi = 0; wi < 4; wi++) {
+        if (decrypt_windowed(rk, geom, ct, win, L, windows[wi]) != SAR_RECOVER_OK) return 0;
+        if (memcmp(win, whole, (size_t)L) != 0) return 0;
+    }
+    return 1;
+}
+
+static void chunk_equivalence(void) {
+    printf("[chunked decrypt == whole-buffer decrypt across modes/geom/policy/window]\n");
+    enum { L = 1024 };
+    uint8_t key[16], iv[16], pt[L], ct[L];
+    fill_pattern(key, 16, 0x91);
+    fill_pattern(iv, 16, 0x4d);
+    fill_pattern(pt, L, 0x55);
+    aes_ctx_t c; aes_setkey(&c, key, 16);
+    block_cipher_ctx_t bc = { aes_encrypt_block, aes_decrypt_block, &c, 16 };
+
+    { ref_cbc(&bc, iv, pt, ct, L);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_CBC; rk.key_length = 16;
+      memcpy(rk.key, key, 16); memcpy(rk.iv, iv, 16); rk.iv_length = 16;
+      CHECK(win_matches(&rk, NULL, ct, L), "AES-128-CBC full: windowed == whole-buffer"); }
+
+    { ref_cfb(&bc, iv, pt, ct, L);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_CFB; rk.key_length = 16;
+      memcpy(rk.key, key, 16); memcpy(rk.iv, iv, 16); rk.iv_length = 16;
+      CHECK(win_matches(&rk, NULL, ct, L), "AES-128-CFB full: windowed == whole-buffer"); }
+
+    { ref_ofb(&bc, iv, pt, ct, L);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_OFB; rk.key_length = 16;
+      memcpy(rk.key, key, 16); memcpy(rk.iv, iv, 16); rk.iv_length = 16;
+      CHECK(win_matches(&rk, NULL, ct, L), "AES-128-OFB full: windowed == whole-buffer"); }
+
+    { ref_ecb(&bc, pt, ct, L);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_ECB; rk.key_length = 16;
+      memcpy(rk.key, key, 16);
+      CHECK(win_matches(&rk, NULL, ct, L), "AES-128-ECB full: windowed == whole-buffer"); }
+
+    { uint8_t nonce[16]; fill_pattern(nonce, 16, 0x00); memset(nonce + 8, 0, 8);
+      uint8_t ksfull[L], zero[L]; memset(zero, 0, L);
+      ref_ctr(&bc, nonce, zero, ksfull, L);
+      for (int i = 0; i < L; i++) ct[i] = (uint8_t)(pt[i] ^ ksfull[i]);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_CTR; rk.key_length = 16;
+      memcpy(rk.key, key, 16);
+      uint8_t file[16 + L]; memcpy(file, nonce, 16); memcpy(file + 16, ct, L);
+      sar_recovery_sample_t s = { 0, pt, ct, 64 };
+      sar_recover_locate_iv(&rk, file, 16 + L, &s);
+      CHECK(win_matches(&rk, NULL, ct, L), "AES-128-CTR full: windowed == whole-buffer");
+      sar_geometry_t g; memset(&g, 0, sizeof g);
+      g.mode = SAR_GEOM_STRIDE; g.chunk_bytes = 64; g.stride_bytes = 256;
+      g.counter_policy = SAR_CTR_CONTINUOUS;
+      sar_range_t rr[SAR_MAX_RANGES]; uint32_t rn = 0;
+      sar_geometry_expand(&g, L, rr, SAR_MAX_RANGES, &rn);
+      memcpy(ct, pt, L);
+      for (uint32_t i = 0; i < rn; i++)
+          for (uint64_t o = rr[i].offset; o < rr[i].offset + rr[i].length; o++)
+              ct[o] = (uint8_t)(pt[o] ^ ksfull[o]);
+      CHECK(win_matches(&rk, &g, ct, L), "AES-128-CTR stride/continuous: windowed == whole-buffer"); }
+
+    { uint8_t k1[16], k2[16]; fill_pattern(k1, 16, 0x21); fill_pattern(k2, 16, 0x77);
+      aes_ctx_t a1, a2; aes_setkey(&a1, k1, 16); aes_setkey(&a2, k2, 16);
+      block_cipher_ctx_t b1 = { aes_encrypt_block, aes_decrypt_block, &a1, 16 };
+      block_cipher_ctx_t b2 = { aes_encrypt_block, aes_decrypt_block, &a2, 16 };
+      ref_xts(&b1, &b2, 0, pt, ct, L);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_XTS; rk.key_length = 32;
+      memcpy(rk.key, k1, 16); memcpy(rk.key + 16, k2, 16); rk.mode_params = 512;
+      CHECK(win_matches(&rk, NULL, ct, L), "AES-128-XTS full: windowed == whole-buffer"); }
+
+    { uint8_t ckey[32], cnonce[12];
+      fill_pattern(ckey, 32, 0x33); fill_pattern(cnonce, 12, 0x44);
+      memcpy(ct, pt, L);
+      for (uint32_t o = 0; o < L; o += 64) {
+          uint8_t ksb[64]; chacha_block(ckey, cnonce, o / 64, 20, ksb);
+          for (uint32_t i = 0; i < 64 && o + i < L; i++) ct[o + i] = (uint8_t)(pt[o + i] ^ ksb[i]);
+      }
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_CHACHA20; rk.mode = SAR_MODE_STREAM; rk.key_length = 32;
+      memcpy(rk.key, ckey, 32); memcpy(rk.iv, cnonce, 12); rk.iv_length = 12;
+      rk.mode_params = ((uint64_t)20 << 8);
+      CHECK(win_matches(&rk, NULL, ct, L), "ChaCha20 full: windowed == whole-buffer");
+      sar_geometry_t hg; memset(&hg, 0, sizeof hg);
+      hg.mode = SAR_GEOM_HEAD; hg.head_bytes = 384; hg.counter_policy = SAR_CTR_CONTINUOUS;
+      CHECK(win_matches(&rk, &hg, ct, L), "ChaCha20 head-geom: windowed == whole-buffer"); }
+
+    { sar_geometry_t rg; memset(&rg, 0, sizeof rg);
+      rg.mode = SAR_GEOM_STRIDE; rg.chunk_bytes = 128; rg.stride_bytes = 512;
+      rg.counter_policy = SAR_CTR_RESET_PER_CHUNK;
+      sar_range_t rr[SAR_MAX_RANGES]; uint32_t rn = 0;
+      sar_geometry_expand(&rg, L, rr, SAR_MAX_RANGES, &rn);
+      memcpy(ct, pt, L);
+      for (uint32_t i = 0; i < rn; i++)
+          ref_cbc(&bc, iv, pt + rr[i].offset, ct + rr[i].offset, (uint32_t)rr[i].length);
+      sar_recovery_key_t rk; memset(&rk, 0, sizeof rk);
+      rk.algorithm = SAR_ALG_AES_128; rk.mode = SAR_MODE_CBC; rk.key_length = 16;
+      memcpy(rk.key, key, 16); memcpy(rk.iv, iv, 16); rk.iv_length = 16;
+      CHECK(win_matches(&rk, &rg, ct, L), "AES-128-CBC stride/reset-per-chunk: windowed == whole-buffer"); }
+}
+
 int main(void) {
     block_roundtrips();
     xts_roundtrip();
@@ -675,6 +814,7 @@ int main(void) {
     block0_limit();
     slice_aware();
     recover_range_api();
+    chunk_equivalence();
     no_clobber();
     atomic_replace();
     absorbed_kats();

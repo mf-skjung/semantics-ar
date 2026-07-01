@@ -142,9 +142,10 @@ returns to the user.
 4. **Implementation.** Only on the user's authorization. Write full, optimized code for the
    in-scope files, highest-priority-first, to completion of the authorized slice (1.6, 1.9).
    → **Stop; present with evidence (1.8), not assertions.**
-5. **Verify & close / hand off.** Demonstrate correctness with evidence; fold lasting
-   decisions into durable truth (Part 5); then, per the user and your chain position (2.4),
-   either close the goal out or update the handoff. → **Stop.**
+5. **Verify & close / hand off.** Demonstrate correctness with evidence — TESTING.md governs
+   *how* to verify and how far up the gradient to escalate; fold lasting decisions into durable
+   truth (Part 5); then, per the user and your chain position (2.4), either close the goal out
+   or update the handoff. → **Stop.**
 
 **[GUIDELINE] 2.2.1** Within a phase, act fully — do not fragment it into permission-seeking
 over trivial sub-steps. At the boundary between phases, always stop. The distinction is the

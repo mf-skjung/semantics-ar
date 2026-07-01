@@ -6,6 +6,7 @@
 #include <ntifs.h>
 
 #include "sar_recover.h"
+#include "sar_keystore.h"
 
 #define SAR_REC_NT_PREFIX      L"\\??\\"
 #define SAR_REC_NT_PREFIX_CCH  4
@@ -34,67 +35,6 @@ static USHORT SarRecBuildPaths(_In_reads_(SEMANTICS_AR_PROTO_PATH_MAX) const UIN
     RtlCopyMemory(Temp + n, SAR_REC_TMP_SUFFIX, SAR_REC_TMP_SUFFIX_CCH * sizeof(WCHAR));
     Temp[n + SAR_REC_TMP_SUFFIX_CCH] = L'\0';
     return n;
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-static NTSTATUS SarRecReadTarget(_In_ PCWSTR Path, _Outptr_result_maybenull_ PUCHAR *Buf,
-                                 _Out_ SIZE_T *Len)
-{
-    UNICODE_STRING name;
-    OBJECT_ATTRIBUTES oa;
-    IO_STATUS_BLOCK iosb;
-    HANDLE h;
-    NTSTATUS status;
-    FILE_STANDARD_INFORMATION si;
-    PUCHAR buf;
-    SIZE_T len;
-    LARGE_INTEGER off;
-
-    *Buf = NULL;
-    *Len = 0;
-
-    RtlInitUnicodeString(&name, Path);
-    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
-
-    status = ZwCreateFile(&h, FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
-                          FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
-                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
-    if (!NT_SUCCESS(status))
-        return status;
-
-    status = ZwQueryInformationFile(h, &iosb, &si, sizeof(si), FileStandardInformation);
-    if (!NT_SUCCESS(status)) {
-        ZwClose(h);
-        return status;
-    }
-    if (si.EndOfFile.QuadPart == 0) {
-        ZwClose(h);
-        return STATUS_SUCCESS;
-    }
-    if ((ULONG64)si.EndOfFile.QuadPart > SAR_RECOVERY_MAX_BYTES) {
-        ZwClose(h);
-        return STATUS_FILE_TOO_LARGE;
-    }
-
-    len = (SIZE_T)si.EndOfFile.QuadPart;
-    buf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, len, SAR_POOL_TAG_RECOVER);
-    if (buf == NULL) {
-        ZwClose(h);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    off.QuadPart = 0;
-    status = ZwReadFile(h, NULL, NULL, NULL, &iosb, buf, (ULONG)len, &off, NULL);
-    ZwClose(h);
-    if (!NT_SUCCESS(status) || iosb.Information != len) {
-        RtlSecureZeroMemory(buf, len);
-        ExFreePoolWithTag(buf, SAR_POOL_TAG_RECOVER);
-        return NT_SUCCESS(status) ? STATUS_END_OF_FILE : status;
-    }
-
-    *Buf = buf;
-    *Len = len;
-    return STATUS_SUCCESS;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -131,13 +71,17 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
 {
     semantics_ar_keystore_record_t *record = NULL;
     sar_recovery_key_t rk;
-    sar_recovery_verify_t verify;
     PWCHAR target;
     PWCHAR temp;
-    PUCHAR ct = NULL;
-    PUCHAR pt = NULL;
-    PUCHAR work = NULL;
-    SIZE_T len = 0;
+    PUCHAR ctchunk = NULL;
+    PUCHAR ptchunk = NULL;
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    FILE_STANDARD_INFORMATION si;
+    HANDLE th = NULL;
+    HANDLE oh = NULL;
+    UINT64 targetlen = 0;
     NTSTATUS status;
     int result;
     ULONG64 index;
@@ -164,63 +108,133 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
 
     record = (semantics_ar_keystore_record_t *)ExAllocatePool2(
         POOL_FLAG_PAGED, sizeof(*record), SAR_POOL_TAG_RECOVER);
-    if (record == NULL) {
-        ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
-        return SAR_RECOVER_INVALID;
-    }
-
-    status = SarRecReadTarget(target, &ct, &len);
-    if (status == STATUS_FILE_TOO_LARGE) {
-        result = SAR_RECOVER_DECLINED_TOO_LARGE;
+    ctchunk = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_PRESERVE_STAGE_MAX + 16,
+                                      SAR_POOL_TAG_RECOVER);
+    ptchunk = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_PRESERVE_STAGE_MAX,
+                                      SAR_POOL_TAG_RECOVER);
+    if (record == NULL || ctchunk == NULL || ptchunk == NULL) {
+        result = SAR_RECOVER_INVALID;
         goto cleanup;
     }
-    if (!NT_SUCCESS(status)) {
+
+    RtlInitUnicodeString(&name, target);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(ZwCreateFile(&th, FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
+                                 FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
+                                 FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0))) {
+        th = NULL;
         result = SAR_RECOVER_DECLINED_TARGET_IO;
         goto cleanup;
     }
+    if (NT_SUCCESS(ZwQueryInformationFile(th, &iosb, &si, sizeof(si), FileStandardInformation)))
+        targetlen = (UINT64)si.EndOfFile.QuadPart;
 
-    if (len == 0) {
+    if (targetlen == 0) {
         result = NT_SUCCESS(SarRecWriteTemp(temp, NULL, 0))
                      ? SAR_RECOVER_OK : SAR_RECOVER_DECLINED_TARGET_IO;
         goto cleanup;
     }
 
-    pt = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, len, SAR_POOL_TAG_RECOVER);
-    work = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, len, SAR_POOL_TAG_RECOVER);
-    if (pt == NULL || work == NULL) {
-        result = SAR_RECOVER_INVALID;
-        goto cleanup;
-    }
-    RtlCopyMemory(pt, ct, len);
-
     for (index = 0; SarKeystoreRecordAt(g_sar.keystore, index, record, &total); index++) {
-        UINT64 off;
-        UINT64 rlen;
+        UINT64 off, rlen, soff, slen, pos;
+        ULONG prefix;
+        uint8_t tag[SEMANTICS_AR_MAC_SIZE];
 
         if (!RtlEqualMemory(record->key_id, Request->key_id, SEMANTICS_AR_KEY_ID_SIZE))
             continue;
         matched = 1;
 
         off = record->provenance_offset;
-        if (off >= (UINT64)len)
+        if (off >= targetlen)
             continue;
         rlen = record->provenance_length;
-        if (rlen == 0 || rlen > (UINT64)len - off)
-            rlen = (UINT64)len - off;
+        if (rlen == 0 || rlen > targetlen - off)
+            rlen = targetlen - off;
 
-        sar_recovery_key_from_record(record, &rk);
-        status = (sar_recover_range(&rk, ct, work, (uint64_t)len, off, rlen) == SAR_RECOVER_OK)
-                     ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
-        RtlSecureZeroMemory(&rk, sizeof(rk));
-        if (!NT_SUCCESS(status))
+        soff = record->sample_offset;
+        slen = record->sample_length;
+        if (slen == 0 || slen > SAR_PRESERVE_STAGE_MAX || soff < off || soff + slen > off + rlen)
             continue;
 
-        sar_recovery_verify_from_record(record, &verify);
-        if (sar_recover_verify(work, (uint64_t)len, &verify) == SAR_RECOVER_OK) {
-            RtlCopyMemory(pt + off, work + off, (SIZE_T)rlen);
-            applied++;
-            recovered += rlen;
+        sar_recovery_key_from_record(record, &rk);
+
+        prefix = (soff >= 16) ? 16u : 0u;
+        {
+            LARGE_INTEGER ro;
+            ro.QuadPart = (LONGLONG)(soff - prefix);
+            if (!NT_SUCCESS(ZwReadFile(th, NULL, NULL, NULL, &iosb, ctchunk,
+                                       (ULONG)(prefix + slen), &ro, NULL))) {
+                RtlSecureZeroMemory(&rk, sizeof(rk));
+                continue;
+            }
         }
+        if (sar_recover_chunk(&rk, SAR_CTR_CONTINUOUS, ctchunk + prefix, ptchunk,
+                              off, soff, slen, soff, targetlen) != SAR_RECOVER_OK) {
+            RtlSecureZeroMemory(&rk, sizeof(rk));
+            continue;
+        }
+        sar_sample_tag(ptchunk, (uint32_t)slen, tag);
+        if (!RtlEqualMemory(tag, record->sample_tag, SEMANTICS_AR_MAC_SIZE)) {
+            RtlSecureZeroMemory(&rk, sizeof(rk));
+            continue;
+        }
+
+        if (oh == NULL) {
+            UNICODE_STRING tname;
+            OBJECT_ATTRIBUTES toa;
+            RtlInitUnicodeString(&tname, temp);
+            InitializeObjectAttributes(&toa, &tname, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                       NULL, NULL);
+            if (!NT_SUCCESS(ZwCreateFile(&oh, FILE_WRITE_DATA | SYNCHRONIZE, &toa, &iosb, NULL,
+                                         FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
+                                         FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
+                                         NULL, 0))) {
+                oh = NULL;
+                RtlSecureZeroMemory(&rk, sizeof(rk));
+                result = SAR_RECOVER_DECLINED_TARGET_IO;
+                goto cleanup;
+            }
+            for (pos = 0; pos < targetlen; pos += SAR_PRESERVE_STAGE_MAX) {
+                ULONG cs = (targetlen - pos > SAR_PRESERVE_STAGE_MAX)
+                               ? SAR_PRESERVE_STAGE_MAX : (ULONG)(targetlen - pos);
+                LARGE_INTEGER io;
+                io.QuadPart = (LONGLONG)pos;
+                if (!NT_SUCCESS(ZwReadFile(th, NULL, NULL, NULL, &iosb, ctchunk, cs, &io, NULL)) ||
+                    !NT_SUCCESS(ZwWriteFile(oh, NULL, NULL, NULL, &iosb, ctchunk, cs, &io, NULL))) {
+                    RtlSecureZeroMemory(&rk, sizeof(rk));
+                    result = SAR_RECOVER_DECLINED_TARGET_IO;
+                    goto cleanup;
+                }
+            }
+        }
+
+        for (pos = off; pos < off + rlen; pos += SAR_PRESERVE_STAGE_MAX) {
+            ULONG wlen = (off + rlen - pos > SAR_PRESERVE_STAGE_MAX)
+                             ? SAR_PRESERVE_STAGE_MAX : (ULONG)(off + rlen - pos);
+            ULONG pfx = (pos >= 16) ? 16u : 0u;
+            LARGE_INTEGER ro, wo;
+            ro.QuadPart = (LONGLONG)(pos - pfx);
+            wo.QuadPart = (LONGLONG)pos;
+            if (!NT_SUCCESS(ZwReadFile(th, NULL, NULL, NULL, &iosb, ctchunk, pfx + wlen, &ro, NULL))) {
+                RtlSecureZeroMemory(&rk, sizeof(rk));
+                result = SAR_RECOVER_DECLINED_TARGET_IO;
+                goto cleanup;
+            }
+            if (sar_recover_chunk(&rk, SAR_CTR_CONTINUOUS, ctchunk + pfx, ptchunk,
+                                  off, pos, wlen, pos, targetlen) != SAR_RECOVER_OK) {
+                RtlSecureZeroMemory(&rk, sizeof(rk));
+                result = SAR_RECOVER_DECLINED_MISMATCH;
+                goto cleanup;
+            }
+            if (!NT_SUCCESS(ZwWriteFile(oh, NULL, NULL, NULL, &iosb, ptchunk, wlen, &wo, NULL))) {
+                RtlSecureZeroMemory(&rk, sizeof(rk));
+                result = SAR_RECOVER_DECLINED_TARGET_IO;
+                goto cleanup;
+            }
+        }
+        RtlSecureZeroMemory(&rk, sizeof(rk));
+        applied++;
+        recovered += rlen;
     }
 
     if (!matched) {
@@ -231,8 +245,7 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
         result = SAR_RECOVER_DECLINED_MISMATCH;
         goto cleanup;
     }
-
-    if (!NT_SUCCESS(SarRecWriteTemp(temp, pt, len))) {
+    if (oh != NULL && !NT_SUCCESS(ZwFlushBuffersFile(oh, &iosb))) {
         result = SAR_RECOVER_DECLINED_TARGET_IO;
         goto cleanup;
     }
@@ -241,17 +254,17 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
     result = SAR_RECOVER_OK;
 
 cleanup:
-    if (work != NULL) {
-        RtlSecureZeroMemory(work, len);
-        ExFreePoolWithTag(work, SAR_POOL_TAG_RECOVER);
+    if (oh != NULL)
+        ZwClose(oh);
+    if (th != NULL)
+        ZwClose(th);
+    if (ptchunk != NULL) {
+        RtlSecureZeroMemory(ptchunk, SAR_PRESERVE_STAGE_MAX);
+        ExFreePoolWithTag(ptchunk, SAR_POOL_TAG_RECOVER);
     }
-    if (pt != NULL) {
-        RtlSecureZeroMemory(pt, len);
-        ExFreePoolWithTag(pt, SAR_POOL_TAG_RECOVER);
-    }
-    if (ct != NULL) {
-        RtlSecureZeroMemory(ct, len);
-        ExFreePoolWithTag(ct, SAR_POOL_TAG_RECOVER);
+    if (ctchunk != NULL) {
+        RtlSecureZeroMemory(ctchunk, SAR_PRESERVE_STAGE_MAX + 16);
+        ExFreePoolWithTag(ctchunk, SAR_POOL_TAG_RECOVER);
     }
     if (record != NULL) {
         RtlSecureZeroMemory(record, sizeof(*record));
@@ -342,13 +355,21 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
 {
     PWCHAR target;
     PWCHAR temp;
-    PUCHAR ct = NULL;
-    PUCHAR out = NULL;
     PUCHAR region = NULL;
-    SIZE_T len = 0;
-    SIZE_T outlen;
+    PUCHAR chunk = NULL;
     UINT64 off = Request->offset;
     UINT64 rlen = Request->length;
+    UINT64 targetlen = 0;
+    UINT64 final_size;
+    UINT64 pos;
+    UINT16 resolved[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+    const UINT16 *provpath;
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE th = NULL;
+    HANDLE oh = NULL;
+    FILE_STANDARD_INFORMATION si;
     NTSTATUS status;
     int result;
     ULONG produced = 0;
@@ -357,7 +378,7 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
 
     if (g_sar.preserve == NULL)
         return SAR_RECOVER_DECLINED_TARGET_IO;
-    if (rlen == 0 || rlen > SAR_RECOVERY_MAX_BYTES || off + rlen < off)
+    if (rlen == 0 || off + rlen < off)
         return SAR_RECOVER_INVALID;
 
     target = (PWCHAR)ExAllocatePool2(POOL_FLAG_PAGED, 2 * SAR_REC_PATH_CCH * sizeof(WCHAR),
@@ -371,58 +392,73 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
         return SAR_RECOVER_INVALID;
     }
 
-    status = SarRecReadTarget(target, &ct, &len);
-    if (status == STATUS_FILE_TOO_LARGE) {
-        result = SAR_RECOVER_DECLINED_TOO_LARGE;
-        goto cleanup;
-    }
-    if (!NT_SUCCESS(status)) {
-        if (status == STATUS_OBJECT_NAME_NOT_FOUND ||
-            status == STATUS_OBJECT_PATH_NOT_FOUND ||
-            status == STATUS_NO_SUCH_FILE ||
-            status == STATUS_DELETE_PENDING) {
-            ct = NULL;
-            len = 0;
-        } else {
-            result = SAR_RECOVER_DECLINED_TARGET_IO;
-            goto cleanup;
-        }
-    }
-
-    outlen = (SIZE_T)(off + rlen);
-    if ((SIZE_T)len > outlen)
-        outlen = (SIZE_T)len;
-    if (outlen > SAR_RECOVERY_MAX_BYTES) {
-        result = SAR_RECOVER_DECLINED_TOO_LARGE;
-        goto cleanup;
-    }
-
     region = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)rlen, SAR_POOL_TAG_RECOVER);
-    out = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, outlen, SAR_POOL_TAG_RECOVER);
-    if (region == NULL || out == NULL) {
+    chunk = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_PRESERVE_STAGE_MAX, SAR_POOL_TAG_RECOVER);
+    if (region == NULL || chunk == NULL) {
         result = SAR_RECOVER_INVALID;
         goto cleanup;
     }
 
-    RtlZeroMemory(out, outlen);
-    if (ct != NULL && len > 0)
-        RtlCopyMemory(out, ct, len <= outlen ? len : outlen);
-
-    {
-        UINT16 resolved[SEMANTICS_AR_PROVENANCE_PATH_MAX];
-        SarRecResolveNtPath(target, resolved);
-        status = SarPreserveRestore(g_sar.preserve,
-                                    resolved[0] != 0 ? resolved : Request->target_path,
-                                    off, rlen, region, (ULONG)rlen, &produced);
-    }
+    SarRecResolveNtPath(target, resolved);
+    provpath = resolved[0] != 0 ? resolved : Request->target_path;
+    status = SarPreserveRestore(g_sar.preserve, provpath, off, rlen, region, (ULONG)rlen, &produced);
     if (!NT_SUCCESS(status) || produced != (ULONG)rlen) {
         result = SAR_RECOVER_DECLINED_MISMATCH;
         goto cleanup;
     }
 
-    RtlCopyMemory(out + off, region, (SIZE_T)rlen);
+    RtlInitUnicodeString(&name, target);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (NT_SUCCESS(ZwCreateFile(&th, FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
+                                FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN,
+                                FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0))) {
+        if (NT_SUCCESS(ZwQueryInformationFile(th, &iosb, &si, sizeof(si), FileStandardInformation)))
+            targetlen = (UINT64)si.EndOfFile.QuadPart;
+    } else {
+        th = NULL;
+    }
 
-    if (!NT_SUCCESS(SarRecWriteTemp(temp, out, outlen))) {
+    final_size = (off + rlen > targetlen) ? off + rlen : targetlen;
+
+    RtlInitUnicodeString(&name, temp);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(ZwCreateFile(&oh, FILE_WRITE_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
+                                 FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
+                                 FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0))) {
+        result = SAR_RECOVER_DECLINED_TARGET_IO;
+        goto cleanup;
+    }
+
+    for (pos = 0; pos < final_size; pos += SAR_PRESERVE_STAGE_MAX) {
+        ULONG csize = (final_size - pos > SAR_PRESERVE_STAGE_MAX)
+                          ? SAR_PRESERVE_STAGE_MAX : (ULONG)(final_size - pos);
+        UINT64 ostart, oend;
+        LARGE_INTEGER fo;
+
+        RtlZeroMemory(chunk, csize);
+
+        if (th != NULL && pos < targetlen) {
+            ULONG rd = (targetlen - pos > csize) ? csize : (ULONG)(targetlen - pos);
+            fo.QuadPart = (LONGLONG)pos;
+            if (!NT_SUCCESS(ZwReadFile(th, NULL, NULL, NULL, &iosb, chunk, rd, &fo, NULL))) {
+                result = SAR_RECOVER_DECLINED_TARGET_IO;
+                goto cleanup;
+            }
+        }
+
+        ostart = off > pos ? off : pos;
+        oend = (off + rlen < pos + csize) ? off + rlen : pos + csize;
+        if (ostart < oend)
+            RtlCopyMemory(chunk + (ostart - pos), region + (ostart - off), (SIZE_T)(oend - ostart));
+
+        fo.QuadPart = (LONGLONG)pos;
+        if (!NT_SUCCESS(ZwWriteFile(oh, NULL, NULL, NULL, &iosb, chunk, csize, &fo, NULL))) {
+            result = SAR_RECOVER_DECLINED_TARGET_IO;
+            goto cleanup;
+        }
+    }
+
+    if (!NT_SUCCESS(ZwFlushBuffersFile(oh, &iosb))) {
         result = SAR_RECOVER_DECLINED_TARGET_IO;
         goto cleanup;
     }
@@ -431,17 +467,17 @@ int SarPreserveRecoveryExecute(_In_ const semantics_ar_preserve_recover_t *Reque
     result = SAR_RECOVER_OK;
 
 cleanup:
+    if (oh != NULL)
+        ZwClose(oh);
+    if (th != NULL)
+        ZwClose(th);
+    if (chunk != NULL) {
+        RtlSecureZeroMemory(chunk, SAR_PRESERVE_STAGE_MAX);
+        ExFreePoolWithTag(chunk, SAR_POOL_TAG_RECOVER);
+    }
     if (region != NULL) {
         RtlSecureZeroMemory(region, (SIZE_T)rlen);
         ExFreePoolWithTag(region, SAR_POOL_TAG_RECOVER);
-    }
-    if (out != NULL) {
-        RtlSecureZeroMemory(out, outlen);
-        ExFreePoolWithTag(out, SAR_POOL_TAG_RECOVER);
-    }
-    if (ct != NULL) {
-        RtlSecureZeroMemory(ct, len);
-        ExFreePoolWithTag(ct, SAR_POOL_TAG_RECOVER);
     }
     ExFreePoolWithTag(target, SAR_POOL_TAG_RECOVER);
     return result;

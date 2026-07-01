@@ -62,15 +62,28 @@ static const FLT_CONTEXT_REGISTRATION g_sar_contexts[] = {
     { FLT_CONTEXT_END }
 };
 
+#ifndef FILE_DAX_VOLUME
+#define FILE_DAX_VOLUME 0x20000000
+#endif
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 static NTSTATUS SarInstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects,
                                  _In_ FLT_INSTANCE_SETUP_FLAGS Flags,
                                  _In_ DEVICE_TYPE VolumeDeviceType,
                                  _In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType)
 {
+    UCHAR attrbuf[sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 64];
+    PFILE_FS_ATTRIBUTE_INFORMATION attr = (PFILE_FS_ATTRIBUTE_INFORMATION)attrbuf;
+    IO_STATUS_BLOCK iosb;
+
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(VolumeDeviceType);
     UNREFERENCED_PARAMETER(VolumeFilesystemType);
+
+    if (NT_SUCCESS(FltQueryVolumeInformation(FltObjects->Instance, &iosb, attr, sizeof(attrbuf),
+                                             FileFsAttributeInformation)) &&
+        (attr->FileSystemAttributes & FILE_DAX_VOLUME) != 0)
+        return STATUS_FLT_DO_NOT_ATTACH;
 
     SarFeatureDetectDevDrive(FltObjects, &g_sar.posture);
     return STATUS_SUCCESS;

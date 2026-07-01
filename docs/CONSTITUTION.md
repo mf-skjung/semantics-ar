@@ -57,7 +57,14 @@ If and only if it escapes all three is it a genuine open item.
 > administrator who decides to attack," "the Oracle might be bypassed," "the
 > capture read might be induced to fail without kernel access" are not defended.
 > Defending the impossible is the slope this project is defined against. Saying
-> *less* and defending *narrowly* is correct here, not a weakness.
+> *less* and defending *narrowly* is correct here, not a weakness. The same
+> discipline governs what is **recorded** as a limit: a declared boundary earns its
+> place only when it is non-obvious, specific to this design, and able to change how
+> the system is deployed or trusted. A tautology ("nothing is protected before the
+> driver loads"), a boundary the entire class of filesystem filters shares (a
+> direct-access volume mapped to byte-addressable memory raises no I/O for any filter
+> to see), or a self-imposed implementation constant restated as fate are not limits
+> and are not written here — recording them is the same noise as defending them.
 
 ### 0.4 What vs how
 This document specifies **what must be true**, precisely enough to be mechanically
@@ -472,14 +479,26 @@ from sources chosen by destruction shape:
    and staged. The read is gated on the object having been read by an untrusted actor (the read →
    destroy causality of encryption), so a content-less benign delete that never consumed the original
    is not held.
-3. **A distinct file object, off the IRP.** For a destruction whose original does not live on the
-   handle in hand — a rename-over or hardlink-replace, where the doomed file is the *destination*,
-   and a mapped-section write, where the modification flushes asynchronously — a worker copies the
-   still-intact original through a *distinct* kernel file object, at PASSIVE level, holding no
-   filesystem resource of the destroying operation. The destination of a replace is opened below
-   our own instance and read before the rename commits; a mapped file is read by a deferred worker
-   on its own handle, best-effort before the dirtied pages flush, and where that copy loses the race
-   the region reduces to the confirmed limit (IX.2), never to a held resource on the IRP.
+3. **A distinct file object, off the IRP — and, for a mapped section, ahead of the first store.**
+   For a destruction whose original does not live on the handle in hand — a rename-over or
+   hardlink-replace, where the doomed file is the *destination* — a worker copies the still-intact
+   original through a *distinct* kernel file object, at PASSIVE level, holding no filesystem resource
+   of the destroying operation: the destination of a replace is opened below our own instance and read
+   before the rename commits, never as a held resource on the IRP.
+
+   A mapped-section write has no write IRP at the moment it happens — a process maps the file writable
+   and stores into memory, and the change reaches disk only later, as an asynchronous paging write
+   issued by the system writer. That paging write is the wrong seam to copy from: it runs above
+   PASSIVE, where reading the same file faults the memory manager, and it carries the ciphertext, not
+   the original; the individual store carries nothing at all, raising no IRP. The original is read at
+   the one seam the OS surfaces *before any store can occur*: the section-synchronization acquire
+   (`ACQUIRE_FOR_SECTION_SYNCHRONIZATION`) that precedes a writable mapping. In that pre-operation —
+   which runs before the file system acquires the file for the section, so it contends no section lock
+   — a distinct **non-cached** kernel file object reads the whole still-clean region synchronously and
+   freezes it for the worker to stage, before the mapping is usable. The mapped path is thus held by
+   first-write-wins (III.5.3) like every other member, not best-effort: recovery for a mapped
+   destruction becomes available once the encrypting flush lands, which is asynchronous, but no
+   original is lost to the race.
 
 Every destruction member of IV.1.2 that has a recoverable file region — in-place overwrite,
 truncate, allocation-shrink, delete, rename-over, hardlink-replace, block-clone, ODX offload-write,
@@ -531,6 +550,17 @@ capacity-exceeding attack by an already-convicted actor is not prevented; ENFORC
 Probation never reaches this question. The bounds size reversible holding; the pool a hold occupies is
 never a detection or conviction signal.
 
+A third bound sizes the **capture pipeline** itself: the off-IRP staging work in flight is capacity-
+bounded, and under saturation — gated destructions arriving faster than they drain — excess captures
+are **shed, not blocked**. The shed is deliberately fail-open: it yields an unconvicted actor's copy
+rather than block the benign high-volume rewriters probation exists to absorb (III.5.1) — blocking
+them is the false positive the two-pool design is built to avoid, and it is the more likely harm than
+the burst it would prevent. The shed is bounded by the conviction asymmetry: sustained high-volume
+destruction trips conviction (Part IV, VIII.4) and the actor is then blocked upstream and never
+re-enters the pipeline, so a shed copy reaches a genuinely-malicious original only in an actor's
+pre-conviction burst that *also* evades the phantom (Part VIII) and key (Part II) layers — the
+stacked-residual corner of IX.2, not a standalone hole.
+
 **[INVARIANT] III.5.6 — Restore is operator-directed, verified, and metadata-preserving; the store never leaves the kernel.**
 Restoration of a held original is initiated by the operator, never automatically — circumstantial
 evidence holds, it does not decide. Before a held original replaces on-disk bytes the kernel verifies
@@ -566,8 +596,9 @@ on this path is a capture candidate):
 - Truncate — `FileEndOfFileInformation` shrink **and** `FileAllocationInformation`
   shrink.
 - Delete — `FileDispositionInformation` **and** `FileDispositionInformationEx`.
-- mmap / section write — captured at section creation
-  (`ACQUIRE_FOR_SECTION_SYNCHRONIZATION`), surfaced as paging write.
+- mmap / section write — the destructive flush surfaces as an asynchronous paging
+  write, but the original is captured at the writable-section acquire
+  (`ACQUIRE_FOR_SECTION_SYNCHRONIZATION`) that precedes the first store (III.5.2).
 - Rename-over-existing — `FileRenameInformation`(`Ex`) + `ReplaceIfExists`.
 - Hardlink-replace — `FileLinkInformation`(`Ex`) replace.
 - Block-clone / ODX — `FSCTL_DUPLICATE_EXTENTS_TO_FILE`, `FSCTL_OFFLOAD_WRITE`.
@@ -1372,20 +1403,28 @@ For each phantom the minifilter maintains a synthetic USN_RECORD_V2 containing:
 - The phantom's declared file name, parent directory reference, timestamps, and a
   plausible Reason field.
 
-These records are injected into FSCTL_ENUM_USN_DATA and FSCTL_READ_USN_JOURNAL output
-in post-op via SwapBuffers. They are invisible to trusted processes (VIII.1.3).
+The synthetic records are injected into the FSCTL_ENUM_USN_DATA output in post-op. Once the
+operation is safe (FltDoCompletionProcessingWhenSafe), the locked output buffer is extended with
+synthetic USN_RECORD_V2 entries for the directories resolved from the real records' parent
+references, so the same phantoms a directory enumeration of those directories would surface also
+appear in the volume-wide MFT walk. They are invisible to trusted processes (VIII.1.3). An untrusted
+process that acts on an injected phantom — opening it by name (the parent reference resolves to a real
+directory whose phantom set the open matches, VIII.2) or by its synthetic `FileReferenceNumber`
+(`FILE_OPEN_BY_FILE_ID`, reparsed to the backing) — reaches the backing file and is convicted on the
+encryption-chain write (VIII.4), exactly as through directory enumeration. A phantom's reference, name,
+and backing are identical across the directory, query, and USN surfaces, so cross-referencing one
+against another cannot distinguish a phantom from a real file.
 
-> **[NEGATIVE] VIII.8.1a — Residual: USN injection is not yet active.** The current build
-> intercepts the FSCTL post-op but does not yet inject the synthetic records, so an untrusted
-> process that enumerates via the USN journal (a fast-enumeration technique some encryptors
-> use) sees the directory's real files but not the phantoms — a cross-reference tell against
-> directory enumeration, and a path by which a USN-driven encryptor reaches real files without
-> encountering a phantom. The closure (the SwapBuffers injection specified above) is pending
-> and must be built to the same once/sorted discipline as VIII.3.1. It is bounded by the
-> conviction asymmetry and, decisively, by the **core engine**: a USN-driven encryptor that
-> avoids every phantom still destroys real originals, which the gate / Oracle / preservation
-> (Parts II–IV) detect, preserve, and (under ENFORCE at capacity) block independently of the
-> phantom layer. The phantom layer is one evidence channel, not the sole defense.
+> **[NEGATIVE] VIII.8.1a — Residual: the change journal and the 128-bit record format are not
+> surfaced.** Two USN surfaces remain outside the injection. `FSCTL_READ_USN_JOURNAL` returns a
+> *temporal* stream of change records, not a file listing; a process that discovers targets solely by
+> reading the change journal is not shown phantom change-events there. And the injection synthesizes
+> the V2 record; an enumerator that requests the 128-bit V3 format (`MFT_ENUM_DATA_V1`, the
+> `FileIdAllExtd` class of VIII.8) is not surfaced phantoms in that call. Both are bounded by the
+> conviction asymmetry and, decisively, by the **core engine**: a USN-driven encryptor that avoids
+> every phantom still destroys real originals, which the gate / Oracle / preservation (Parts II–IV)
+> detect, preserve, and (under ENFORCE at capacity) block independently of the phantom layer. The
+> phantom layer is one evidence channel, not the sole defense.
 
 **[INVARIANT] VIII.8.2 — No integrity mechanism protects USN records.**
 USN records carry no signature, checksum, or integrity seal. Injection of syntactically
@@ -1499,10 +1538,10 @@ within the window and reduces to this limit only beyond it. They are **not** new
   falls outside both is held by preservation (III.5) for the window, and reduces here only
   beyond it.
 - **The held original could not be copied, or its store was destroyed**: a destruction whose
-  original was never readable through the filesystem (a region the originator did not read and
-  whose best-effort separate-object copy lost the race, III.5.2), one whose held copy aged or was
-  evicted past the window (III.5.5), or a held copy whose on-disk store a SYSTEM actor destroyed
-  (VII.1.4). A captured key still recovers regardless; only the *held-only* residue reduces here,
+  original was never on disk to read — a region first observed already as ciphertext, with no
+  pre-attack original to hold (III.5.3) — one whose capture the pipeline shed under saturation
+  (III.5.5), one whose held copy aged or was evicted past the window (III.5.5), or a held copy whose
+  on-disk store a SYSTEM actor destroyed (VII.1.4). A captured key still recovers regardless; only the *held-only* residue reduces here,
   and it is detected and reported, never silently dropped.
 
 > **Rationale.** This is the honest edge of a system that holds keys and a *bounded* window of
