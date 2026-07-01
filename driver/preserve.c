@@ -753,8 +753,9 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
 
     FltAcquirePushLockExclusive(&Preserve->lock);
     for (i = 0; i < Preserve->record_count; i++) {
-        if (Preserve->records[i].provenance_offset == Offset &&
-            Preserve->records[i].provenance_length == Length &&
+        if (Preserve->records[i].provenance_offset <= Offset &&
+            Offset + Length <= Preserve->records[i].provenance_offset +
+                               Preserve->records[i].provenance_length &&
             RtlEqualMemory(Preserve->records[i].provenance_path, Path,
                            SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16))) {
             RtlCopyMemory(&rec, &Preserve->records[i], sizeof(rec));
@@ -783,12 +784,15 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
         status = SarPresCrypt(Preserve, FALSE, ctbuf, (ULONG)rec.payload_length, rec.iv, ptbuf,
                               (ULONG)rec.payload_length, &produced);
 
-    if (NT_SUCCESS(status) &&
-        sar_preserve_verify_restore(&rec, Path, Offset, ptbuf, Length) == SAR_PRES_OK) {
-        RtlCopyMemory(Out, ptbuf, (SIZE_T)Length);
-        *OutLen = (ULONG)Length;
-    } else if (NT_SUCCESS(status)) {
-        status = STATUS_DATA_ERROR;
+    if (NT_SUCCESS(status)) {
+        UINT64 inner = 0;
+        if (sar_preserve_verify_extract(&rec, Path, Offset, Length, ptbuf,
+                                        rec.provenance_length, &inner) == SAR_PRES_OK) {
+            RtlCopyMemory(Out, ptbuf + inner, (SIZE_T)Length);
+            *OutLen = (ULONG)Length;
+        } else {
+            status = STATUS_DATA_ERROR;
+        }
     }
 
     RtlSecureZeroMemory(ptbuf, (SIZE_T)rec.payload_length);

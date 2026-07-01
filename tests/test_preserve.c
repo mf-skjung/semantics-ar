@@ -163,22 +163,33 @@ int main(void) {
               "a captured key reconciles a hold regardless of pool (protected is not exempt from key)");
     }
 
-    printf("[verify-before-restore: tag + binding]\n");
+    printf("[verify-before-restore: tag + binding + sub-region extract]\n");
     {
         sar_preserve_record_t r;
         sar_preserve_record_init(&r, pa, 4096, 256, 3000, 0, 256, 1, iv, 16, orig, 256);
-        int ok = sar_preserve_verify_restore(&r, pa, 4096, orig, 256);
+        uint64_t inner = 0xdead;
+        int ok = sar_preserve_verify_extract(&r, pa, 4096, 256, orig, 256, &inner);
+        int whole_inner0 = (inner == 0);
         uint8_t bad[256];
         fill(bad, sizeof bad, 0x80);
         bad[10] ^= 0x01;
-        int corrupt = sar_preserve_verify_restore(&r, pa, 4096, bad, 256);
-        int wrong_off = sar_preserve_verify_restore(&r, pa, 0, orig, 256);
-        int wrong_path = sar_preserve_verify_restore(&r, pb, 4096, orig, 256);
-        CHECK(ok == SAR_PRES_OK &&
+        int corrupt = sar_preserve_verify_extract(&r, pa, 4096, 256, bad, 256, &inner);
+        int wrong_off = sar_preserve_verify_extract(&r, pa, 0, 256, orig, 256, &inner);
+        int wrong_path = sar_preserve_verify_extract(&r, pb, 4096, 256, orig, 256, &inner);
+        CHECK(ok == SAR_PRES_OK && whole_inner0 &&
               corrupt == SAR_PRES_RESTORE_MISMATCH &&
               wrong_off == SAR_PRES_RESTORE_MISMATCH &&
               wrong_path == SAR_PRES_RESTORE_MISMATCH,
               "restore verifies content tag AND (path, offset, length) binding");
+
+        uint64_t sub = 0;
+        int subok = sar_preserve_verify_extract(&r, pa, 4096 + 64, 128, orig, 256, &sub);
+        int oob = sar_preserve_verify_extract(&r, pa, 4096 + 200, 128, orig, 256, &sub);
+        int zerolen = sar_preserve_verify_extract(&r, pa, 4096, 0, orig, 256, &sub);
+        CHECK(subok == SAR_PRES_OK && sub == 64 &&
+              oob == SAR_PRES_RESTORE_MISMATCH &&
+              zerolen == SAR_PRES_INVALID_ARG,
+              "sub-region of a held region extracts at the right inner offset; OOB + zero-length decline");
     }
 
     printf("[serialize + verify + anchor]\n");

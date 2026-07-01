@@ -9,6 +9,122 @@ implementer updates it; the terminal implementer deletes it.
 > Do not restate what the code or the slice design docs already show. This captures only the
 > chain state, the remaining units, and the traps.
 
+---
+
+## 0. ACTIVE HANDOFF — passive capture-at-open (COO) landed; three units remain (read this first)
+
+### 0.0 The constitutional trap that MUST NOT be repeated (read before touching the capture path)
+
+**Constitution IV.3.1 is inviolable:** *"The gate emits capture-candidate-or-skip … it never blocks or
+alters an operation; the write proceeds unchanged … it cannot corrupt a write, because it never redirects
+one."* Recovery is **passive capture** (Oracle key capture III.1.2 + preservation staging III.5); the only
+active response (STATUS_ACCESS_DENIED) is **strictly downstream of a verdict** (Part V). Before ANY
+capture-path change, re-read IV.3, III.1.2, III.5, Part V.
+
+A prior implementer (this chain) tried to close the non-cached / allocation-shrink gaps with
+**redirect-on-write** (Redemption RAID'17 model: divert the attacker's writes to a reflected/shadow sparse
+file, commit-on-acquittal / discard-on-conviction). It was built, wired, and VM-run — then **fully reverted**
+because it violates IV.3.1: the gate would *intervene* (redirect) on every candidate open, including benign
+ones, which the passive design exists to prevent (it produced a real Phase-C2 false positive when the verdict
+was made at the gate). **DO NOT reintroduce redirect / shadow / reflected-file / copy-on-write-redirection /
+transactional-commit.** Redemption is explicitly NOT our model (see §2 "we use a cryptographic tag"); we
+share only verify-before-replace.
+
+### 0.1 What landed this session (UNCOMMITTED, on top of 5f49e43 — do not commit until §0.2 is closed)
+
+**Capture moved from the destructive WRITE to the write-intent OPEN (COO).** Root cause of the old gap: the
+old path read the pre-image *at* the destructive write (a synchronous same-stream read in the write pre-op),
+which self-deadlocks for non-cached/paging writes (confirmed live-KDNET stack: the read re-enters the NTFS
+paging resource the writer already holds), so non-cached was `!IRP_NOCACHE`-gated → never preserved. The
+constitutional fix is to capture at the moment the destroyer *opens* the file (before any modification):
+
+- **`IRP_MJ_CREATE` post-op (`operations.c SarPostCreate`)** — for an existing user file (`FILE_OPENED`)
+  opened with write/delete intent by a non-exempt user-mode process (dedup via new stream flag
+  `SAR_STREAMCTX_FLAG_BASELINE_STAGED`), call `SarCaptureSubmitOpenBaseline` (`capture.c`), which creates a
+  **data-scan section** (`FltCreateSectionForDataScan` — the official `avscan` pattern; requires
+  `FltRegisterForDataScan` per instance, added in `driver.c SarInstanceSetup`, and a registered
+  `FLT_SECTION_CONTEXT`, added to `g_sar_contexts`), maps it, copies the whole-file pre-image, stages it via
+  `SarPreserveStage` (path-keyed, into the existing preservation store), then `FltCloseSectionForDataScan`.
+  The user's write proceeds byte-for-byte unchanged — passive (IV.3-compliant). **Why the section and not a
+  plain read:** the data-scan section reads the file's data regardless of the attacker handle's granted
+  access (write-only / blind-wiper opens) or share mode (share-none); a plain `FltReadFile` on the attacker's
+  file object fails for write-only opens, and an independent `FltCreateFileEx` fails for share-none opens —
+  both VM-confirmed to drop modes. The section is the only mechanism that covers all of them.
+- **Removed (subsumed by COO → no dead/duplicate capture):** the write-pre-op pre-image read block in
+  `SarCaptureSubmitWrite` (the Oracle key-capture stays — it uses the 256B `read_sample` + `written`); the
+  mmap section-acquire baseline (`SarPreAcquireForSection` no longer calls it — the destroyer must open the
+  file writable before mapping, so COO subsumes mmap); the `SubmitDestruction` staging in
+  `SarPreSetInformation` (delete/EOF/alloc) and `SarPreFsControl` (zero/trim/dup/offload); and the now-dead
+  helpers `SarCaptureSubmitDestruction`, `SarStreamWasRead`, `SarQueryEndOfFile`, `SarDestructionRegion`.
+  **Kept:** `SarCaptureSubmitRenameTarget` (rename-over/hardlink-replace destroy a victim that is never
+  *opened* by the attacker, so it needs its own destination capture) and the metadata coverage seam.
+- Files: `capture.c`, `capture.h`, `operations.c`, `seam.h` (`MAPPED_CAPTURED`→`BASELINE_STAGED`),
+  `driver.c`, `driver.h` (`SAR_POOL_TAG_SECTION`). Builds clean. Net −218 lines.
+
+**VM-verified (`vm_verify_coverage.ps1 -AttackCount 6`):** **non-cached 0→100 %, allocation-shrink 0→100 %**
+(the target gaps), full destruction-member matrix **100 %** (disposeex/setsparse/trim/linkreplace/mmapclose/
+intermittent/preoverwrite), Phase-A newdelete/renameover/setzero/mmap **100 %**, in-place encryption **100 %**,
+**benign false-positives 0** (AUDIT + ENFORCE, incl. high-novelty corpus — because COO is passive copy, not
+intervention), system stable. Recovery is checked through the normal `sarctl preserve-recover` path (COO
+populates the preservation store, so the existing harness is the correct verifier — no methodology change).
+
+### 0.2 Remaining units (close these, re-verify, THEN commit the whole thing; then production)
+
+1. **truncate-on-open — the only remaining destruction gap (Phase-A `truncate` = 0 %).** That mode opens the
+   victim with an overwrite/truncate disposition (`FILE_OVERWRITTEN`/`FILE_SUPERSEDED`), so the file is
+   already 0 bytes when the create *completes* → post-create COO reads 0 → nothing staged
+   (`preserve-recover result=-5`). This is the create-time-overwrite case (a blind wiper; note real
+   encryption ransomware never truncates-on-open, it must read the plaintext first). **Fix: capture at
+   PRE-create for `FILE_OVERWRITE`/`FILE_OVERWRITE_IF`/`FILE_SUPERSEDE` on an existing file** — at pre-create
+   the file is still intact AND the attacker's handle is not yet established (no share conflict), so an
+   independent `FltCreateFileEx(FILE_OPEN, FILE_READ_DATA, share-all)` opens it cleanly. Consider unifying:
+   capturing *all* write-intent creates at pre-create via an independent handle would be one mechanism that
+   also handles write-only/share-none without the data-scan section — but validate re-entrancy first
+   (`FltCreateFileEx` at pre-create: guard `KeGetCurrentIrql()==PASSIVE_LEVEL` and `IoGetTopLevelIrp()==NULL`,
+   target below own instance so no callback recursion). Trap: pre-create NAME resolution (file not open yet;
+   `FLT_FILE_NAME_OPENED` fails — use `FLT_FILE_NAME_QUERY_DEFAULT`; watch `SL_OPEN_TARGET_DIRECTORY`; see the
+   "Of Filesystems And Other Demons" pre-create-name posts). Still passive → IV.3-compliant.
+
+2. **Gap C — phantom decoy identity consistency (Phase-P: metamorphic `tells=3`, open-by-file-id 3-A
+   `ok=0/3`, `err=87`).** This is the Constitution VIII decoy layer (fabricates responses for *non-existent*
+   decoys — orthogonal to IV.3, not gate redirection). Two defects, one root cause: identity is generated
+   per-surface instead of once. Web-verified facts to build on:
+   - **NTFS 64-bit file reference = 48-bit MFT record index + 16-bit sequence number.** The old "reserve the
+     top byte" idea collides with the sequence number. Reserve a range of MFT-record-*index* values above the
+     volume's real MFT high-water mark (validate at attach); derive deterministically
+     `index = RESERVED_BASE + H(parentFRN, name) mod SPAN`, fixed non-zero sequence → identical FRN across
+     every enumeration info class + `FSCTL_ENUM_USN_DATA` + open-by-id.
+   - **Open-by-128-bit-id: high-64-bits==0 ⇒ file id; !=0 ⇒ object id.** Phantom `FILE_ID_128` MUST keep the
+     high 64 bits zero, FRN in the low 64.
+   - Populate an id→phantom map at enumeration; project ONE canonical descriptor identically into all info
+     classes + USN (same wildcard/resume as NTFS). For `SL_OPEN_BY_FILE_ID`, the `STATUS_REPARSE` reissue
+     takes Options from the OPEN_PACKET (id-open persists) but the NAME from `FileObject->FileName` — so
+     `IoReplaceFileObjectName` with the backing's **binary `FILE_ID_128`**, not a path (that is the `err=87`).
+     `phantom.c` already has `SarPmIdMapLookupByRef` + reparse + synthetic-ref machinery — wire the map
+     population + the FRN scheme + binary-id reparse.
+
+3. **Constitution rewrite (as-if-original).** III.5 reads "copy-on-first-write"; the realized mechanism is
+   **capture-at-write-intent-open** (data-scan section at `IRP_MJ_CREATE` post-op, + pre-create for overwrite
+   dispositions once unit 1 lands). Rewrite III.5 and dependents to describe capture-at-open as if it were
+   always the design — no changelog, no "was/now". IV.3 stays intact (COO complies). Also `grep` for any
+   migration / on-disk-schema-version code and **delete** it (never-shipped project; prior LLM versioning
+   traces are mistakes to remove, not preserve).
+
+### 0.3 Verification & environment notes for the successor
+
+- `scripts/build_driver.bat` → `build_driver/semantics_ar.sys`. `scripts/vm_verify_coverage.ps1 -AttackCount N`
+  deploys/loads/runs all phases; recovery via `sarctl preserve-recover`.
+- VM Hyper-V Gen2 `SarTarget` Win11 26100; PowerShell Direct admin/admin; snapshot `armed-kdnet` (testsigning
+  + KDNET) — restore before each run. Live-KDNET: host `kd -k net:port=50000,key=1.2.3.4`; NMI-into-attached-kd
+  is the only working hung-guest stack method (LiveKD-hv / vm2dmp / plain NMI-dump all fail on this host — see
+  `docs/DEBUGGING.md`).
+- **Phase-G "hang" is not a bug:** it is CPU saturation (our Oracle crypto-battery `scan_battery`/`sar_convict`
+  on ~1 core + Defender `mpengine` on the rest), diagnosed by live kernel stacks; it completes and passes
+  fail-closed if waited out (~5-6 min). Do NOT power-cycle prematurely. Bounding the battery / excluding
+  Defender for the test corpus would remove it.
+- Constraints (binding): no comments in code; no dead/fallback/compat code; no migration/schema-versioning;
+  Constitution edits are as-if-original.
+
 ## 1. Final goal (unchanged across the chain)
 
 A single x64 Windows binary set — boot-start minifilter + user-mode service — that realizes

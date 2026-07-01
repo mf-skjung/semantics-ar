@@ -12,7 +12,6 @@ typedef enum {
     SAR_KS_FULL = -2,
     SAR_KS_BUFFER_TOO_SMALL = -3,
     SAR_KS_BAD_MAGIC = -4,
-    SAR_KS_BAD_VERSION = -5,
     SAR_KS_TRUNCATED = -6,
     SAR_KS_RECORD_MAC = -7,
     SAR_KS_COUNT_MISMATCH = -8,

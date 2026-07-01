@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 #define SEMANTICS_AR_KEYSTORE_MAGIC      0x53414B53u
-#define SEMANTICS_AR_KEYSTORE_VERSION    3u
 
 #define SEMANTICS_AR_KEY_ID_SIZE         32
 #define SEMANTICS_AR_MAC_SIZE            32
@@ -57,7 +56,6 @@ typedef struct {
 
 typedef struct {
     uint32_t magic;
-    uint32_t protocol_version;
     uint64_t record_count;
     uint64_t generation;
     uint8_t  head_mac[SEMANTICS_AR_MAC_SIZE];

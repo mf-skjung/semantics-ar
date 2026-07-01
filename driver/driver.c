@@ -59,6 +59,7 @@ static const FLT_OPERATION_REGISTRATION g_sar_operations[] = {
 static const FLT_CONTEXT_REGISTRATION g_sar_contexts[] = {
     { FLT_STREAM_CONTEXT, 0, SarStreamContextCleanup, sizeof(SAR_STREAM_CONTEXT), SAR_POOL_TAG_STREAMCTX },
     { FLT_STREAMHANDLE_CONTEXT, 0, NULL, sizeof(SAR_PHANTOM_ENUM_CONTEXT), SAR_POOL_TAG_PHANTOM },
+    { FLT_SECTION_CONTEXT, 0, NULL, sizeof(LONG), SAR_POOL_TAG_SECTION },
     { FLT_CONTEXT_END }
 };
 
@@ -86,6 +87,7 @@ static NTSTATUS SarInstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects,
         return STATUS_FLT_DO_NOT_ATTACH;
 
     SarFeatureDetectDevDrive(FltObjects, &g_sar.posture);
+    FltRegisterForDataScan(FltObjects->Instance);
     return STATUS_SUCCESS;
 }
 

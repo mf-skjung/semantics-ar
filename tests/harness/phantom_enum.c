@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SYNTH_MASK 0xFFFF000000000000ULL
+#define PH_FRN_BASE       0x0000400000000000ULL
+#define PH_FRN_SPAN       0x0000010000000000ULL
+#define PH_FRN_INDEX_MASK 0x0000FFFFFFFFFFFFULL
 #define MAX_PH     8
 #define NBUF       (256 * 1024)
 
@@ -44,7 +46,8 @@ typedef struct {
 } PHREC;
 
 static int is_phantom_frn(DWORDLONG frn) {
-    return (frn & SYNTH_MASK) == SYNTH_MASK;
+    DWORDLONG idx = frn & PH_FRN_INDEX_MASK;
+    return idx >= PH_FRN_BASE && idx < PH_FRN_BASE + PH_FRN_SPAN;
 }
 
 static int name_eq(const WCHAR *a, const WCHAR *b) {

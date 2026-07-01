@@ -680,55 +680,6 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
     work->preserve_only = FALSE;
     work->read_by_path = FALSE;
 
-    {
-        BOOLEAN do_capture = TRUE;
-        if (work->pre_image_len >= SAR_CANDIDATE_SIZE && work->written_len >= SAR_CANDIDATE_SIZE) {
-            ULONG cmp = work->pre_image_len < work->written_len ?
-                        work->pre_image_len : work->written_len;
-            ULONG d = 0, z;
-            for (z = 0; z < cmp; z++)
-                if (work->pre_image[z] != work->written[z]) d++;
-            if (d * 4u < cmp)
-                do_capture = FALSE;
-        }
-        if (do_capture && Request->related != NULL && !FlagOn(Request->irp_flags, IRP_NOCACHE) &&
-            g_sar.preserve != NULL && SarPreserveReady(g_sar.preserve) &&
-            Request->write_length > 0 && Request->write_length <= SAR_PRESERVE_STAGE_MAX) {
-            PUCHAR pbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED,
-                                                   Request->write_length, SAR_POOL_TAG_PRESBUF);
-            if (pbuf != NULL) {
-                ULONG got = 0;
-                BOOLEAN clean = FALSE;
-                ULONG vcmp = work->written_len < SAR_CAPTURE_BUFFER_BYTES ?
-                             work->written_len : SAR_CAPTURE_BUFFER_BYTES;
-                if (vcmp > Request->write_length)
-                    vcmp = Request->write_length;
-
-                if (NT_SUCCESS(FltReadFile(Request->related->Instance, Request->related->FileObject,
-                                           &Request->write_offset, Request->write_length, pbuf,
-                                           FLTFL_IO_OPERATION_NON_CACHED | FLTFL_IO_OPERATION_PAGING |
-                                           FLTFL_IO_OPERATION_SYNCHRONOUS_PAGING |
-                                           FLTFL_IO_OPERATION_DO_NOT_UPDATE_BYTE_OFFSET,
-                                           &got, NULL, NULL)) &&
-                    got >= Request->write_length &&
-                    !(vcmp >= SAR_CANDIDATE_SIZE && RtlEqualMemory(pbuf, work->written, vcmp)))
-                    clean = TRUE;
-
-                if (clean) {
-                    work->preserve_buf = pbuf;
-                    work->preserve_len = got;
-                    if (work->pre_image_len < SAR_CANDIDATE_SIZE) {
-                        ULONG seed = got < SAR_CAPTURE_BUFFER_BYTES ? got : SAR_CAPTURE_BUFFER_BYTES;
-                        RtlCopyMemory(work->pre_image, pbuf, seed);
-                        work->pre_image_len = seed;
-                    }
-                } else {
-                    ExFreePoolWithTag(pbuf, SAR_POOL_TAG_PRESBUF);
-                }
-            }
-        }
-    }
-
     Request->originator_process = NULL;
     Request->originator_thread = NULL;
 
@@ -861,29 +812,6 @@ static VOID SarCaptureStageRegion(_In_ PSAR_CAPTURE_CTX Ctx, _In_opt_ PFLT_INSTA
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID SarCaptureSubmitDestruction(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
-                                _In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                _In_ PEPROCESS Originator, _In_ PETHREAD Thread,
-                                _In_ UINT64 Offset, _In_ UINT64 Length)
-{
-    UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
-
-    if (Ctx == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
-        return;
-
-    SarCaptureResolveProvenance(Data, path);
-    {
-        UINT64 pos;
-        for (pos = 0; pos < Length; pos += SAR_PRESERVE_STAGE_MAX) {
-            UINT64 remaining = Length - pos;
-            ULONG chunk = remaining > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)remaining;
-            SarCaptureStageRegion(Ctx, FltObjects->Instance, FltObjects->FileObject, path,
-                                  Originator, Thread, Offset + pos, chunk, FALSE);
-        }
-    }
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
                                   _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                   _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
@@ -985,14 +913,19 @@ VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID SarCaptureSubmitSectionBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
-                                     _In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                     _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
+VOID SarCaptureSubmitOpenBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                                  _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                  _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
 {
     UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
-    FILE_STANDARD_INFORMATION fsi;
+    PFLT_CONTEXT sectionCtx = NULL;
+    HANDLE hSection = NULL;
+    PVOID sectionObj = NULL;
+    LARGE_INTEGER sectionFileSize;
+    OBJECT_ATTRIBUTES oa;
+    PVOID base = NULL;
+    SIZE_T viewSize = 0;
     UINT64 size, offset;
-    PUCHAR buf;
     UINT64 actor;
 
     UNREFERENCED_PARAMETER(Thread);
@@ -1006,31 +939,41 @@ VOID SarCaptureSubmitSectionBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CA
     if (path[0] == 0 || SarCaptureProvenanceIsOwn(path))
         return;
 
-    if (!NT_SUCCESS(FltQueryInformationFile(FltObjects->Instance, FltObjects->FileObject, &fsi,
-                                            sizeof(fsi), FileStandardInformation, NULL)))
+    if (!NT_SUCCESS(FltAllocateContext(Ctx->filter, FLT_SECTION_CONTEXT, sizeof(LONG),
+                                       PagedPool, &sectionCtx)))
         return;
-    size = (UINT64)fsi.EndOfFile.QuadPart;
-    if (size == 0)
+    InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    sectionFileSize.QuadPart = 0;
+    if (!NT_SUCCESS(FltCreateSectionForDataScan(FltObjects->Instance, FltObjects->FileObject,
+                                                sectionCtx, FILE_READ_DATA, &oa, NULL,
+                                                PAGE_READONLY, SEC_COMMIT, 0,
+                                                &hSection, &sectionObj, &sectionFileSize))) {
+        FltReleaseContext(sectionCtx);
         return;
-    buf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, SAR_PRESERVE_STAGE_MAX, SAR_POOL_TAG_PRESBUF);
-    if (buf == NULL)
-        return;
-    actor = (UINT64)(ULONG_PTR)PsGetProcessId(Originator);
-    for (offset = 0; offset < size; offset += SAR_PRESERVE_STAGE_MAX) {
-        UINT64 rem = size - offset;
-        ULONG chunk = rem > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)rem;
-        ULONG aligned = (chunk + (SAR_PRESERVE_SECTOR - 1)) & ~(SAR_PRESERVE_SECTOR - 1);
-        LARGE_INTEGER off;
-        ULONG got = 0;
-        off.QuadPart = (LONGLONG)offset;
-        if (NT_SUCCESS(FltReadFile(FltObjects->Instance, FltObjects->FileObject, &off, aligned, buf,
-                                   FLTFL_IO_OPERATION_NON_CACHED, &got, NULL, NULL)) &&
-            got > 0) {
-            ULONG keep = got < chunk ? got : chunk;
-            SarPreserveStage(g_sar.preserve, path, offset, keep, actor, buf, keep);
-        }
     }
-    ExFreePoolWithTag(buf, SAR_POOL_TAG_PRESBUF);
+
+    size = (UINT64)sectionFileSize.QuadPart;
+    if (size > 0 &&
+        NT_SUCCESS(ZwMapViewOfSection(hSection, ZwCurrentProcess(), &base, 0, 0, NULL,
+                                      &viewSize, ViewUnmap, 0, PAGE_READONLY))) {
+        actor = (UINT64)(ULONG_PTR)PsGetProcessId(Originator);
+        for (offset = 0; offset < size; offset += SAR_PRESERVE_STAGE_MAX) {
+            UINT64 rem = size - offset;
+            ULONG chunk = rem > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)rem;
+            __try {
+                SarPreserveStage(g_sar.preserve, path, offset, chunk, actor,
+                                 (PUCHAR)base + offset, chunk);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                break;
+            }
+        }
+        ZwUnmapViewOfSection(ZwCurrentProcess(), base);
+    }
+
+    ZwClose(hSection);
+    ObDereferenceObject(sectionObj);
+    FltCloseSectionForDataScan(sectionCtx);
+    FltReleaseContext(sectionCtx);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

@@ -67,10 +67,11 @@ uint64_t sar_preserve_evict_probation_oldest(sar_preserve_record_t *records,
 int sar_preserve_would_exceed(const sar_preserve_record_t *records, uint64_t count,
                               uint64_t capacity_bytes, uint64_t incoming_bytes);
 
-int sar_preserve_verify_restore(const sar_preserve_record_t *rec,
+int sar_preserve_verify_extract(const sar_preserve_record_t *rec,
                                 const uint16_t *target_path,
-                                uint64_t target_offset,
-                                const uint8_t *decrypted, uint64_t length);
+                                uint64_t target_offset, uint64_t target_length,
+                                const uint8_t *decrypted_region, uint64_t region_length,
+                                uint64_t *inner_offset);
 
 size_t sar_preserve_serialized_size(uint64_t count);
 

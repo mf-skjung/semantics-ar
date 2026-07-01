@@ -293,6 +293,29 @@ SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
                     InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_PHANTOM_BACKING);
                 FltReleaseContext(context);
             }
+        } else if (Data->RequestorMode == UserMode &&
+                   Data->IoStatus.Information == FILE_OPENED &&
+                   Data->Iopb->Parameters.Create.SecurityContext != NULL &&
+                   FlagOn(Data->Iopb->Parameters.Create.SecurityContext->DesiredAccess,
+                          FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE) &&
+                   !FlagOn(Data->Iopb->Parameters.Create.Options, FILE_DIRECTORY_FILE)) {
+            PETHREAD thread = Data->Thread;
+            PEPROCESS process;
+            if (thread == NULL)
+                thread = PsGetCurrentThread();
+            process = IoThreadToProcess(thread);
+            if (process == NULL)
+                process = PsGetCurrentProcess();
+            if (SarStateIdentityLookup(g_sar_state, PsGetProcessId(process)) != SAR_IDSTATE_EXEMPT) {
+                context = SarGetStreamContext(FltObjects);
+                if (context != NULL) {
+                    LONG prev = InterlockedOr(&context->flags,
+                                              (LONG)SAR_STREAMCTX_FLAG_BASELINE_STAGED);
+                    FltReleaseContext(context);
+                    if ((prev & (LONG)SAR_STREAMCTX_FLAG_BASELINE_STAGED) == 0)
+                        SarCaptureSubmitOpenBaseline(g_sar.capture, Data, FltObjects, process, thread);
+                }
+            }
         }
     }
 
@@ -387,78 +410,6 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
     return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-_IRQL_requires_max_(APC_LEVEL)
-static BOOLEAN SarStreamWasRead(_In_ PCFLT_RELATED_OBJECTS FltObjects)
-{
-    PSAR_STREAM_CONTEXT context = NULL;
-    BOOLEAN was = FALSE;
-
-    if (NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
-                                       (PFLT_CONTEXT *)&context))) {
-        was = context->read_length > 0;
-        FltReleaseContext(context);
-    }
-    return was;
-}
-
-_IRQL_requires_max_(APC_LEVEL)
-static UINT64 SarQueryEndOfFile(_In_ PCFLT_RELATED_OBJECTS FltObjects)
-{
-    FILE_STANDARD_INFORMATION fsi;
-
-    if (NT_SUCCESS(FltQueryInformationFile(FltObjects->Instance, FltObjects->FileObject,
-                                           &fsi, sizeof(fsi), FileStandardInformation, NULL)))
-        return (UINT64)fsi.EndOfFile.QuadPart;
-    return 0;
-}
-
-_IRQL_requires_max_(APC_LEVEL)
-static BOOLEAN SarDestructionRegion(_In_ PFLT_CALLBACK_DATA Data,
-                                    _In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                    _In_ sar_destruct_member_t Member,
-                                    _Out_ PUINT64 Offset, _Out_ PUINT64 Length)
-{
-    PVOID buf = Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
-
-    *Offset = 0;
-    *Length = 0;
-    if (buf == NULL)
-        return FALSE;
-
-    switch (Member) {
-    case SAR_DESTRUCT_DISPOSITION:
-        if (!((FILE_DISPOSITION_INFORMATION *)buf)->DeleteFile)
-            return FALSE;
-        *Length = SarQueryEndOfFile(FltObjects);
-        return *Length > 0;
-    case SAR_DESTRUCT_DISPOSITION_EX:
-        if (!(((FILE_DISPOSITION_INFORMATION_EX *)buf)->Flags & FILE_DISPOSITION_DELETE))
-            return FALSE;
-        *Length = SarQueryEndOfFile(FltObjects);
-        return *Length > 0;
-    case SAR_DESTRUCT_SET_EOF: {
-        UINT64 cur = SarQueryEndOfFile(FltObjects);
-        UINT64 neweof = (UINT64)((FILE_END_OF_FILE_INFORMATION *)buf)->EndOfFile.QuadPart;
-        if (neweof >= cur)
-            return FALSE;
-        *Offset = neweof;
-        *Length = cur - neweof;
-        return TRUE;
-    }
-    case SAR_DESTRUCT_SET_ALLOCATION: {
-        UINT64 cur = SarQueryEndOfFile(FltObjects);
-        UINT64 newalloc = (UINT64)((FILE_ALLOCATION_INFORMATION *)buf)->AllocationSize.QuadPart;
-        if (newalloc >= cur)
-            return FALSE;
-        *Offset = newalloc;
-        *Length = cur - newalloc;
-        return TRUE;
-    }
-    default:
-        return FALSE;
-    }
-}
-
 FLT_PREOP_CALLBACK_STATUS
 SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
                      _In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -496,24 +447,9 @@ SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_PREOP_COMPLETE;
     }
 
-    if ((member == SAR_DESTRUCT_DISPOSITION || member == SAR_DESTRUCT_DISPOSITION_EX ||
-         member == SAR_DESTRUCT_SET_EOF || member == SAR_DESTRUCT_SET_ALLOCATION) &&
-        KeGetCurrentIrql() == PASSIVE_LEVEL && SarStreamWasRead(FltObjects)) {
-        UINT64 off;
-        UINT64 len;
-        if (SarDestructionRegion(Data, FltObjects, member, &off, &len)) {
-            PETHREAD thread = Data->Thread;
-            PEPROCESS process;
-            if (thread == NULL)
-                thread = PsGetCurrentThread();
-            process = IoThreadToProcess(thread);
-            if (process == NULL)
-                process = PsGetCurrentProcess();
-            SarCaptureSubmitDestruction(g_sar.capture, Data, FltObjects, process, thread, off, len);
-        }
-    } else if ((member == SAR_DESTRUCT_RENAME || member == SAR_DESTRUCT_RENAME_EX ||
-                member == SAR_DESTRUCT_LINK || member == SAR_DESTRUCT_LINK_EX) &&
-               KeGetCurrentIrql() == PASSIVE_LEVEL) {
+    if ((member == SAR_DESTRUCT_RENAME || member == SAR_DESTRUCT_RENAME_EX ||
+         member == SAR_DESTRUCT_LINK || member == SAR_DESTRUCT_LINK_EX) &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL) {
         PETHREAD thread = Data->Thread;
         PEPROCESS process;
         if (thread == NULL)
@@ -572,83 +508,8 @@ SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
     }
 
     if (SarFsControlIsKeyless(member)) {
-        if (member == SAR_DESTRUCT_SET_ZERO_DATA && KeGetCurrentIrql() == PASSIVE_LEVEL &&
-            SarStreamWasRead(FltObjects)) {
-            PFILE_ZERO_DATA_INFORMATION z = (PFILE_ZERO_DATA_INFORMATION)
-                Data->Iopb->Parameters.FileSystemControl.Buffered.SystemBuffer;
-            ULONG inlen = Data->Iopb->Parameters.FileSystemControl.Buffered.InputBufferLength;
-            if (z != NULL && inlen >= sizeof(*z) &&
-                z->BeyondFinalZero.QuadPart > z->FileOffset.QuadPart) {
-                PETHREAD thread = Data->Thread;
-                PEPROCESS process;
-                if (thread == NULL)
-                    thread = PsGetCurrentThread();
-                process = IoThreadToProcess(thread);
-                if (process == NULL)
-                    process = PsGetCurrentProcess();
-                SarCaptureSubmitDestruction(
-                    g_sar.capture, Data, FltObjects, process, thread,
-                    (UINT64)z->FileOffset.QuadPart,
-                    (UINT64)(z->BeyondFinalZero.QuadPart - z->FileOffset.QuadPart));
-            }
-        } else if (member == SAR_DESTRUCT_FILE_LEVEL_TRIM && KeGetCurrentIrql() == PASSIVE_LEVEL &&
-                   SarStreamWasRead(FltObjects)) {
-            PFILE_LEVEL_TRIM t = (PFILE_LEVEL_TRIM)
-                Data->Iopb->Parameters.FileSystemControl.Buffered.SystemBuffer;
-            ULONG inlen = Data->Iopb->Parameters.FileSystemControl.Buffered.InputBufferLength;
-            if (t != NULL && inlen >= FIELD_OFFSET(FILE_LEVEL_TRIM, Ranges)) {
-                ULONG maxn = (inlen - FIELD_OFFSET(FILE_LEVEL_TRIM, Ranges)) /
-                             sizeof(FILE_LEVEL_TRIM_RANGE);
-                ULONG n = t->NumRanges < maxn ? t->NumRanges : maxn;
-                ULONG r;
-                PETHREAD thread = Data->Thread;
-                PEPROCESS process;
-                if (thread == NULL)
-                    thread = PsGetCurrentThread();
-                process = IoThreadToProcess(thread);
-                if (process == NULL)
-                    process = PsGetCurrentProcess();
-                for (r = 0; r < n; r++) {
-                    if (t->Ranges[r].Length > 0)
-                        SarCaptureSubmitDestruction(g_sar.capture, Data, FltObjects, process, thread,
-                                                    (UINT64)t->Ranges[r].Offset,
-                                                    (UINT64)t->Ranges[r].Length);
-                }
-            }
-        }
         SarSubmitMetadata(Data, FltObjects, member, control_code);
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
-    }
-
-    if ((member == SAR_DESTRUCT_DUPLICATE_EXTENTS || member == SAR_DESTRUCT_OFFLOAD_WRITE) &&
-        KeGetCurrentIrql() == PASSIVE_LEVEL && SarStreamWasRead(FltObjects)) {
-        PVOID inbuf = Data->Iopb->Parameters.FileSystemControl.Buffered.SystemBuffer;
-        ULONG inlen = Data->Iopb->Parameters.FileSystemControl.Buffered.InputBufferLength;
-        UINT64 doff = 0;
-        UINT64 dlen = 0;
-        if (member == SAR_DESTRUCT_DUPLICATE_EXTENTS) {
-            PDUPLICATE_EXTENTS_DATA d = (PDUPLICATE_EXTENTS_DATA)inbuf;
-            if (d != NULL && inlen >= sizeof(*d)) {
-                doff = (UINT64)d->TargetFileOffset.QuadPart;
-                dlen = (UINT64)d->ByteCount.QuadPart;
-            }
-        } else {
-            PFSCTL_OFFLOAD_WRITE_INPUT o = (PFSCTL_OFFLOAD_WRITE_INPUT)inbuf;
-            if (o != NULL && inlen >= sizeof(*o)) {
-                doff = (UINT64)o->FileOffset;
-                dlen = (UINT64)o->CopyLength;
-            }
-        }
-        if (dlen > 0) {
-            PETHREAD thread = Data->Thread;
-            PEPROCESS process;
-            if (thread == NULL)
-                thread = PsGetCurrentThread();
-            process = IoThreadToProcess(thread);
-            if (process == NULL)
-                process = PsGetCurrentProcess();
-            SarCaptureSubmitDestruction(g_sar.capture, Data, FltObjects, process, thread, doff, dlen);
-        }
     }
 
     offset.QuadPart = 0;
@@ -673,27 +534,8 @@ SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
 
     context = SarGetStreamContext(FltObjects);
     if (context != NULL) {
-        BOOLEAN writable_create =
-            Data->Iopb->Parameters.AcquireForSectionSynchronization.SyncType == SyncTypeCreateSection &&
-            Data->Iopb->Parameters.AcquireForSectionSynchronization.PageProtection == PAGE_READWRITE &&
-            Data->RequestorMode == UserMode;
-
         InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_SECTION_DIRTY);
         SarSubmitMetadata(Data, FltObjects, SAR_DESTRUCT_SECTION_SYNC, 0);
-
-        if (writable_create) {
-            LONG prev = InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_MAPPED_CAPTURED);
-            if ((prev & (LONG)SAR_STREAMCTX_FLAG_MAPPED_CAPTURED) == 0) {
-                PETHREAD thread = Data->Thread;
-                PEPROCESS process;
-                if (thread == NULL)
-                    thread = PsGetCurrentThread();
-                process = IoThreadToProcess(thread);
-                if (process == NULL)
-                    process = PsGetCurrentProcess();
-                SarCaptureSubmitSectionBaseline(g_sar.capture, Data, FltObjects, process, thread);
-            }
-        }
         FltReleaseContext(context);
     }
 

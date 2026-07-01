@@ -151,17 +151,6 @@ int main(void) {
         free(t);
     }
     {
-        uint8_t *t = (uint8_t *)malloc(need);
-        memcpy(t, buf, need);
-        semantics_ar_keystore_header_t h;
-        memcpy(&h, t, sizeof(h));
-        h.protocol_version = 1;
-        memcpy(t, &h, sizeof(h));
-        int rv = sar_keystore_verify(t, need, K, &anchor, NULL);
-        CHECK(rv == SAR_KS_BAD_VERSION, "(vi) non-current protocol_version rejected (no silent misparse)");
-        free(t);
-    }
-    {
         semantics_ar_keystore_record_t older[8];
         uint64_t ocount = 0;
         sar_keystore_append(older, &ocount, 8, &ra);

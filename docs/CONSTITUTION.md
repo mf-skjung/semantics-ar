@@ -107,8 +107,9 @@ Everything in this document is this sentence, unfolded:
 
 This is the heart. Protection has **two assets, ranked by the certainty of the evidence
 that feeds them**: the **Oracle** (key capture, Part II) is the definitive asset and the
-only one whose recovery is unbounded; **preservation** (bounded copy-on-first-write,
-Part III) is the circumstantial fallback for the residue the Oracle cannot reach. The
+only one whose recovery is unbounded; **preservation** (a bounded copy of the original
+taken at the destroyer's write-intent open, Part III) is the circumstantial fallback for
+the residue the Oracle cannot reach. The
 rest of the document is their detail. A third evidence channel — the **Phantom Witness
 Layer** (Part VIII) — operates in parallel: virtual files that exist only in minifilter IRP
 responses trap indiscriminate file-walking, providing behavioral evidence that is independent
@@ -445,68 +446,52 @@ limit (IX.2): the system replaces only what it can prove it is restoring.
 
 ### III.5 Preservation — the circumstantial asset
 
-**[DECISION] III.5.1 — Copy-on-first-write, on the same gate, for the residue the Oracle cannot reach.**
-A write that passes the gate (D ∧ T, Part IV) by an unexempted process is, by construction, a
-destruction of an existing original whose content is unpredictable from that original — the same
-population the Oracle is asked about. Before that original is destroyed, a copy of the destroyed
-region is taken **once** and placed in the preservation store as a *probation* hold, bound to the
-destroying actor. Preservation runs on the gate's output, never as a second classifier: it adds a
-*holding*, it does not judge, it never blocks (IV.3), and a held original is never a conviction
-(I.1). The two pools a hold may occupy — probation and protected (III.5.5) — are a resource-and-
-retention distinction, not an evidence distinction: nothing about which pool a copy sits in is ever
-read back as a signal.
+**[DECISION] III.5.1 — Capture at the write-intent open, for the residue the Oracle cannot reach.**
+When an unexempted process opens an existing original with intent to write, append, or delete it,
+that open is, by construction, the announced destruction of an original whose post-destruction
+content is unpredictable from it — the same population the Oracle is asked about. At that open,
+before any modification reaches the file, a copy of the original is taken **once** and placed in the
+preservation store as a *probation* hold, bound to the opening actor. Preservation is a holding
+taken at the destroyer's own gateway to the file, never a second classifier: it does not judge, it
+never blocks (IV.3), and a held original is never a conviction (I.1). The two pools a hold may occupy
+— probation and protected (III.5.5) — are a resource-and-retention distinction, not an evidence
+distinction: nothing about which pool a copy sits in is ever read back as a signal.
 
-**[INVARIANT] III.5.2 — The copy is taken off a deadlock-free path, never via the cached same-file read.**
-The original is obtained without the cached in-IRP same-file read that wedges the volume (III.2.1),
-from sources chosen by destruction shape:
+**[INVARIANT] III.5.2 — The copy is taken at the open, off a deadlock-free path, never via the cached same-file read.**
+The original is read at the moment the destroyer *opens* the file to modify it — before the file
+system has applied any change — and never through the cached in-IRP same-file read that wedges the
+volume (III.2.1). The open is the correct seam because every destruction of an in-place original is
+preceded by a writable open of it; reading there runs at PASSIVE in the create path, holds no write
+resource, and sees the committed original whole. The copy is obtained from one of two sources,
+chosen by how the open presents the doomed file:
 
-1. **In-place overwrite — the write region read non-cached at the write seam, before the cached write
-   lands.** In the write pre-operation, before the file system applies the write, the doomed region is
-   read through **non-cached paging I/O** on the operation's own file object. Non-cached paging reads
-   bypass the cache-manager recursion that makes a *cached* same-file read wedge (III.2.1) and return
-   the committed on-disk original coherently — never a torn mix of pre- and post-write bytes — so the
-   pre-image is captured intact in one synchronous read and frozen in a kernel buffer for the worker
-   to stage. The copy is taken only when the write is *novel against the actor's own prior read* of
-   that region: read → encrypt → write is causal, so the head of the write is compared to the head the
-   actor last read, and a write that barely changes what was read is a benign identical rewrite, not a
-   destruction, and never reaches the copy path. This causal pre-screen, not a second file read, is
-   what keeps benign in-place rewriters off the preservation path.
-2. **The doomed region, read at the destruction seam while still intact.** A delete, truncate,
-   allocation-shrink, range-zero, block-clone, or ODX offload-write is observed in its pre-operation
-   before the file system has processed it, so the region it is about to discard is still fully on
-   disk; the destroyed extent — whole file for a delete, the shrunk tail for a truncate or allocation
-   cut, the target extent for a clone or offload — is read by a worker through a distinct file object
-   and staged. The read is gated on the object having been read by an untrusted actor (the read →
-   destroy causality of encryption), so a content-less benign delete that never consumed the original
-   is not held.
-3. **A distinct file object, off the IRP — and, for a mapped section, ahead of the first store.**
-   For a destruction whose original does not live on the handle in hand — a rename-over or
-   hardlink-replace, where the doomed file is the *destination* — a worker copies the still-intact
-   original through a *distinct* kernel file object, at PASSIVE level, holding no filesystem resource
-   of the destroying operation: the destination of a replace is opened below our own instance and read
-   before the rename commits, never as a held resource on the IRP.
+1. **Capture-at-write-intent-open — the dominant source.** When the open resolves to an existing
+   original and the requestor asks for write, append, or delete access, the whole file is copied once
+   through a **data-scan section** created on the opening handle. The section reads the file's
+   committed content **regardless of the opener's granted access or share mode** — a write-only or
+   share-none open that a second independent read could not satisfy is still copied — and it does so
+   off the write path, so it never takes the cached same-file read (III.2.1). This one source holds
+   in-place overwrite, delete, a later truncate / allocation-shrink / range-zero on the handle,
+   block-clone or ODX offload whose file is opened writable, and the **mapped-section write**: a
+   process cannot map a file writable without first opening it writable, so the writable open — not
+   the asynchronous paging flush that carries only ciphertext — is where the original is captured.
+   A create whose disposition destroys on open — overwrite or supersede — leaves nothing to read at
+   the completed create; that is a keyless create-time wipe (IV.1.3) with no plaintext read and no
+   recoverable original once the open returns, and is a recorded limit (VIII.2), not a capture source.
+2. **Rename-over / hardlink-replace destination.** Where the doomed original is the *destination* of a
+   replace and is never opened by the destroyer, a worker copies the still-intact destination through
+   a *distinct* kernel file object, at PASSIVE level, holding no filesystem resource of the destroying
+   operation: the destination is opened below our own instance and read before the rename or link
+   commits, never as a held resource on the IRP.
 
-   A mapped-section write has no write IRP at the moment it happens — a process maps the file writable
-   and stores into memory, and the change reaches disk only later, as an asynchronous paging write
-   issued by the system writer. That paging write is the wrong seam to copy from: it runs above
-   PASSIVE, where reading the same file faults the memory manager, and it carries the ciphertext, not
-   the original; the individual store carries nothing at all, raising no IRP. The original is read at
-   the one seam the OS surfaces *before any store can occur*: the section-synchronization acquire
-   (`ACQUIRE_FOR_SECTION_SYNCHRONIZATION`) that precedes a writable mapping. In that pre-operation —
-   which runs before the file system acquires the file for the section, so it contends no section lock
-   — a distinct **non-cached** kernel file object reads the whole still-clean region synchronously and
-   freezes it for the worker to stage, before the mapping is usable. The mapped path is thus held by
-   first-write-wins (III.5.3) like every other member, not best-effort: recovery for a mapped
-   destruction becomes available once the encrypting flush lands, which is asynchronous, but no
-   original is lost to the race.
-
-Every destruction member of IV.1.2 that has a recoverable file region — in-place overwrite,
-truncate, allocation-shrink, delete, rename-over, hardlink-replace, block-clone, ODX offload-write,
-range-zero, file-level-trim, and mapped-section write — is a preservation trigger by the same
-enumeration that makes it a capture candidate; the original is held under whichever source applies.
-Volume-level destructions (volume lock, dismount) have no single-file region to hold and are met by
-detection and the capacity response alone (V.1.2); making a file sparse destroys nothing by itself
-(its zeroing arrives as a separate range-zero, which is held).
+Every destruction member of IV.1.2 that has a recoverable file region — in-place overwrite, truncate,
+allocation-shrink, delete, rename-over, hardlink-replace, block-clone, ODX offload-write, range-zero,
+file-level-trim, and mapped-section write — is a preservation trigger, because each is preceded by a
+write-intent open (or, for a replace, a destination that is read directly); the original is held
+under whichever source applies. Volume-level destructions (volume lock, dismount) have no single-file
+region to hold and are met by detection and the capacity response alone (V.1.2); making a file sparse
+destroys nothing by itself (its zeroing arrives as a separate range-zero, held at the open that
+carried it).
 
 **[INVARIANT] III.5.3 — First write wins; a held original is never overwritten by what destroys it.**
 The store holds **one copy per (file, region)** — the earliest observed state of that region within
@@ -597,8 +582,8 @@ on this path is a capture candidate):
   shrink.
 - Delete — `FileDispositionInformation` **and** `FileDispositionInformationEx`.
 - mmap / section write — the destructive flush surfaces as an asynchronous paging
-  write, but the original is captured at the writable-section acquire
-  (`ACQUIRE_FOR_SECTION_SYNCHRONIZATION`) that precedes the first store (III.5.2).
+  write, but the original is captured at the writable open that must precede any
+  writable mapping (III.5.2), not at that flush.
 - Rename-over-existing — `FileRenameInformation`(`Ex`) + `ReplaceIfExists`.
 - Hardlink-replace — `FileLinkInformation`(`Ex`) replace.
 - Block-clone / ODX — `FSCTL_DUPLICATE_EXTENTS_TO_FILE`, `FSCTL_OFFLOAD_WRITE`.
@@ -1631,13 +1616,13 @@ An implementation is constitutional iff all hold.
 
 **Recovery and preservation (Part III)**
 - [ ] Recovery has two assets: decryption with the captured key (definitive, unbounded), and
-      restoration of a bounded copy-on-first-write preserved original (circumstantial); a
-      captured key cancels the held original for its region (III.1, III.5.4).
-- [ ] Preservation copies the original off a deadlock-free path (in-place: the write region read
-      non-cached/paging at the write seam before the cached write lands; destruction seams and
-      replace/mapped: a distinct file object), one copy per (file, region), first-write-wins, never
-      overwriting a held original with what destroys it; it triggers on every IV.1.2 destruction
-      member and never blocks (III.5.1–III.5.3).
+      restoration of a bounded original preserved at the destroyer's write-intent open
+      (circumstantial); a captured key cancels the held original for its region (III.1, III.5.4).
+- [ ] Preservation copies the original at the write-intent open, off a deadlock-free path (the
+      data-scan section on the opening handle for a writable open; a distinct kernel file object
+      for a rename/hardlink-replace destination), one copy per (file, region), first-write-wins,
+      never overwriting a held original with what destroys it; it triggers on every IV.1.2
+      destruction member and never blocks (III.5.1–III.5.3).
 - [ ] The window is bounded by a time + capacity resource envelope; reclamation is by age;
       restore is operator-directed, verified, and metadata-preserving, and the store never
       leaves the kernel (III.5.5, III.5.6).

@@ -195,20 +195,23 @@ int sar_preserve_would_exceed(const sar_preserve_record_t *records, uint64_t cou
     return sar_preserve_total_bytes(records, count) + incoming_bytes > capacity_bytes;
 }
 
-int sar_preserve_verify_restore(const sar_preserve_record_t *rec,
+int sar_preserve_verify_extract(const sar_preserve_record_t *rec,
                                 const uint16_t *target_path,
-                                uint64_t target_offset,
-                                const uint8_t *decrypted, uint64_t length) {
-    if (!rec || !target_path || !decrypted)
+                                uint64_t target_offset, uint64_t target_length,
+                                const uint8_t *decrypted_region, uint64_t region_length,
+                                uint64_t *inner_offset) {
+    if (!rec || !target_path || !decrypted_region || !inner_offset || target_length == 0)
         return SAR_PRES_INVALID_ARG;
     if (!sar_pres_path_eq(rec->provenance_path, target_path) ||
-        rec->provenance_offset != target_offset ||
-        rec->provenance_length != length)
+        region_length != rec->provenance_length ||
+        !sar_pres_contains(rec->provenance_offset, rec->provenance_length,
+                           target_offset, target_length))
         return SAR_PRES_RESTORE_MISMATCH;
     uint8_t tag[SEMANTICS_AR_MAC_SIZE];
-    sar_preserve_content_tag(decrypted, length, tag);
+    sar_preserve_content_tag(decrypted_region, region_length, tag);
     if (!sar_ct_equal(tag, rec->content_tag, SEMANTICS_AR_MAC_SIZE))
         return SAR_PRES_RESTORE_MISMATCH;
+    *inner_offset = target_offset - rec->provenance_offset;
     return SAR_PRES_OK;
 }
 

@@ -114,7 +114,6 @@ int sar_keystore_serialize(const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
     semantics_ar_keystore_header_t hdr;
     sar_memset(&hdr, 0, sizeof(hdr));
     hdr.magic = SEMANTICS_AR_KEYSTORE_MAGIC;
-    hdr.protocol_version = SEMANTICS_AR_KEYSTORE_VERSION;
     hdr.record_count = count;
     hdr.generation = generation;
 
@@ -146,8 +145,6 @@ int sar_keystore_verify(const uint8_t *buf, size_t len,
     sar_memcpy(&hdr, buf, sizeof(hdr));
     if (hdr.magic != SEMANTICS_AR_KEYSTORE_MAGIC)
         return SAR_KS_BAD_MAGIC;
-    if (hdr.protocol_version != SEMANTICS_AR_KEYSTORE_VERSION)
-        return SAR_KS_BAD_VERSION;
 
     size_t need = sar_keystore_serialized_size(hdr.record_count);
     if (len < need)

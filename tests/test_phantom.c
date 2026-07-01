@@ -23,7 +23,9 @@ static int g_fail;
 #define PHANTOM_SECRET_BYTES     32
 #define PHANTOM_NAME_CHARS       32
 #define PHANTOM_SWAP_EXTRA       (4u * 1024u)
-#define PHANTOM_SYNTH_REF_MASK   0xFFFF000000000000ULL
+#define PHANTOM_FRN_BASE         0x0000400000000000ULL
+#define PHANTOM_FRN_SPAN         0x0000010000000000ULL
+#define PHANTOM_FRN_INDEX_MASK   0x0000FFFFFFFFFFFFULL
 
 typedef uint16_t WCHAR_T;
 
@@ -77,11 +79,34 @@ static uint32_t phantom_count_for_dir(uint32_t real_file_count)
     return PHANTOM_MAX_PER_DIR;
 }
 
-static uint64_t phantom_synthetic_ref(uint32_t dir_hash, uint32_t index)
+static uint64_t phantom_read64(const uint8_t *p)
 {
-    return PHANTOM_SYNTH_REF_MASK |
-           ((uint64_t)(dir_hash & 0xFFFF) << 32) |
-           ((uint64_t)(index & 0xFFFF));
+    return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) |
+           ((uint64_t)p[3] << 24) | ((uint64_t)p[4] << 32) | ((uint64_t)p[5] << 40) |
+           ((uint64_t)p[6] << 48) | ((uint64_t)p[7] << 56);
+}
+
+static uint64_t phantom_frn(const uint8_t secret[32], const WCHAR_T *dir, size_t dir_chars,
+                            uint32_t index)
+{
+    uint8_t msg[520 + 5];
+    uint8_t hash[32];
+    size_t dir_bytes = dir_chars * sizeof(WCHAR_T);
+    uint64_t idx48, seq;
+
+    if (dir_bytes > 520)
+        dir_bytes = 520;
+    memcpy(msg, dir, dir_bytes);
+    msg[dir_bytes]     = (uint8_t)(index & 0xFF);
+    msg[dir_bytes + 1] = (uint8_t)((index >> 8) & 0xFF);
+    msg[dir_bytes + 2] = (uint8_t)((index >> 16) & 0xFF);
+    msg[dir_bytes + 3] = (uint8_t)((index >> 24) & 0xFF);
+    msg[dir_bytes + 4] = 0x46;
+    sar_hmac_sha256(secret, 32, msg, dir_bytes + 5, hash);
+
+    idx48 = PHANTOM_FRN_BASE + (phantom_read64(hash) % PHANTOM_FRN_SPAN);
+    seq = 1 + (phantom_read64(hash + 8) % 0xFFFE);
+    return (seq << 48) | (idx48 & PHANTOM_FRN_INDEX_MASK);
 }
 
 static int phantom_is_phantom_path(const WCHAR_T *path, size_t path_chars)
@@ -495,23 +520,36 @@ static void test_synthetic_ref(void)
 {
     printf("--- VIII.6 Synthetic Reference Numbers ---\n");
 
-    uint64_t ref = phantom_synthetic_ref(0x1234, 0);
-    CHECK((ref & PHANTOM_SYNTH_REF_MASK) == PHANTOM_SYNTH_REF_MASK,
-          "synthetic ref has 0xFFFF mask in top 16 bits");
+    uint8_t secret[32];
+    memset(secret, 0x33, 32);
+    static const WCHAR_T dir[] = L"\\Users\\victim\\Documents\\";
+    size_t dc = sizeof(dir) / sizeof(dir[0]) - 1;
 
-    uint64_t ref0 = phantom_synthetic_ref(100, 0);
-    uint64_t ref1 = phantom_synthetic_ref(100, 1);
-    uint64_t ref2 = phantom_synthetic_ref(100, 2);
+    uint64_t ref0 = phantom_frn(secret, dir, dc, 0);
+    uint64_t idx0 = ref0 & PHANTOM_FRN_INDEX_MASK;
+    CHECK(idx0 >= PHANTOM_FRN_BASE && idx0 < PHANTOM_FRN_BASE + PHANTOM_FRN_SPAN,
+          "synthetic FRN index in reserved MFT range above real high-water");
+
+    uint64_t ref1 = phantom_frn(secret, dir, dc, 1);
+    uint64_t ref2 = phantom_frn(secret, dir, dc, 2);
     CHECK(ref0 != ref1 && ref1 != ref2 && ref0 != ref2,
           "different indices produce different refs");
 
-    uint64_t ref_a = phantom_synthetic_ref(200, 0);
-    uint64_t ref_b = phantom_synthetic_ref(300, 0);
-    CHECK(ref_a != ref_b,
-          "different dir hashes produce different refs");
+    static const WCHAR_T dir_b[] = L"\\Users\\victim\\Pictures\\";
+    size_t dcb = sizeof(dir_b) / sizeof(dir_b[0]) - 1;
+    uint64_t ref_b = phantom_frn(secret, dir_b, dcb, 0);
+    CHECK(ref0 != ref_b,
+          "different directories produce different refs (canonical, not length)");
 
-    CHECK((ref0 >> 48) == 0xFFFF,
-          "top 16 bits are 0xFFFF (reserved MFT range)");
+    uint64_t seq = ref0 >> 48;
+    CHECK(seq >= 1 && seq <= 0xFFFE,
+          "sequence non-zero and not 0xFFFF (no metamorphic tell)");
+
+    uint8_t secret2[32];
+    memset(secret2, 0x99, 32);
+    uint64_t ref_s = phantom_frn(secret2, dir, dc, 0);
+    CHECK(ref0 != ref_s,
+          "different volume secret produces different refs (unpredictable)");
 }
 
 static void test_k_threshold(void)

@@ -25,6 +25,7 @@ typedef struct _SAR_PM_IDENT {
     USHORT  dirlen;
     USHORT  namelen;
     ULONG   index;
+    DWORDLONG frn;
     WCHAR   backhex[48];
     WCHAR   dir[284];
     WCHAR   name[SAR_PHANTOM_NAME_CHARS];
@@ -34,7 +35,7 @@ static ULONG g_pm_idmap_next;
 static EX_PUSH_LOCK g_pm_idmap_lock;
 
 static VOID SarPmIdMapInsert(_In_ PCUNICODE_STRING BackHex, _In_ PCUNICODE_STRING Dir,
-                             _In_ PCUNICODE_STRING Name, _In_ ULONG Index)
+                             _In_ PCUNICODE_STRING Name, _In_ ULONG Index, _In_ DWORDLONG Frn)
 {
     SAR_PM_IDENT *e;
     if (BackHex->Length > sizeof(((SAR_PM_IDENT*)0)->backhex) ||
@@ -49,6 +50,7 @@ static VOID SarPmIdMapInsert(_In_ PCUNICODE_STRING BackHex, _In_ PCUNICODE_STRIN
     e->dirlen = Dir->Length;
     e->namelen = Name->Length;
     e->index = Index;
+    e->frn = Frn;
     RtlCopyMemory(e->backhex, BackHex->Buffer, BackHex->Length);
     RtlCopyMemory(e->dir, Dir->Buffer, Dir->Length);
     RtlCopyMemory(e->name, Name->Buffer, Name->Length);
@@ -58,7 +60,7 @@ static VOID SarPmIdMapInsert(_In_ PCUNICODE_STRING BackHex, _In_ PCUNICODE_STRIN
 static BOOLEAN SarPmIdMapLookup(_In_ PCUNICODE_STRING BackHex,
                                 _Out_writes_bytes_(568) WCHAR *DirOut, _Out_ PUSHORT DirLen,
                                 _Out_writes_bytes_(SAR_PHANTOM_NAME_CHARS * 2) WCHAR *NameOut, _Out_ PUSHORT NameLen,
-                                _Out_ PULONG Index)
+                                _Out_ PULONG Index, _Out_ PDWORDLONG Frn)
 {
     ULONG i;
     BOOLEAN found = FALSE;
@@ -73,6 +75,7 @@ static BOOLEAN SarPmIdMapLookup(_In_ PCUNICODE_STRING BackHex,
             RtlCopyMemory(NameOut, e->name, e->namelen);
             *NameLen = e->namelen;
             *Index = e->index;
+            *Frn = e->frn;
             found = TRUE;
             break;
         }
@@ -252,13 +255,6 @@ static ULONG SarPhantomCountForDir(ULONG real_file_count)
     return SAR_PHANTOM_MAX_PER_DIR;
 }
 
-static DWORDLONG SarPhantomSyntheticRef(ULONG dir_hash, ULONG index)
-{
-    return SAR_PHANTOM_SYNTH_REF_MASK |
-           ((DWORDLONG)(dir_hash & 0xFFFF) << 32) |
-           ((DWORDLONG)(index & 0xFFFF));
-}
-
 static BOOLEAN SarPmIdMapLookupByRef(_In_ DWORDLONG Ref,
                                      _Out_writes_bytes_(568) WCHAR *DirOut, _Out_ PUSHORT DirLen,
                                      _Out_writes_bytes_(SAR_PHANTOM_NAME_CHARS * 2) WCHAR *NameOut,
@@ -271,7 +267,7 @@ static BOOLEAN SarPmIdMapLookupByRef(_In_ DWORDLONG Ref,
         SAR_PM_IDENT *e = &g_pm_idmap[i];
         if (!e->valid)
             continue;
-        if (SarPhantomSyntheticRef((ULONG)(e->dirlen / sizeof(WCHAR)), e->index) == Ref) {
+        if (e->frn == Ref) {
             RtlCopyMemory(DirOut, e->dir, e->dirlen);
             *DirLen = e->dirlen;
             RtlCopyMemory(NameOut, e->name, e->namelen);
@@ -376,6 +372,37 @@ static VOID SarPhantomMetaForIndex(_In_ const UCHAR Secret[32], _In_ PCUNICODE_S
     Meta->ctime.QuadPart = (LONGLONG)(base + a);
     Meta->wtime.QuadPart = (LONGLONG)(base + a + b);
     Meta->atime.QuadPart = (LONGLONG)(base + a + b + c);
+}
+
+static DWORDLONG SarPhantomFrn(_In_ const UCHAR Secret[32], _In_ PCUNICODE_STRING DirPath,
+                               _In_ ULONG Index)
+{
+    UINT8 msg[520 + 5];
+    ULONG dir_bytes;
+    const WCHAR *dir_buf;
+    UINT8 hash[32];
+    ULONGLONG idx48, seq;
+
+    SarPhantomCanonDir(DirPath, &dir_buf, &dir_bytes);
+    if (dir_bytes > 520)
+        dir_bytes = 520;
+    RtlCopyMemory(msg, dir_buf, dir_bytes);
+    msg[dir_bytes]     = (UINT8)(Index & 0xFF);
+    msg[dir_bytes + 1] = (UINT8)((Index >> 8) & 0xFF);
+    msg[dir_bytes + 2] = (UINT8)((Index >> 16) & 0xFF);
+    msg[dir_bytes + 3] = (UINT8)((Index >> 24) & 0xFF);
+    msg[dir_bytes + 4] = 0x46;
+    sar_hmac_sha256(Secret, 32, msg, dir_bytes + 5, hash);
+
+    idx48 = SAR_PHANTOM_FRN_BASE + (SarPhantomRead64(hash) % SAR_PHANTOM_FRN_SPAN);
+    seq = 1 + (SarPhantomRead64(hash + 8) % 0xFFFE);
+    return (seq << 48) | (idx48 & SAR_PHANTOM_FRN_INDEX_MASK);
+}
+
+static BOOLEAN SarPhantomFrnInRange(_In_ DWORDLONG Frn)
+{
+    ULONGLONG idx = Frn & SAR_PHANTOM_FRN_INDEX_MASK;
+    return idx >= SAR_PHANTOM_FRN_BASE && idx < SAR_PHANTOM_FRN_BASE + SAR_PHANTOM_FRN_SPAN;
 }
 
 static VOID SarPhantomFillEntry(_Out_writes_bytes_(entry_size) PVOID Entry,
@@ -766,6 +793,33 @@ static VOID SarPhantomMaterializeBacking(_In_ PCWSTR BackingPath, _In_ PCUNICODE
     ExFreePoolWithTag(buf, SAR_POOL_TAG_PHANTOM);
 }
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static BOOLEAN SarPhantomResolveBackingFrn(_In_ PCWSTR BackingPath, _Out_ PDWORDLONG Frn)
+{
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE h = NULL;
+    FILE_INTERNAL_INFORMATION ii;
+    BOOLEAN ok = FALSE;
+
+    RtlInitUnicodeString(&name, BackingPath);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(ZwCreateFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb, NULL,
+                                 FILE_ATTRIBUTE_NORMAL,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 FILE_OPEN,
+                                 FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
+                                 NULL, 0)))
+        return FALSE;
+    if (NT_SUCCESS(ZwQueryInformationFile(h, &iosb, &ii, sizeof(ii), FileInternalInformation))) {
+        *Frn = (DWORDLONG)ii.IndexNumber.QuadPart;
+        ok = TRUE;
+    }
+    ZwClose(h);
+    return ok;
+}
+
 FLT_PREOP_CALLBACK_STATUS
 SarPhantomPreCreate(_Inout_ PFLT_CALLBACK_DATA Data,
                     _In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -820,34 +874,53 @@ SarPhantomPreCreate(_Inout_ PFLT_CALLBACK_DATA Data,
     }
 
     if (FlagOn(Data->Iopb->Parameters.Create.Options, FILE_OPEN_BY_FILE_ID) &&
-        fileObj->FileName.Length >= sizeof(DWORDLONG)) {
+        fileObj->FileName.Length >= sizeof(DWORDLONG) &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL && IoGetTopLevelIrp() == NULL) {
         DWORDLONG frn;
         RtlCopyMemory(&frn, fileObj->FileName.Buffer, sizeof(frn));
-        if ((frn & SAR_PHANTOM_SYNTH_REF_MASK) == SAR_PHANTOM_SYNTH_REF_MASK) {
+        if (SarPhantomFrnInRange(frn)) {
             WCHAR fidDir[284];
             WCHAR fidName[SAR_PHANTOM_NAME_CHARS];
             USHORT fidDirLen = 0, fidNameLen = 0;
             ULONG fidIdx = 0;
             if (SarPmIdMapLookupByRef(frn, fidDir, &fidDirLen, fidName, &fidNameLen, &fidIdx)) {
+                DWORDLONG backingFrn = 0;
+                UNICODE_STRING fidDirStr, fidNameStr;
                 if (SarPhantomIsTrusted(pid)) {
                     Data->IoStatus.Status = STATUS_OBJECT_NAME_NOT_FOUND;
                     Data->IoStatus.Information = 0;
                     return FLT_PREOP_COMPLETE;
                 }
-                if (g_sar_io_replace_name != NULL) {
-                    UNICODE_STRING fidDirStr, fidNameStr;
-                    fidDirStr.Buffer = fidDir; fidDirStr.Length = fidDirLen;
-                    fidDirStr.MaximumLength = fidDirLen;
-                    fidNameStr.Buffer = fidName; fidNameStr.Length = fidNameLen;
-                    fidNameStr.MaximumLength = fidNameLen;
-                    SarPhantomBuildBackingPath(fidIdx, &fidDirStr, backingPath, &backingChars);
-                    SarPhantomMaterializeBacking(backingPath, &fidNameStr,
-                                                 g_sar.phantom->volume_secret, &fidDirStr, fidIdx);
-                    g_sar_io_replace_name(fileObj, backingPath, backingChars * sizeof(WCHAR));
-                    Data->IoStatus.Status = STATUS_REPARSE;
-                    Data->IoStatus.Information = IO_REPARSE;
-                    FltSetCallbackDataDirty(Data);
-                    return FLT_PREOP_COMPLETE;
+                fidDirStr.Buffer = fidDir; fidDirStr.Length = fidDirLen;
+                fidDirStr.MaximumLength = fidDirLen;
+                fidNameStr.Buffer = fidName; fidNameStr.Length = fidNameLen;
+                fidNameStr.MaximumLength = fidNameLen;
+                SarPhantomBuildBackingPath(fidIdx, &fidDirStr, backingPath, &backingChars);
+                SarPhantomMaterializeBacking(backingPath, &fidNameStr,
+                                             g_sar.phantom->volume_secret, &fidDirStr, fidIdx);
+                if (g_sar_io_replace_name != NULL &&
+                    SarPhantomResolveBackingFrn(backingPath, &backingFrn)) {
+                    WCHAR volBuf[64];
+                    UNICODE_STRING volName;
+                    UCHAR namebuf[160];
+                    volName.Buffer = volBuf;
+                    volName.Length = 0;
+                    volName.MaximumLength = sizeof(volBuf);
+                    if (NT_SUCCESS(FltGetVolumeName(FltObjects->Volume, &volName, NULL)) &&
+                        (ULONG)volName.Length + sizeof(WCHAR) + sizeof(DWORDLONG) <= sizeof(namebuf)) {
+                        USHORT nlen;
+                        RtlCopyMemory(namebuf, volName.Buffer, volName.Length);
+                        namebuf[volName.Length] = (UCHAR)'\\';
+                        namebuf[volName.Length + 1] = 0;
+                        RtlCopyMemory(namebuf + volName.Length + sizeof(WCHAR), &backingFrn,
+                                      sizeof(backingFrn));
+                        nlen = (USHORT)(volName.Length + sizeof(WCHAR) + sizeof(DWORDLONG));
+                        g_sar_io_replace_name(fileObj, (PWSTR)namebuf, nlen);
+                        Data->IoStatus.Status = STATUS_REPARSE;
+                        Data->IoStatus.Information = IO_REPARSE;
+                        FltSetCallbackDataDirty(Data);
+                        return FLT_PREOP_COMPLETE;
+                    }
                 }
                 Data->IoStatus.Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 Data->IoStatus.Information = 0;
@@ -897,7 +970,8 @@ SarPhantomPreCreate(_Inout_ PFLT_CALLBACK_DATA Data,
         backHex.Buffer = backingPath + (backingChars - 32);
         backHex.Length = 32 * sizeof(WCHAR);
         backHex.MaximumLength = backHex.Length;
-        SarPmIdMapInsert(&backHex, &nameInfo->ParentDir, &nameInfo->FinalComponent, matchIndex);
+        SarPmIdMapInsert(&backHex, &nameInfo->ParentDir, &nameInfo->FinalComponent, matchIndex,
+                         SarPhantomFrn(g_sar.phantom->volume_secret, &nameInfo->ParentDir, matchIndex));
     }
     FltReleaseFileNameInformation(nameInfo);
 
@@ -1004,11 +1078,25 @@ static ULONG SarPhantomMergeInto(_Out_writes_bytes_(BufLen) PUCHAR Out, _In_ ULO
     dirName.MaximumLength = DirNameBytes;
 
     for (i = 0; i < nOrder; i++) {
+        WCHAR bpath[260];
+        USHORT bchars;
         SarPhantomNameForIndex(g_sar.phantom->volume_secret, &dirName, order[i], phName[i], &phChars[i]);
         SarPhantomMetaForIndex(g_sar.phantom->volume_secret, &dirName, order[i], &phMeta[i]);
         phSize[i] = SarPhantomEntrySize(Off, phChars[i] * sizeof(WCHAR));
-        phRef[i] = SarPhantomSyntheticRef((ULONG)(DirNameBytes / sizeof(WCHAR)), order[i]);
+        phRef[i] = SarPhantomFrn(g_sar.phantom->volume_secret, &dirName, order[i]);
         totalPhantom += phSize[i];
+
+        SarPhantomBuildBackingPath(order[i], &dirName, bpath, &bchars);
+        if (bchars >= 32) {
+            UNICODE_STRING backHex, nmStr;
+            backHex.Buffer = bpath + (bchars - 32);
+            backHex.Length = 32 * sizeof(WCHAR);
+            backHex.MaximumLength = backHex.Length;
+            nmStr.Buffer = phName[i];
+            nmStr.Length = (USHORT)(phChars[i] * sizeof(WCHAR));
+            nmStr.MaximumLength = nmStr.Length;
+            SarPmIdMapInsert(&backHex, &dirName, &nmStr, order[i], phRef[i]);
+        }
     }
 
     end = Swapped + Returned;
@@ -1400,8 +1488,10 @@ SarPhantomPostQueryInfo(_Inout_ PFLT_CALLBACK_DATA Data,
         WCHAR phName[SAR_PHANTOM_NAME_CHARS];
         USHORT origDirLen = 0, phLen = 0;
         ULONG idx = 0;
+        DWORDLONG frn = 0;
 
-        if (SarPmIdMapLookup(&nameInfo->FinalComponent, origDir, &origDirLen, phName, &phLen, &idx)) {
+        if (SarPmIdMapLookup(&nameInfo->FinalComponent, origDir, &origDirLen, phName, &phLen, &idx,
+                             &frn)) {
             if (infoClass == FileNameInformation || infoClass == FileNormalizedNameInformation) {
                 PFILE_NAME_INFORMATION info =
                     (PFILE_NAME_INFORMATION)Data->Iopb->Parameters.QueryFileInformation.InfoBuffer;
@@ -1419,8 +1509,7 @@ SarPhantomPostQueryInfo(_Inout_ PFLT_CALLBACK_DATA Data,
                 PFILE_INTERNAL_INFORMATION info =
                     (PFILE_INTERNAL_INFORMATION)Data->Iopb->Parameters.QueryFileInformation.InfoBuffer;
                 if (info != NULL) {
-                    ULONG dir_hash = (ULONG)(origDirLen / sizeof(WCHAR));
-                    info->IndexNumber.QuadPart = (LONGLONG)SarPhantomSyntheticRef(dir_hash, idx);
+                    info->IndexNumber.QuadPart = (LONGLONG)frn;
                     FltSetCallbackDataDirty(Data);
                 }
             }
@@ -1495,7 +1584,7 @@ static VOID SarPhantomInjectUsn(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELA
             p + r->RecordLength > end)
             break;
         par = r->ParentFileReferenceNumber;
-        if ((par & SAR_PHANTOM_SYNTH_REF_MASK) != SAR_PHANTOM_SYNTH_REF_MASK) {
+        if (!SarPhantomFrnInRange(par)) {
             BOOLEAN seen = FALSE;
             for (f = 0; f < nParents; f++)
                 if (parents[f] == par) { counts[f]++; seen = TRUE; break; }
@@ -1534,7 +1623,7 @@ static VOID SarPhantomInjectUsn(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELA
             if (used + reclen > Cap)
                 break;
 
-            frn = SarPhantomSyntheticRef((ULONG)(dir.Length / sizeof(WCHAR)), k);
+            frn = SarPhantomFrn(g_sar.phantom->volume_secret, &dir, k);
             out = (USN_RECORD_V2 *)(Buf + used);
             RtlZeroMemory(out, reclen);
             out->RecordLength = reclen;
@@ -1559,7 +1648,7 @@ static VOID SarPhantomInjectUsn(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELA
                 backHex.Buffer = bpath + (bchars - 32);
                 backHex.Length = 32 * sizeof(WCHAR);
                 backHex.MaximumLength = backHex.Length;
-                SarPmIdMapInsert(&backHex, &dir, &nmStr, k);
+                SarPmIdMapInsert(&backHex, &dir, &nmStr, k, frn);
             }
         }
     }
