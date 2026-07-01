@@ -30,85 +30,92 @@ was made at the gate). **DO NOT reintroduce redirect / shadow / reflected-file /
 transactional-commit.** Redemption is explicitly NOT our model (see §2 "we use a cryptographic tag"); we
 share only verify-before-replace.
 
-### 0.1 What landed this session (UNCOMMITTED, on top of 5f49e43 — do not commit until §0.2 is closed)
+**Second trap that MUST NOT be repeated — preservation must stay gate-fed, never unconditional.** A later
+implementer added a pre-create baseline that staged the whole file on every `FILE_OVERWRITE`/`OVERWRITE_IF`/
+`FILE_SUPERSEDE` create, unconditionally, bypassing the D∧T gate. Windows issues those dispositions constantly
+for benign files (`CREATE_ALWAYS` on caches/logs/temp, shutdown churn), so the preservation store ran away
+(tens of MB while idle) and the reboot-persistence victim was evicted (a Phase-H regression). It was VM-run
+then **fully removed**: unnecessary (the harness "truncate" is a `SetEndOfFile` shrink, recovered by
+sub-region restore — not a create-time overwrite) and out of scope (a create-time overwrite with no plaintext
+read is a keyless blind wipe, IV.1.3). **DO NOT reintroduce an unconditional create-time full-file capture.**
+Preservation copies only what the gate (or a destination read) selects.
 
-**Capture moved from the destructive WRITE to the write-intent OPEN (COO).** Root cause of the old gap: the
-old path read the pre-image *at* the destructive write (a synchronous same-stream read in the write pre-op),
-which self-deadlocks for non-cached/paging writes (confirmed live-KDNET stack: the read re-enters the NTFS
-paging resource the writer already holds), so non-cached was `!IRP_NOCACHE`-gated → never preserved. The
-constitutional fix is to capture at the moment the destroyer *opens* the file (before any modification):
+### 0.1 State — the backend chain is COMPLETE and VM-verified 19/19 (committed `8e09274`, on top of `5f49e43`)
 
-- **`IRP_MJ_CREATE` post-op (`operations.c SarPostCreate`)** — for an existing user file (`FILE_OPENED`)
-  opened with write/delete intent by a non-exempt user-mode process (dedup via new stream flag
-  `SAR_STREAMCTX_FLAG_BASELINE_STAGED`), call `SarCaptureSubmitOpenBaseline` (`capture.c`), which creates a
-  **data-scan section** (`FltCreateSectionForDataScan` — the official `avscan` pattern; requires
-  `FltRegisterForDataScan` per instance, added in `driver.c SarInstanceSetup`, and a registered
-  `FLT_SECTION_CONTEXT`, added to `g_sar_contexts`), maps it, copies the whole-file pre-image, stages it via
-  `SarPreserveStage` (path-keyed, into the existing preservation store), then `FltCloseSectionForDataScan`.
-  The user's write proceeds byte-for-byte unchanged — passive (IV.3-compliant). **Why the section and not a
-  plain read:** the data-scan section reads the file's data regardless of the attacker handle's granted
-  access (write-only / blind-wiper opens) or share mode (share-none); a plain `FltReadFile` on the attacker's
-  file object fails for write-only opens, and an independent `FltCreateFileEx` fails for share-none opens —
-  both VM-confirmed to drop modes. The section is the only mechanism that covers all of them.
-- **Removed (subsumed by COO → no dead/duplicate capture):** the write-pre-op pre-image read block in
-  `SarCaptureSubmitWrite` (the Oracle key-capture stays — it uses the 256B `read_sample` + `written`); the
-  mmap section-acquire baseline (`SarPreAcquireForSection` no longer calls it — the destroyer must open the
-  file writable before mapping, so COO subsumes mmap); the `SubmitDestruction` staging in
-  `SarPreSetInformation` (delete/EOF/alloc) and `SarPreFsControl` (zero/trim/dup/offload); and the now-dead
-  helpers `SarCaptureSubmitDestruction`, `SarStreamWasRead`, `SarQueryEndOfFile`, `SarDestructionRegion`.
-  **Kept:** `SarCaptureSubmitRenameTarget` (rename-over/hardlink-replace destroy a victim that is never
-  *opened* by the attacker, so it needs its own destination capture) and the metadata coverage seam.
-- Files: `capture.c`, `capture.h`, `operations.c`, `seam.h` (`MAPPED_CAPTURED`→`BASELINE_STAGED`),
-  `driver.c`, `driver.h` (`SAR_POOL_TAG_SECTION`). Builds clean. Net −218 lines.
+The kernel driver + user-mode service + `sarctl` control plane realize Part I end-to-end and pass the full
+phased regression. Capture is **passive capture-at-write-intent-open**: at `IRP_MJ_CREATE` the whole original
+is staged to the preservation store via a data-scan section (`FltCreateSectionForDataScan`,
+`capture.c SarCaptureSubmitOpenBaseline`) before any modification; rename/hardlink destinations are captured
+through a distinct handle (`SarCaptureSubmitRenameTarget`); the Oracle key-capture path is unchanged. The
+three closing units are done:
 
-**VM-verified (`vm_verify_coverage.ps1 -AttackCount 6`):** **non-cached 0→100 %, allocation-shrink 0→100 %**
-(the target gaps), full destruction-member matrix **100 %** (disposeex/setsparse/trim/linkreplace/mmapclose/
-intermittent/preoverwrite), Phase-A newdelete/renameover/setzero/mmap **100 %**, in-place encryption **100 %**,
-**benign false-positives 0** (AUDIT + ENFORCE, incl. high-novelty corpus — because COO is passive copy, not
-intervention), system stable. Recovery is checked through the normal `sarctl preserve-recover` path (COO
-populates the preservation store, so the existing harness is the correct verifier — no methodology change).
+- **Truncate / partial destruction — sub-region recovery.** Recovery extracts any *contained* sub-region of a
+  held whole-file copy (`engine sar_preserve_verify_extract` + the `driver/preserve.c` slice), so a
+  `SetEndOfFile` shrink or any partial destruction restores from the whole-file hold. Phase-A `truncate`
+  0 → 100 %.
+- **Phantom metamorphic identity (Constitution VIII).** One canonical file reference per decoy
+  (`phantom.c SarPhantomFrn` over the canonicalized parent dir; a reserved MFT-index range + non-zero
+  sequence), projected identically into every directory info class, `FSCTL_ENUM_USN_DATA`,
+  `FileInternalInformation`, and open-by-file-id; the id→phantom map is populated at enumeration; open-by-
+  file-id reparses to a **volume-qualified binary FILE_ID** (`FILE_OPEN_BY_FILE_ID` persists across
+  `STATUS_REPARSE`, so a path or a bare id is rejected — err 87 / 123 / 2 are the three wrong forms), with the
+  backing FRN resolved via `ZwCreateFile` under an `IoGetTopLevelIrp()==NULL` guard to avoid create-path
+  reentrancy. Phase-P tells 3 → 0, open-by-file-id 0/3 → 3/3.
+- **Constitution rewritten as-if-original** (III.5.1 / III.5.2 / IV.1.2 = capture-at-write-intent-open); the
+  on-disk keystore schema-version trace (`protocol_version`) removed (the wire handshake version is kept).
 
-### 0.2 Remaining units (close these, re-verify, THEN commit the whole thing; then production)
+**VM-verified** `scripts/vm_verify_coverage.ps1 -AttackCount 6` → **19 passed / 0 failed** (load, service,
+Phase-A 5 modes + A2 11-member matrix all ≥ 95 %, Phase-P phantom, in-place encryption, Oracle round-trip,
+benign false-positives 0 under AUDIT/ENFORCE/high-novelty, capacity fail-closed, reboot persistence, burden).
+**Host**: engine/keystore/keystore_mgr/preserve/gate/schedule/phantom/capture/recover/chassis/handshake all
+green (`cmake --build build_win`; run `build_win/tests/Debug/test_*.exe`). Driver builds clean via
+`scripts/build_driver.bat`.
 
-1. **truncate-on-open — the only remaining destruction gap (Phase-A `truncate` = 0 %).** That mode opens the
-   victim with an overwrite/truncate disposition (`FILE_OVERWRITTEN`/`FILE_SUPERSEDED`), so the file is
-   already 0 bytes when the create *completes* → post-create COO reads 0 → nothing staged
-   (`preserve-recover result=-5`). This is the create-time-overwrite case (a blind wiper; note real
-   encryption ransomware never truncates-on-open, it must read the plaintext first). **Fix: capture at
-   PRE-create for `FILE_OVERWRITE`/`FILE_OVERWRITE_IF`/`FILE_SUPERSEDE` on an existing file** — at pre-create
-   the file is still intact AND the attacker's handle is not yet established (no share conflict), so an
-   independent `FltCreateFileEx(FILE_OPEN, FILE_READ_DATA, share-all)` opens it cleanly. Consider unifying:
-   capturing *all* write-intent creates at pre-create via an independent handle would be one mechanism that
-   also handles write-only/share-none without the data-scan section — but validate re-entrancy first
-   (`FltCreateFileEx` at pre-create: guard `KeGetCurrentIrql()==PASSIVE_LEVEL` and `IoGetTopLevelIrp()==NULL`,
-   target below own instance so no callback recursion). Trap: pre-create NAME resolution (file not open yet;
-   `FLT_FILE_NAME_OPENED` fails — use `FLT_FILE_NAME_QUERY_DEFAULT`; watch `SL_OPEN_TARGET_DIRECTORY`; see the
-   "Of Filesystems And Other Demons" pre-create-name posts). Still passive → IV.3-compliant.
+### 0.2 NEXT PHASE — the operator frontend (state only; its design is the successor's)
 
-2. **Gap C — phantom decoy identity consistency (Phase-P: metamorphic `tells=3`, open-by-file-id 3-A
-   `ok=0/3`, `err=87`).** This is the Constitution VIII decoy layer (fabricates responses for *non-existent*
-   decoys — orthogonal to IV.3, not gate redirection). Two defects, one root cause: identity is generated
-   per-surface instead of once. Web-verified facts to build on:
-   - **NTFS 64-bit file reference = 48-bit MFT record index + 16-bit sequence number.** The old "reserve the
-     top byte" idea collides with the sequence number. Reserve a range of MFT-record-*index* values above the
-     volume's real MFT high-water mark (validate at attach); derive deterministically
-     `index = RESERVED_BASE + H(parentFRN, name) mod SPAN`, fixed non-zero sequence → identical FRN across
-     every enumeration info class + `FSCTL_ENUM_USN_DATA` + open-by-id.
-   - **Open-by-128-bit-id: high-64-bits==0 ⇒ file id; !=0 ⇒ object id.** Phantom `FILE_ID_128` MUST keep the
-     high 64 bits zero, FRN in the low 64.
-   - Populate an id→phantom map at enumeration; project ONE canonical descriptor identically into all info
-     classes + USN (same wildcard/resume as NTFS). For `SL_OPEN_BY_FILE_ID`, the `STATUS_REPARSE` reissue
-     takes Options from the OPEN_PACKET (id-open persists) but the NAME from `FileObject->FileName` — so
-     `IoReplaceFileObjectName` with the backing's **binary `FILE_ID_128`**, not a path (that is the `err=87`).
-     `phantom.c` already has `SarPmIdMapLookupByRef` + reparse + synthetic-ref machinery — wire the map
-     population + the FRN scheme + binary-id reparse.
+> This section records **what exists** for a frontend to attach to. It deliberately gives **no** frontend
+> architecture, language, UX, transport choice, or method — those are the successor's to decide.
 
-3. **Constitution rewrite (as-if-original).** III.5 reads "copy-on-first-write"; the realized mechanism is
-   **capture-at-write-intent-open** (data-scan section at `IRP_MJ_CREATE` post-op, + pre-create for overwrite
-   dispositions once unit 1 lands). Rewrite III.5 and dependents to describe capture-at-open as if it were
-   always the design — no changelog, no "was/now". IV.3 stays intact (COO complies). Also `grep` for any
-   migration / on-disk-schema-version code and **delete** it (never-shipped project; prior LLM versioning
-   traces are mistakes to remove, not preserve).
+**The operator surface that exists today.** The only operator client is the CLI `tools/sarctl.c`. It speaks to
+the service over a **local message-mode named pipe** `SAR_CONTROL_PIPE_NAME`
+(`common/include/semantics_ar/protocol.h`), created in `service/control.c` with a restricted DACL
+`D:P(A;;GA;;;SY)(A;;GA;;;BA)` (**SYSTEM + Administrators only**) and `PIPE_REJECT_REMOTE_CLIENTS` (local only).
+The transport is **synchronous request → reply**: one fixed-size command struct written, one fixed-size reply
+struct read, one op per connection (`service/control.c sar_control_serve`).
+
+**Operations (`SAR_CTL_OP_*` in protocol.h; dispatched in `service/control.c`):**
+- `LIST` — enumerate Oracle-recoverable files; each reply page carries a catalog entry
+  {`algorithm`, `mode`, `key_id`, provenance path} (`sar_catalog_entry_t`), one per captured file, paged by a
+  start index; backed by the persisted keystore (survives service restart + reboot).
+- `RECOVER {key_id, target path}` — kernel decrypts, service does the metadata-preserving replace.
+- `PRESERVE_LIST` — each page carries a preserve entry {provenance path, offset, length, size}
+  (`sar_preserve_list_entry_t`), paged by index; backed by the persisted preserve store.
+- `PRESERVE_RECOVER {path, offset, length}` — restore a held region (sub-region supported).
+- `SET_MODE {audit|enforce}`, `SET_BUDGET {retention-seconds, capacity-MB}`.
+- `WHITELIST_ADD` / `WHITELIST_REMOVE` exist in the protocol + service dispatch but are **not** surfaced by
+  `sarctl` today.
+
+`sarctl`'s own usage string is the authoritative list of what is wired end-to-end: `list | recover
+<key_id-hex> <path> | mode <audit|enforce> | preserve-list | preserve-recover <path> <offset> <length> |
+budget <retention-seconds> <capacity-MB>`.
+
+**Facts a frontend will hit (state, not advice):**
+- **Elevation** is required to open the pipe (SYSTEM/Admin DACL); it is local-only, no remote client.
+- **No push/subscription surface exists yet.** Detections cross driver → service as `VERDICT_NOTIFY`
+  (message types in protocol.h, received in `service/commclient.c`), but the service does **not** re-publish
+  them to any client — the pipe is poll-only request/reply. A client is not *notified* of a detection today;
+  state is learned only by calling the ops above.
+- **Build / run**: the Windows CMake config (`build_win`) builds engine+control+capture+service+tests (the
+  `driver/` subdir self-skips when no WDK); the VM harness runs
+  `build/service/Release/semantics_ar_service.exe` and `build/tools/Release/sarctl.exe`. Everything is
+  **test-signed / VM-staged, not production-signed** (packaging §IX, PPL/ELAM Unit 5, TPM hardening
+  Unit 3-Hardening remain — see §4).
+- **Where to read the surface**: `tools/sarctl.c` (client call of every op), `service/control.c` (pipe server,
+  op dispatch, keystore/preserve projection, DACL), `common/include/semantics_ar/protocol.h` (pipe name, op
+  enum, command/reply + entry structs, driver→service message types), `service/commclient.c` (service↔driver
+  comm port + notify receive).
+- **Re-verify the backend** before/after any change that touches it: `scripts/vm_verify_coverage.ps1
+  -AttackCount 6` (expect 19/0) and the host `test_*` exes.
 
 ### 0.3 Verification & environment notes for the successor
 
