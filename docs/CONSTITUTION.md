@@ -951,6 +951,28 @@ treats an administrator as inside the trusted base, so PPL is used where eligibl
 absence — or its bypass by a SYSTEM actor — descends to the kernel line (IX.1) and is recorded
 (VII.5), never claimed as a guarantee against SYSTEM. The recovery assets do not depend on it.
 
+**[DECISION] VII.3.2.** The operator reaches the system through two service-hosted endpoints
+split by data sensitivity, each authorized to its own audience. The **consequential control
+plane** — mode, whitelist, budget, recovery, and the itemized enumeration of what is
+recoverable or held (III.1.3) — is served only over an endpoint restricted to SYSTEM and the
+elevated administrator, authorized by the **connecting caller's token** (impersonate the client
+and require a genuine, non-filtered Administrators membership), never by process identifier or
+image name, which are spoofable. That endpoint is created fail-closed against name-squatting:
+it owns the first instance of its name, and a pre-existing name is treated as tamper. A second,
+**posture-only read endpoint** is readable without elevation by the interactive logon audience
+(the `NT AUTHORITY\INTERACTIVE` group, SID `S-1-5-4`, granted read access but **not** the right
+to create a pipe instance), so a standard-user surface can show whether protection is healthy
+without forcing an elevation prompt. It projects only **non-secret posture** — protocol version,
+service and driver health, mode, aggregate captured-key count, and, where the platform later
+projects them, preservation capacity, oldest-protected-hold expiry, and a redacted event stream
+(event class, time, and convicted-process identity). It never carries a file path, provenance,
+key material, an IV, a verification tag, a held original's bytes, or any phantom identity
+(VIII.0). The client authenticates the endpoint before trusting it — a read that cannot be
+confirmed to originate from the SYSTEM service is discarded, not shown — because a squatted
+posture channel that reports false health would claim more certainty than the evidence holds.
+The operator surface is a projection consumer, not a security boundary: it holds no authority
+the service does not re-authorize per call (IX.1).
+
 ### VII.4 Our own process is where hijack-prevention lives
 **[DECISION] VII.4.1.** Code-integrity guards (e.g. CIG / ACG where the platform and
 the process model allow) and PPL protect the **system's own** service and driver

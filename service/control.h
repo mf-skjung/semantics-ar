@@ -6,13 +6,9 @@
 
 #include "commclient.h"
 #include "identity.h"
+#include "semantics_ar/posture.h"
 
 #define SAR_CONTROL_PIPE_NAME L"\\\\.\\pipe\\SemanticsArControl"
-#define SAR_POSTURE_PIPE_NAME L"\\\\.\\pipe\\SemanticsAr.Posture"
-
-#define SAR_POSTURE_FRAME_STATUS          1u
-#define SAR_POSTURE_FLAG_SERVICE_RUNNING  0x1u
-#define SAR_POSTURE_FLAG_DRIVER_CONNECTED 0x2u
 
 #define SAR_CTL_OP_SET_MODE          1u
 #define SAR_CTL_OP_WHITELIST_ADD     2u
@@ -61,15 +57,6 @@ typedef struct {
     sar_preserve_list_entry_t preserve_entries[SAR_CTL_LIST_PAGE];
     sar_identity_t     resolved;
 } sar_control_reply_t;
-
-typedef struct {
-    uint32_t frame_type;
-    uint32_t frame_length;
-    uint32_t protocol_version;
-    uint32_t flags;
-    uint32_t mode;
-    uint64_t captured_key_count;
-} sar_posture_frame_t;
 
 #pragma pack(pop)
 

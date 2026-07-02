@@ -1,0 +1,64 @@
+<ui:FluentWindow
+    x:Class="SemanticsAr.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:vm="clr-namespace:SemanticsAr.App.ViewModels"
+    xmlns:views="clr-namespace:SemanticsAr.App.Views"
+    Title="semantics-ar"
+    Width="1000"
+    Height="680"
+    MinWidth="760"
+    MinHeight="520"
+    WindowBackdropType="Mica"
+    ExtendsContentIntoTitleBar="True">
+
+    <ui:FluentWindow.Resources>
+        <DataTemplate DataType="{x:Type vm:HomeViewModel}">
+            <views:HomeView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:RecoveryPreviewViewModel}">
+            <views:RecoveryPreviewView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
+            <views:PlaceholderView />
+        </DataTemplate>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="semantics-ar" />
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ListBox
+                Grid.Column="0"
+                Margin="8"
+                ItemsSource="{Binding Surfaces}"
+                SelectedItem="{Binding SelectedSurface}"
+                AutomationProperties.Name="Surfaces">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock
+                            Margin="6,10"
+                            FontSize="15"
+                            Text="{Binding Name}" />
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <ContentControl
+                Grid.Column="1"
+                Margin="8"
+                Content="{Binding SelectedSurface.Content}" />
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

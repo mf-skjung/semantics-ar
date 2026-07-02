@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="SemanticsAr.App/SemanticsAr.App.csproj" />
+  <Project Path="SemanticsAr.Core.Tests/SemanticsAr.Core.Tests.csproj" />
+  <Project Path="SemanticsAr.Core/SemanticsAr.Core.csproj" />
+</Solution>

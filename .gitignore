@@ -44,6 +44,14 @@ build/
 Build/
 build-*/
 build_win/
+build_fe/
+
+# .NET build output
+bin/
+obj/
+
+# WPF app dir name ends in ".app"; exempt it from the *.app executable rule
+!frontend/SemanticsAr.App/
 
 # CMake generated files
 CMakeFiles/

@@ -1,0 +1,40 @@
+<UserControl
+    x:Class="SemanticsAr.App.Views.RecoveryPreviewView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:SemanticsAr.App.Controls">
+
+    <StackPanel Margin="32" HorizontalAlignment="Left">
+        <TextBlock FontSize="28" FontWeight="SemiBold" Text="Recovery" />
+        <TextBlock
+            Margin="0,12,0,0"
+            MaxWidth="560"
+            Opacity="0.85"
+            TextWrapping="Wrap"
+            Text="Itemized recovery arrives in a later build. Recovery ranks every item by the certainty of its evidence:" />
+
+        <controls:CertaintyChip Rung="Definitive" Margin="0,18,0,0" />
+        <TextBlock
+            Margin="30,4,0,0"
+            MaxWidth="540"
+            Opacity="0.8"
+            TextWrapping="Wrap"
+            Text="The encryption key was captured. The original is restored and each file is verified before it replaces anything." />
+
+        <controls:CertaintyChip Rung="Bounded" Margin="0,16,0,0" />
+        <TextBlock
+            Margin="30,4,0,0"
+            MaxWidth="540"
+            Opacity="0.8"
+            TextWrapping="Wrap"
+            Text="A copy was held before destruction, recoverable within a bounded, expiring window." />
+
+        <controls:CertaintyChip Rung="Unrecoverable" Margin="0,16,0,0" />
+        <TextBlock
+            Margin="30,4,0,0"
+            MaxWidth="540"
+            Opacity="0.8"
+            TextWrapping="Wrap"
+            Text="Neither asset holds this data. Stated plainly, never hidden and never shown as protected." />
+    </StackPanel>
+</UserControl>

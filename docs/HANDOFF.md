@@ -173,6 +173,82 @@ slices are user-mode-service-only, so no full attack-matrix regression was neede
   multi-session; remote-origin incident labeling; self-protection posture surfacing; footprint; incident
   definition; perf/keyboard budgets).
 
+**Frontend-foundation realization — LANDED this session (the VM-verified 19/19 driver + service are UNTOUCHED
+behaviorally; the only backend edit is a pure header relocation, service re-verified building clean):**
+- **The seam + spine walking skeleton is built and verified.** New `frontend/` tree: a native `sarapi` C DLL
+  (owns the wire), a `SemanticsAr.Core` .NET 10 library (interop + pure posture logic), a `SemanticsAr.App`
+  WPF shell with the Home/Shield posture hero, and `SemanticsAr.Core.Tests`. Deliberately scoped to the
+  **already-landed posture endpoint** — no elevation, no driver change, no new backend precondition — so it
+  runs end-to-end against the real service with zero backend risk.
+- **`sarapi.dll`** (`frontend/sarapi/`): `sarapi_posture_read` opens `\\.\pipe\SemanticsAr.Posture` with
+  `GENERIC_READ|FILE_WRITE_ATTRIBUTES` (the `0x120189` grant the endpoint DACL gives INTERACTIVE; the
+  `FILE_WRITE_ATTRIBUTES` is required to set `PIPE_READMODE_MESSAGE` on a read-only pipe) +
+  `SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION`, **verifies the server is SYSTEM** (`GetNamedPipeServerProcessId`
+  → token `TokenUser` == `S-1-5-18`, fail-closed → `SARAPI_SERVER_UNTRUSTED`) before trusting the frame, checks
+  the version prefix, and projects a flat, versioned ABI struct that structurally cannot carry a path/key/phantom
+  identity. Built `/W4 /WX` + `/guard:cf /guard:ehcont /Qspectre /sdl /CETCOMPAT`; exports undecorated
+  (P/Invoke-ready); CFG/CET/HE-ASLR/NX/DynamicBase confirmed in the binary.
+- **`SemanticsAr.Core`**: `[LibraryImport]` + `[assembly: DisableRuntimeMarshalling]`; `sarapi.dll` loaded by
+  **absolute path** via a `DllImportResolver` (no search-order exposure); a pure `PostureEvaluator`
+  (frame → Green/Amber/Red with first-class `ServerUntrusted` / `VersionMismatch` / `DriverDisconnected` states,
+  VII.6.1) and a `PostureService` with **flap/staleness** protection (keep-last + N-strikes; security verdicts
+  flip immediately). **16/16 unit tests green** (evaluator truth table, staleness, 24-byte interop layout).
+- **`SemanticsAr.App`** (WPF, .NET 10, WPF-UI 4.3.0 Fluent behind a design-system layer, CommunityToolkit.Mvvm):
+  standard-user (`asInvoker`) FluentWindow shell, 5-surface nav (Home = live Shield hero; Recovery = the
+  certainty-ladder legend; Activity/Response/Settings = honest "arrives later" placeholders); the Shield hero
+  bound to `PostureService` with the certainty **color+glyph+label** system, the static coverage line (IV.4), a
+  stale marker, and a UIA `LiveRegionChanged` announcement on posture change. Builds clean (0/0); smoke-launched
+  (mitigations + tray + palette + posture, no crash).
+- **Research-firm areas closed on-host, no VM residual (this session):**
+  - **P0-C process mitigations** (`ProcessHardening`): `SetProcessMitigationPolicy` at startup —
+    ImageLoad `NoRemoteImages|NoLowMandatoryLabelImages|PreferSystem32Images` + `ExtensionPointDisable`
+    (=6/=10 verified); ACG/signature policy deliberately **not** set (incompatible with the .NET JIT). App
+    runs clean with them applied.
+  - **P1-D tray** (`TrayIconController`, H.NotifyIcon.Wpf 2.4.1): resident tray, **distinct-shape** GDI icons
+    per posture level (circle/triangle/square — shape not color alone, VIII.4), tooltip, context menu, and the
+    must-reach = bring-own-window-to-front pattern (toast channel decision deferred — WinAppSDK-vs-classic COM
+    is a genuine open ADR, not research-firm).
+  - **P1-E palette + a11y**: theme-paired light/dark status tokens with High-Contrast deference to
+    `SystemColors`, live re-apply on `ApplicationThemeManager.Changed`; the three reusable **certainty-ladder
+    rung components** (`CertaintyChip`: Definitive/Bounded/Unrecoverable, color+glyph+label) established now and
+    shown on the Recovery surface.
+  - **P1-F sarapi behavior** (`SarApiIntegrationTests`, host, no VM): the real `sarapi.dll` is exercised —
+    ABI-load via the resolver, unreachable→`PipeUnavailable`, and the security-critical **anti-squat: a live
+    non-SYSTEM server → `SERVER_UNTRUSTED`**. The positive no-UAC green read is structurally guaranteed by the
+    DACL+filtered-token semantics (P1-F research) and requires the driver+service (product integration, not a
+    seam-correctness residual). **19/19 tests green.**
+- **Constitution VII.3.2 written (as-if-original):** the two-endpoint operator-surface authority split
+  (elevated token-authorized control plane vs. posture-only INTERACTIVE-readable endpoint), the redaction/
+  projection discipline, and the client-verifies-server rule — this **satisfies the "normative home still owed"**
+  item for the posture split (INTERACTIVE is correctly the `S-1-5-4` group, not a per-logon SID).
+- **Build:** `sarapi` via the root CMake (`build_fe`, VS2022/MSVC); the managed side via `frontend/SemanticsAr.slnx`
+  (`dotnet build -c Release`, `dotnet test`). `.gitignore` updated (`build_fe/`, `bin/`, `obj/`).
+- **Visual design (Claude Design / DesignSync) — HANDED OFF, not executed.** The pixel-level "trust-bank"
+  visual spec (Charter Part VIII) was deliberately **not authored**; what ships is engineering-grade,
+  **provisional** styling. DesignSync can't run in a non-interactive session (needs `/design-login`).
+  *Successor:* authorize (`/design-login`, or Claude Design "Send to Claude Code Web"), target a
+  `PROJECT_TYPE_DESIGN_SYSTEM` project, author the HTML/`@dsCard` bundle under `frontend/design/`, sync
+  incrementally (`finalize_plan`→`write_files`, one component at a time). The design must **formalize or
+  supersede** these provisional in-code decisions, staying in sync with the real states (do not invent
+  states the backend cannot produce): status tokens `SemanticsAr.App/Design/ThemePalette.cs` (CVD-simulator
+  sign-off owed); certainty rungs `Controls/CertaintyChip.xaml.cs` (glyphs `✓/⌛/∅` are placeholders);
+  the Home/Shield verdict+copy matrix in `ViewModels/HomeViewModel.cs`; tray glyphs in `TrayIconController.cs`;
+  and it must preserve the wired accessibility (UIA live-region, High-Contrast deference, color+icon+label).
+  **Anti-anchoring:** the shipped **XAML layout/typography (`HomeView.xaml` etc.) and the English copy are a
+  functional placeholder, NOT a design baseline** — redesign the composition from the Charter and treat the
+  current visual arrangement as disposable; the copy re-enters claims review (X.1) and is not final. What is
+  binding is the Charter (IA, ladder, posture, a11y) and the real *state set*, not my pixels or wording.
+  **Scope/priority is the successor's** (Charter names Home/Shield #1).
+- **Remaining in the frontend phase (each its own slice, NOT research-firm-closable here):** tiered toast
+  notifications (III.3/VIII.5 — open ADR: WinAppSDK `AppNotificationManager` vs. classic COM toast identity for a
+  plain-exe); the elevated control path + itemized reads + consequential verbs (Recovery/Response/Settings) over
+  the hardened control pipe via fresh COM elevation (VII.4.1); **posture enrichment** (capacity / oldest-protected
+  expiry / recorded descents / redacted event stream) — a DRIVER-side projection slice needing full VM regression;
+  push/journal (precond. 2) and the incident data contract (precond. 4); a CVD-simulator sign-off of the palette
+  values (empirical, not blocking); signing/packaging (precond. 5). The positive **green** no-UAC read is a
+  product-integration smoke that needs the driver+service live (structurally guaranteed already); the driver stays
+  untouched so VM remains **19/19**.
+
 **Constitution note (this session):** a full internal-consistency audit was done and the drift artifacts fixed
 in-place (as-if-original, no normative change): the ENFORCE block-trigger count now reads **three**
 (forward/phantom/capacity) in V.1.1 **and** the Part XI checklist, matching V.1.2/VIII.4.3; the keystore record
