@@ -378,8 +378,8 @@ verification tag. This is the same non-secret tuple the post-conviction notifica
 already carries (II.5), pulled on demand rather than pushed; enumeration therefore widens
 the recovery exchange of III.1.2 by exactly these non-secret fields and by nothing else,
 and III.1.2's "key identifier, target path, status only" continues to bind the *recovery*
-exchange unchanged. Because the keystore holds one record per encrypted file (II.5.1), the
-catalog enumerates one entry per captured file, so a reused key's whole recoverable set is
+exchange unchanged. Because the keystore holds one record per encrypted region (II.5.1), the
+catalog enumerates one entry per captured region, so a reused key's whole recoverable set is
 visible, not just a single representative. The preservation store is enumerated the same way
 (III.5.6): per held original the kernel projects only the non-secret {provenance path, region
 offset and length, capture time, age, size, status}, never the preserved bytes — so the
@@ -439,7 +439,7 @@ direction's analogue of the Oracle's forward proof: conviction never trusts a ke
 The tag is a hash of a bounded original sample, never the sample itself — a check value
 with no recovery role, and not a preserved original (III.1.1). It rides in the keystore
 record and is covered by that record's keyed MAC (VII.1.1), and the Oracle captures one
-for each file it observes, so each file recovers against its own anchor. Where recovery
+for each region it observes, so each region recovers against its own anchor. Where recovery
 is directed at a target for which no verification anchor was captured, it declines rather
 than perform an unverifiable destructive replace — the same honest edge as the confirmed
 limit (IX.2): the system replaces only what it can prove it is restoring.
@@ -733,7 +733,7 @@ on** in both modes. The mode governs only whether the system blocks autonomously
   it is the posture for discovering the whitelist and minimizing false positives, not a
   protective guarantee.
 - **ENFORCE** — observe; capture keys; preserve; and **block the originator's further
-  destructive writes** on either of the two triggers of V.1.2. The already-written,
+  destructive writes** on any of the three triggers of V.1.2. The already-written,
   key-captured or held files remain recoverable.
 
 The transition between modes is the **user's policy decision**. The system never infers
@@ -870,6 +870,20 @@ only inside the single bounded boot-time unsealing window of VII.1.2, and where 
 platform cannot seal it its persisted secrecy descends to that same boundary and is
 recorded.
 
+**[DECISION] VII.1.2.** The seal is rooted in the platform, never synthesized in
+software. A Windows kernel driver has no TPM access — the TPM is reached only through
+user-mode TBS — so where the platform provides a TPM the MAC / keystore key is
+**TPM-sealed under a PCR policy and unsealed once at boot by the PPL-protected
+service**, which delivers it to the kernel over the authenticated comm channel
+(VII.3) and zeroizes its user-mode copy immediately; the gating application-PCR is then
+extended so no later code can re-unseal it in that boot session. Where a VBS enclave is
+present it may hold the sealing key in VTL1 in place of that service window. The
+external rollback anchor (`{generation, head_mac}`) is held apart from the keystore
+file — in a TPM monotonic-counter NV index where available, else in the sealed key
+blob. Where neither a TPM nor a VBS enclave is present, the regression terminates at
+the highest residence the platform allows and the system records that the
+hardware-rooted guarantee is not claimed there (VII.5).
+
 **[DECISION] VII.1.3 — The preservation store is encrypted at rest under the same kernel-held seal.**
 The preservation store holds plaintext copies of user originals and is far larger than the
 keystore, so it lives on disk, not in pool. It is **encrypted at rest in the kernel** — the
@@ -909,20 +923,6 @@ them. Three mechanisms, each bounded honestly:
   reversibility, not a false claim of protection. This is the recorded edge where on-host
   holding ends and off-host immutability — a different product — begins; the keystore, being
   tiny, survives more readily, and a captured key recovers without the store at all.
-
-**[DECISION] VII.1.2.** The seal is rooted in the platform, never synthesized in
-software. A Windows kernel driver has no TPM access — the TPM is reached only through
-user-mode TBS — so where the platform provides a TPM the MAC / keystore key is
-**TPM-sealed under a PCR policy and unsealed once at boot by the PPL-protected
-service**, which delivers it to the kernel over the authenticated comm channel
-(VII.3) and zeroizes its user-mode copy immediately; the gating application-PCR is then
-extended so no later code can re-unseal it in that boot session. Where a VBS enclave is
-present it may hold the sealing key in VTL1 in place of that service window. The
-external rollback anchor (`{generation, head_mac}`) is held apart from the keystore
-file — in a TPM monotonic-counter NV index where available, else in the sealed key
-blob. Where neither a TPM nor a VBS enclave is present, the regression terminates at
-the highest residence the platform allows and the system records that the
-hardware-rooted guarantee is not claimed there (VII.5).
 
 ### VII.2 Kernel-pool secrecy precondition
 **[DECISION] VII.2.1.** Reading the minifilter's pool from user mode requires
@@ -1084,7 +1084,7 @@ the device prefix (`\Device\<volume>\`, when present) is stripped and any traili
 separator is removed, yielding the volume-relative path with no trailing separator
 (`\docs`). The per-volume `volume_secret` keeps names unique within the volume despite the
 dropped prefix; cross-volume name reuse is immaterial because backing files redirect
-per-directory (VIII.7) and conviction is per-process (VIII.4.4).
+per-directory (VIII.7) and conviction is per-process (VIII.4.5).
 
 > **[NEGATIVE] VIII.2.1.2** Do not derive the name from the full device path at either
 > site. The pre-create site cannot reconstruct the device prefix, so a full-path derivation
@@ -1246,7 +1246,7 @@ the convicted process. The Oracle remains the definitive evidence channel; phant
 conviction is the behavioral fallback. It proves *indiscriminate file modification*, not
 *encryption*; recovery depends on the Oracle's key or the preservation window.
 
-**[INVARIANT] VIII.4.4a — Blocking a convicted originator is full destructive containment.**
+**[INVARIANT] VIII.4.4 — Blocking a convicted originator is full destructive containment.**
 Under ENFORCE, blocking a phantom-convicted (or otherwise blocked, V.1) originator denies
 **every** path by which it could destroy an existing original, not writes alone: content
 writes (IRP_MJ_WRITE), truncating opens (IRP_MJ_CREATE with a SUPERSEDE / OVERWRITE /
@@ -1257,7 +1257,7 @@ a convicted actor could still zero or remove a file; closing all three is what m
 containment complete. Decoy backing writes by an unconvicted process are exempt from the
 protected-store guard and proceed normally so the deception remains convincing (VIII.3.1).
 
-**[DECISION] VIII.4.4 — Evidence counter is process-scoped and monotonic.**
+**[DECISION] VIII.4.5 — Evidence counter is process-scoped and monotonic.**
 The counter follows the process, not the thread. It is monotonic: no event decreases it;
 process exit zeroes it. Child processes do not inherit the parent's counter. A process
 that spawns children to distribute touches achieves nothing: each child that touches K
@@ -1596,9 +1596,10 @@ An implementation is constitutional iff all hold.
 
 **The heart (Parts I, II, III)**
 - [ ] Response strength is graduated to evidence certainty: a captured key (definitive) →
-      unbounded recovery + block at first instance; an uncaptured destruction (circumstantial)
-      → bounded reversible preservation + block only at capacity; nothing responds beyond its
-      evidence (I.1).
+      unbounded recovery + block at first instance; a phantom conviction (behavioral) → block on
+      indiscriminate destruction; an uncaptured destruction (circumstantial) → bounded reversible
+      preservation + block only at capacity exhaustion; nothing responds beyond its evidence
+      (I.1, V.1.2).
 - [ ] Conviction is forward-only (`Encrypt_K(destroyed original) == written`); the
       reverse never convicts; the system cannot convict its own recovery (II.2).
 - [ ] The Oracle anchors capture to the writer but reads its memory off the IRP: a prompt
@@ -1623,15 +1624,16 @@ An implementation is constitutional iff all hold.
       for a rename/hardlink-replace destination), one copy per (file, region), first-write-wins,
       never overwriting a held original with what destroys it; it triggers on every IV.1.2
       destruction member and never blocks (III.5.1–III.5.3).
-- [ ] The window is bounded by a time + capacity resource envelope; reclamation is by age;
-      restore is operator-directed, verified, and metadata-preserving, and the store never
-      leaves the kernel (III.5.5, III.5.6).
+- [ ] The window is bounded by a time + capacity resource envelope across two pools — protected
+      holds reclaimed by retention age alone, probation holds yielding silently newest-first-kept
+      under capacity pressure; restore is operator-directed, verified, and metadata-preserving, and
+      the store never leaves the kernel (III.5.5, III.5.6).
 - [ ] Recovery decrypts in kernel; neither the captured key nor the recovered plaintext is
       exported to user mode; the port carries only key_id + target path + status, and the
       writeback is a metadata-preserving atomic replace (III.1.2).
-- [ ] Enumeration projects only the non-secret {key_id, algorithm, mode, provenance} tuple
-      from the keystore, post-handshake, with no user-mode catalog shadow; one entry per
-      captured file (III.1.3).
+- [ ] Enumeration projects only the non-secret {key_id, algorithm, mode, provenance offset,
+      provenance path} tuple from the keystore, post-handshake, with no user-mode catalog shadow;
+      one entry per captured region (III.1.3).
 - [ ] Recovery verifies each captured region against its own capture-time tag and writes
       back only passing regions, leaving every other byte exactly as on disk (so an
       intermittently encrypted file's plaintext spans are never corrupted); if no region
@@ -1654,9 +1656,11 @@ An implementation is constitutional iff all hold.
 **Response and authority (Part V)**
 - [ ] Capture is always on; mode (AUDIT / ENFORCE) governs blocking only; the mode
       transition is the user's, never inferred (V.1).
-- [ ] Under ENFORCE a block originates from exactly two triggers: a forward conviction at first
-      instance (definitive), or preservation capacity exhaustion (circumstantial, key-less, the
-      cautious extreme); the blocked set is behavioral; no other quantity blocks (V.1.2).
+- [ ] Under ENFORCE a block originates from exactly three triggers: a forward conviction at first
+      instance (definitive); a phantom conviction on K ≥ 3 indiscriminate decoy writes (behavioral,
+      stronger than capacity, weaker than the key proof); or preservation capacity exhaustion
+      (circumstantial, key-less, the cautious extreme); the blocked set is behavioral; no other
+      quantity blocks (V.1.2).
 - [ ] The preservation window's time + capacity bounds are a user-ownable resource envelope,
       not a detection knob (V.1.3, 0.5).
 - [ ] Whitelist is a full exemption (no capture, no adjudication); it is a user-owned
@@ -1729,21 +1733,3 @@ An implementation is constitutional iff all hold.
       to runtime configuration (0.2, 0.5).
 - [ ] No CLOSED conclusion is reopened on a basis already inside the boundaries of
       Part IX (0.3).
-
----
-
-### Closing note (non-normative)
-
-This document has one load-bearing sentence (Part I) and nothing that contradicts it: the
-strength of the response is proportional to the certainty of the evidence. The gate asks one
-question; the Oracle answers it by capturing a key, and where it does the key recovers every
-file under it without bound; where the key is too fleeting to catch, the original the attacker
-had to read is held aside in a bounded window so the destruction can be undone; where the
-attacker walks files indiscriminately, virtual witnesses that it cannot distinguish from real
-files detect the pattern and the system blocks the walker; the user decides when proven,
-capacity-exhausting, or behaviorally convicted destruction is an attack; and where neither the
-key nor a held original remains, the system says so instead of pretending otherwise. The two
-recovery assets are ranked, not redundant — the definitive key capture and the bounded
-reversible hold — and the behavioral witness is orthogonal to both, providing evidence for
-conviction but never for recovery. Nothing in the system responds more strongly than the
-evidence it has.

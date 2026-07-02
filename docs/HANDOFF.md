@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — Two-asset model (Oracle + Preservation) implemented (2026-06-26)
+# Handoff — semantics-ar Windows realization — backend VM-verified 19/19; frontend design ratified (`docs/EXPERIENCE_CHARTER.md`), implementation is the next phase (2026-07-02)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
@@ -71,10 +71,72 @@ benign false-positives 0 under AUDIT/ENFORCE/high-novelty, capacity fail-closed,
 green (`cmake --build build_win`; run `build_win/tests/Debug/test_*.exe`). Driver builds clean via
 `scripts/build_driver.bat`.
 
-### 0.2 NEXT PHASE — the operator frontend (state only; its design is the successor's)
+### 0.2 NEXT PHASE — the operator frontend: DESIGN COMPLETE; implementation is the successor's
 
-> This section records **what exists** for a frontend to attach to. It deliberately gives **no** frontend
-> architecture, language, UX, transport choice, or method — those are the successor's to decide.
+> The frontend **design** is done and ratified in `docs/EXPERIENCE_CHARTER.md` (v1.0) — a charter
+> **subordinate to the Constitution** that governs the operator surface (philosophy, IA, hero flows,
+> platform/transport decisions, claims discipline, accessibility). The successor **implements** it.
+> Design rationale and the frontier-design research behind it live in the charter; do not restate them.
+> This section records the design outcome, the concrete **backend preconditions** the design requires,
+> and the operator-surface state that already exists.
+
+**Design outcome (binding detail in `docs/EXPERIENCE_CHARTER.md`):**
+- Spine = the **certainty ladder** — DEFINITIVE (Oracle, verified/unbounded) / BOUNDED (preservation, per-item
+  expiry, honest by pool) / UNRECOVERABLE (stated, per Const. IX.2) — the UI translation of graduated response.
+  Recovery is **incident-centric** (not a periodic time-scrub); absolute claims attach only to the per-file
+  verified mechanism; the **coverage boundary** (remote/network encryption + exfil-only are outside the Oracle's
+  reach → degrade to bounded/behavioral) is shown, not implied.
+- Stack = **WPF on .NET 10 LTS**, signed plain-exe; a thin native **`sarapi` C interop DLL** wraps the pipe
+  protocol for .NET; standard-user app + system tray; **fresh per-action elevation** (COM Elevation Moniker),
+  **no resident elevated broker**. (Electron/Tauri rejected — web attack surface + Win11 Administrator-Protection
+  WebView2 de-elevation.)
+- IA = 5 surfaces (Home/Shield · Recovery · Activity/Detections · Response/Policy · Settings) + tray + tiered
+  notifications (silent log / toast / modal-for-decisions & integrity halts).
+
+**Backend preconditions the design requires (NEW work — none exist yet; normative home = a Const. Part VII
+amendment / the backend docs, per EXPERIENCE_CHARTER VII.0):**
+1. **Split the control IPC by data sensitivity.** Today's pipe is SYSTEM+Admin-only, `nMaxInstances=1`,
+   synchronous — so a Medium-IL tray gets ACCESS_DENIED (filtered token → Administrators deny-only), forcing UAC
+   on every read, and a resident GUI head-of-line-blocks behind the CLI. Add a **posture-only read endpoint**
+   (DACL readable by the interactive logon session, **read not write** — note `FILE_APPEND_DATA` ==
+   `FILE_CREATE_PIPE_INSTANCE`) carrying mode/health/counts/capacity/oldest-protected-expiry + a **redacted**
+   event stream (event class + timestamp + convicted-process identity — **never** file paths, key_ids, provenance,
+   or phantom identities). Keep the existing full-control pipe for **itemized reads (catalog/preserve-list) and
+   all mutating verbs**, elevation-gated. Harden both: raise max instances, async serve,
+   `FILE_FLAG_FIRST_PIPE_INSTANCE` (anti-squat; pre-existing name = tamper), authorize by **token**
+   (`ImpersonateNamedPipeClient` + genuine elevated token), never by PID/image name (spoofable).
+2. **Push + journal.** Re-publish `VERDICT_NOTIFY` (+ block/phantom events) to a subscribe channel on the read
+   endpoint, and persist a bounded, integrity-checked, **redacted** event journal (answers "what happened while I
+   was away"; v1 degrades to polling).
+3. **`STATUS` read op** (posture) + surface **`WHITELIST_ADD/REMOVE`** with an add-time identity-resolve helper
+   (chosen exe → image path + signature subject + content hash). Preserve-hold expiry is derivable client-side
+   (`capture_time` + budget + pool `status`, already projected).
+4. **Incident data contract** (for incident-centric recovery, EXPERIENCE_CHARTER X.6): catalog entries carry no
+   capture timestamp and no convicted-actor identity today — add both **within the III.1.3 projection discipline**
+   so events group into incidents with a detection-time anchor.
+5. **Signing = two trust chains, long lead time:** app → Authenticode (Azure Trusted Signing OK); **driver → EV
+   cert + Windows Hardware Developer Program attestation/WHQL + MS co-sign + MS-allocated altitude** (385000 is a
+   placeholder). Trusted Signing **cannot** sign the driver. SmartScreen reputation still accrues per-cert.
+
+**Immediate next steps for the successor (frontend implementer):**
+- Produce the UI/UX with **claude design (DesignSync)** per the charter — priority: Home/Shield posture hero,
+  Recovery hero flow (certainty ladder + verified restore report), Activity feed + forensic drill-down,
+  Response/Policy, first-run onboarding.
+- Build the WPF app + `sarapi` interop; implement the backend preconditions above; wire end-to-end; then
+  re-run `scripts/vm_verify_coverage.ps1 -AttackCount 6` (expect 19/0) to confirm no backend regression.
+- Close EXPERIENCE_CHARTER open items with evidence: **X.1–X.7** (claims pre-clearance; read-endpoint DACL +
+  multi-session; remote-origin incident labeling; self-protection posture surfacing; footprint; incident
+  definition; perf/keyboard budgets).
+
+**Constitution note (this session):** a full internal-consistency audit was done and the drift artifacts fixed
+in-place (as-if-original, no normative change): the ENFORCE block-trigger count now reads **three**
+(forward/phantom/capacity) in V.1.1 **and** the Part XI checklist, matching V.1.2/VIII.4.3; the keystore record
+model reads **per-region** everywhere (III.1.3/III.4/Part XI), matching II.5.1; the Part XI preservation bullet
+states the **two-pool** reclamation (III.5.5); VII.1 and VIII.4 clause numbering was put in order
+(VIII.4.4a→4.4, old 4.4→4.5, one cross-ref updated); the non-normative closing note was removed. Backend behavior
+is unchanged and remains **VM-verified 19/19**.
+
+> The remainder of this section records **what exists** for the frontend to attach to.
 
 **The operator surface that exists today.** The only operator client is the CLI `tools/sarctl.c`. It speaks to
 the service over a **local message-mode named pipe** `SAR_CONTROL_PIPE_NAME`
