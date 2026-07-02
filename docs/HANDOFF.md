@@ -93,8 +93,9 @@ green (`cmake --build build_win`; run `build_win/tests/Debug/test_*.exe`). Drive
 - IA = 5 surfaces (Home/Shield · Recovery · Activity/Detections · Response/Policy · Settings) + tray + tiered
   notifications (silent log / toast / modal-for-decisions & integrity halts).
 
-**Backend preconditions the design requires (NEW work — none exist yet; normative home = a Const. Part VII
-amendment / the backend docs, per EXPERIENCE_CHARTER VII.0):**
+**Backend preconditions the design requires (normative home = a Const. Part VII amendment / the backend docs,
+per EXPERIENCE_CHARTER VII.0). Preconditions 1 and 3 LANDED this session — see "Backend-precondition
+realization" below; 2, 4, 5 remain:**
 1. **Split the control IPC by data sensitivity.** Today's pipe is SYSTEM+Admin-only, `nMaxInstances=1`,
    synchronous — so a Medium-IL tray gets ACCESS_DENIED (filtered token → Administrators deny-only), forcing UAC
    on every read, and a resident GUI head-of-line-blocks behind the CLI. Add a **posture-only read endpoint**
@@ -117,6 +118,50 @@ amendment / the backend docs, per EXPERIENCE_CHARTER VII.0):**
 5. **Signing = two trust chains, long lead time:** app → Authenticode (Azure Trusted Signing OK); **driver → EV
    cert + Windows Hardware Developer Program attestation/WHQL + MS co-sign + MS-allocated altitude** (385000 is a
    placeholder). Trusted Signing **cannot** sign the driver. SmartScreen reputation still accrues per-cert.
+
+**Backend-precondition realization — LANDED this session (the VM-verified 19/19 driver is UNTOUCHED; both
+slices are user-mode-service-only, so no full attack-matrix regression was needed — verified live on SarTarget):**
+- **Precondition 1 (control-IPC split + hardening) — DONE.** New reusable async multi-instance overlapped pipe
+  server `service/pipe_server.{c,h}` (`FILE_FLAG_FIRST_PIPE_INSTANCE` anti-squat, fail-closed on a pre-existing
+  name; stop-aware overlapped I/O helpers; bounded instances). Posture-only endpoint
+  `\\.\pipe\SemanticsAr.Posture` (DACL `D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)` — INTERACTIVE gets
+  read+write-attrs, **not** `FILE_CREATE_PIPE_INSTANCE`) serves the `STATUS` snapshot {protocol_version,
+  service/driver health flags, mode, captured_key_count} only — no paths/key_ids/provenance. The control pipe
+  `\\.\pipe\SemanticsArControl` is now async multi-instance + `FILE_FLAG_FIRST_PIPE_INSTANCE` + **token
+  authorization** (`ImpersonateNamedPipeClient` → `CheckTokenMembership(BUILTIN\Administrators)` →
+  `RevertToSelf`, read-first so the client has written); driver access serialized behind a `CRITICAL_SECTION`
+  (preserves the kernel recovery non-re-entrancy invariant). `sar_control_listener_start` now returns int and
+  starts BOTH endpoints; `..._stop` takes void. `sarctl status` reads posture WITHOUT elevation. VM-verified:
+  service handshakes + both listeners up; status / list / mode(enforce↔audit cached-refresh) / budget /
+  preserve-list pass; live-DACL read confirms X.2 (INTERACTIVE read grant with no create-instance; control
+  excludes non-admins) — the applied DACL is itself the structural proof (a headless PS-Direct cross-user
+  launch cannot reach an interactive desktop → `0xC0000142`, so a positive live standard-user *interactive*
+  read is deferred to a future GUI-integration test).
+- **Precondition 3 (whitelist surface + add-time resolve) — DONE.** `SAR_CTL_OP_RESOLVE_IDENTITY` returns a
+  non-committing preview {image path, signer subject, content SHA-256, verdict} reusing
+  `identity.c sar_identity_evaluate`; `sar_control_reply_t` gained a `resolved` field. `sarctl` surfaces
+  `resolve` / `whitelist-add` / `whitelist-remove` (the driver dispatch already existed). VM: msedge.exe →
+  verified + "Microsoft Corporation" + hash → whitelist-add result=0; catalog-signed notepad.exe → unsigned →
+  rejected (existing verified-only policy). **Direction validated vs WDAC/AppLocker (deep-research, MS primary
+  sources):** for a DISARM (Const. V.2 "stop protecting"), the AND(path ∧ signer ∧ full-file-hash) composition
+  and the full-file (NOT Authenticode) hash are the correct INVERTED trade-off — brittleness = fail-safe
+  re-protection, opposite of execution allow-listing where publisher rules survive updates; signer CN is
+  adequate because the exact-hash AND is the load-bearing binding.
+
+**Backend-precondition follow-up backlog (each a separate role-bounded slice):**
+- **identity.c catalog-signature fallback** — realization refinement (NOT a direction fix): verify is
+  embedded-only (`WTD_CHOICE_FILE`) so catalog-signed apps read "unsigned"; Microsoft's documented pattern is
+  catalog lookup (`CryptCATAdminCalcHashFromFileHandle` / `CryptCATAdminEnumCatalogFromHash`) → fall back to
+  embedded. Coverage gain, no security loss; the primary target (embedded-signed third-party apps) already works.
+- **Posture enrichment** (preserve capacity / oldest-protected-expiry, pool status, platform descents) and the
+  **incident data contract** (precondition 4: catalog `capture_time` + convicted-actor identity) both need NEW
+  driver-side projection → **DRIVER change + full VM regression** (`vm_verify_coverage.ps1 -AttackCount 6` → 19/0).
+- **Push + event journal** (precondition 2) — opens a user-mode integrity / secret-management axis; the posture
+  frame already carries an opcode header (`frame_type` / `frame_length`) for a future subscribe stream (v1
+  degrades to polling per EXPERIENCE_CHARTER VII.3.3).
+- **Normative home still owed**: the posture-endpoint authority split + redaction discipline + the two new
+  projected fields need a **Constitution Part VII amendment** (as-if-original, per EXPERIENCE_CHARTER VII.0) —
+  not yet written.
 
 **Immediate next steps for the successor (frontend implementer):**
 - Produce the UI/UX with **claude design (DesignSync)** per the charter — priority: Home/Shield posture hero,
