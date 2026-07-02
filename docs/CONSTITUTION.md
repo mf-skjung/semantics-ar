@@ -863,46 +863,59 @@ read without kernel-code execution, by the CPU's user/kernel privilege boundary
 (VII.2). The on-disk keystore (needed because recovery may occur after the attack or
 after reboot) is **integrity-sealed with a keyed MAC computed and verified in kernel**,
 is append-oriented, and is tamper-evident so that any edit, reorder, truncation, or
-rollback of captured keys is detected on load (the external anchor of VII.1.2 closes
-rollback). **Confidentiality of the on-disk copy is exactly the strength of the
-platform seal:** where the platform seals the key (VII.1.2) the records are encrypted
-under that sealed key and an attacker without kernel-code execution cannot read
-captured keys; where the platform cannot seal, the on-disk copy is integrity-protected
-but its confidentiality descends to the kernel-line boundary and the descent is
-recorded (VII.5). The live in-kernel copy is confidential by the privilege boundary
-regardless, and no operation exports a captured key to user mode — recovery itself
-decrypts in kernel (III.1.2). The MAC key is held in kernel pool; it exists in user mode
-only inside the single bounded boot-time unsealing window of VII.1.2, and where the
-platform cannot seal it its persisted secrecy descends to that same boundary and is
-recorded.
+rollback of captured keys is detected on load (the anchor of VII.1.4 closes rollback
+detection). The MAC key is generated in kernel with the platform RNG and persisted to
+disk alongside the keystore (VII.1.2). The live in-pool copy is confidential by the
+privilege boundary regardless of platform, and no operation exports a captured key to
+user mode — recovery itself decrypts in kernel (III.1.2). The on-disk copy of the MAC
+key is bounded by that same privilege line, not beyond it: an in-scope actor who
+reaches SYSTEM without kernel-code execution can read it directly off disk, exactly as
+it can read any file SYSTEM is entitled to. This is a drawn line, not an oversight —
+VII.1.2 gives the reasoning.
 
-**[DECISION] VII.1.2.** The seal is rooted in the platform, never synthesized in
-software. A Windows kernel driver has no TPM access — the TPM is reached only through
-user-mode TBS — so where the platform provides a TPM the MAC / keystore key is
-**TPM-sealed under a PCR policy and unsealed once at boot by the PPL-protected
-service**, which delivers it to the kernel over the authenticated comm channel
-(VII.3) and zeroizes its user-mode copy immediately; the gating application-PCR is then
-extended so no later code can re-unseal it in that boot session. Where a VBS enclave is
-present it may hold the sealing key in VTL1 in place of that service window. The
-external rollback anchor (`{generation, head_mac}`) is held apart from the keystore
-file — in a TPM monotonic-counter NV index where available, else in the sealed key
-blob. Where neither a TPM nor a VBS enclave is present, the regression terminates at
-the highest residence the platform allows and the system records that the
-hardware-rooted guarantee is not claimed there (VII.5).
+**[BOUNDARY] VII.1.2 — On-disk key confidentiality stands at the kernel-privilege
+line; a hardware root was evaluated and is not pursued.** A hardware-rooted seal
+(unsealed once at boot by a PPL-protected service and delivered to the kernel over the
+authenticated comm channel) would close the one gap the SYSTEM-without-kernel-code
+actor still has against the keystore: reading the on-disk key blob directly. Two paths
+to it were evaluated and both declined, for different reasons. The TPM-native
+mechanism — a `TPM2_Create`/`TPM2_Unseal` sealed-data object bound to a PCR policy — is
+the correct primitive (CNG's key-centric NCrypt / Platform-Crypto-Provider surface has
+no seal-arbitrary-data-and-recover-it-in-the-clear operation, only key-protection
+primitives that never release raw bytes, so this needs raw TBS command construction),
+but it is a hand-built binary protocol with no local hardware to verify it against;
+shipping unverified security-critical wire-protocol code is a worse outcome than the
+gap it would close. VBS-backed key isolation (`NCRYPT_REQUIRE_VBS_FLAG`) was ruled out
+on a sharper ground: it is deliberately non-exportable by design — a VBS-protected key
+can be used for an operation but its raw bytes can never be retrieved, so it cannot
+deliver a symmetric key to the kernel at all, which this mechanism requires. A softer
+alternative — OS-level at-rest wrapping such as machine-scoped DPAPI — was also
+considered and declined on the sharpest ground of the three: machine-scoped DPAPI is
+unlockable by any SYSTEM-privileged process on the same machine, which is exactly the
+actor this boundary is about, so it would add complexity without narrowing the gap at
+all. No available mechanism was found that both closes this gap against the actor this
+document defines and can be implemented with confidence given the verification tools
+at hand; building one anyway would be defending past what can be verified, which 0.3
+already forbids. The MAC key and the preservation store key (VII.1.3) are therefore
+generated and persisted in kernel-controlled plaintext, exactly as every other
+kernel-generated secret in this system is. The live in-kernel copy, the tamper-evidence
+over the on-disk keystore, and the anti-deletion protection (both VII.1.4) are
+unaffected and hold regardless of this line.
 
-**[DECISION] VII.1.3 — The preservation store is encrypted at rest under the same kernel-held seal.**
+**[DECISION] VII.1.3 — The preservation store is encrypted at rest under a kernel-generated key.**
 The preservation store holds plaintext copies of user originals and is far larger than the
 keystore, so it lives on disk, not in pool. It is **encrypted at rest in the kernel** — the
 minifilter encrypts each held original with the platform's in-kernel symmetric primitives
 before it touches the disk and decrypts only in kernel during a restore (III.5.6), under a
-store key held in non-paged pool and rooted exactly as the keystore's MAC key is (VII.1.2):
-unsealed once at boot by the protected service, delivered over the authenticated port, never
-persisted in the clear. To any in-scope actor (user mode up to SYSTEM without kernel code) the
-store is therefore ciphertext — the same confidentiality the keystore has — and its plaintext
-is reachable only across the kernel line (IX.1). Each held original carries an integrity tag
-and its (file, region) binding (III.5.6) so a tampered or substituted entry is detected and not
-applied. The store key never leaves the kernel, and no operation exports a held original to
-user mode.
+store key held in non-paged pool and generated and persisted exactly as the keystore's MAC
+key is (VII.1.2). To a reader without SYSTEM privilege the store is opaque ciphertext; to an
+in-scope actor who reaches SYSTEM without kernel-code execution, the on-disk store key is
+reachable exactly as the keystore's MAC key is (VII.1.2) — the encryption defeats casual
+copying, off-host theft, and any non-SYSTEM reader, not a SYSTEM-privileged reader on the live
+host, and this is the same drawn line VII.1.2 gives, not a separate gap. Each held original
+carries an integrity tag and its (file, region) binding (III.5.6) so a tampered or substituted
+entry is detected and not applied. The store key never leaves the kernel except onto its own
+on-disk file, and no operation exports a held original to user mode.
 
 **[DECISION] VII.1.4 — Integrity, anti-deletion, and anti-rollback of the on-disk assets against a SYSTEM actor.**
 Both on-disk assets must survive an in-scope SYSTEM actor that can run the filesystem against
@@ -914,21 +927,25 @@ them. Three mechanisms, each bounded honestly:
   `vssadmin`/`wmic`/scripted-delete class).
 - **Tamper-evidence against offline edit.** Both files are sealed with a chained keyed MAC
   computed and verified in kernel, with an external freshness anchor (`{generation, head_mac}`)
-  committed at **coarse checkpoint boundaries** to a platform monotonic root where present
-  (TPM NV) or to the sealed-key blob where not. On load the anchor is compared to the chained
-  head; a mismatch **halts and alerts** rather than trusting rolled-back or edited state. The
-  anchor is committed at checkpoints, never per write, because a hardware monotonic root cannot
-  sustain per-write updates; the guarantee is detection of rollback, not its prevention.
+  committed at **coarse checkpoint boundaries** within the on-disk key blob itself. On load the
+  anchor is compared to the chained head; a mismatch **halts and alerts** rather than trusting
+  rolled-back or edited state. The anchor is committed at checkpoints, never per write, matching
+  the granularity at which the blob is rewritten; the guarantee is detection of rollback, not
+  its prevention — an actor who can both read and write the key blob (the SYSTEM-without-
+  kernel-code actor of VII.1.2) can in principle forge a self-consistent rolled-back state, the
+  same actor and the same gap VII.1.2 already declines to close, accepted for the same reasons.
 - **The honest residual (recorded, not closed).** A SYSTEM actor may lawfully dismount or lock
   the volume to reach the on-disk store beneath the minifilter without executing kernel code;
   the dismount is itself in IV.1.2 and is detected, and on remount the store's freshness is
   re-verified — but a SYSTEM actor determined to **destroy** the on-disk store can do so, as it
-  can destroy any on-host backup. Confidentiality (encryption) and integrity (tamper-evidence)
-  hold against this actor; **availability of the on-disk store does not fully hold against
-  SYSTEM**, and the system's answer there is detection and a truthful report of lost
-  reversibility, not a false claim of protection. This is the recorded edge where on-host
-  holding ends and off-host immutability — a different product — begins; the keystore, being
-  tiny, survives more readily, and a captured key recovers without the store at all.
+  can destroy any on-host backup, and a SYSTEM actor who reads the on-disk key (VII.1.2) can
+  also **read** the store's content, though not silently substitute it without detection.
+  Integrity (tamper-evidence) holds against this actor; **confidentiality and availability of
+  the on-disk store do not fully hold against SYSTEM**, and the system's answer there is
+  detection and a truthful report, not a false claim of protection. This is the recorded edge
+  where on-host holding ends and off-host immutability — a different product — begins; the
+  keystore, being tiny, survives more readily, and a captured key recovers without the store at
+  all.
 
 ### VII.2 Kernel-pool secrecy precondition
 **[DECISION] VII.2.1.** Reading the minifilter's pool from user mode requires
@@ -970,7 +987,7 @@ it owns the first instance of its name, and a pre-existing name is treated as ta
 to create a pipe instance), so a standard-user surface can show whether protection is healthy
 without forcing an elevation prompt. It projects only **non-secret posture** — protocol version,
 service and driver health, mode, aggregate captured-key count, the recorded platform descents
-(no hardware-sealed keystore, no VBS/HVCI, no protected-process self-protection — VII.5), the
+(no VBS/HVCI, no protected-process self-protection — VII.5), the
 **preservation-window health**, and a redacted event stream (event class, time, and
 convicted-process identity). Because the session-readable audience includes a possibly-hostile
 same-host process, no figure on this endpoint may hand a local adversary a precise eviction or
@@ -994,11 +1011,12 @@ kernel line (Part IX). It is **not** extended to arbitrary user processes, and i
 hijacked non-whitelisted process (VI.3.1).
 
 ### VII.5 OS-generation scoping
-**[INVARIANT] VII.5.1.** Each self-protection primitive (HVCI, TPM stack, PPL,
-Dev Drive policy) is detected at runtime. Where present it is used; where absent the
-dependent boundary descends exactly as far as the missing primitive would have raised
-it, and the descended posture is recorded **explicitly**. The recovery mechanism (key
-capture) does not depend on any of these and is unaffected.
+**[INVARIANT] VII.5.1.** Each self-protection primitive (HVCI, PPL, Dev Drive policy)
+is detected at runtime. Where present it is used; where absent the dependent boundary
+descends exactly as far as the missing primitive would have raised it, and the
+descended posture is recorded **explicitly**. TPM presence is detected and reported in
+posture but gates no primitive here (VII.1.2). The recovery mechanism (key capture)
+does not depend on any of these and is unaffected.
 
 > **[NEGATIVE] VII.5.2** Do not frame a missing platform primitive as a defect of this
 > system or of the OS, and do not synthesize a missing hardware guarantee in software.
@@ -1605,9 +1623,10 @@ kernel is resolved at runtime with a down-level alternative.
 - The driver is linked with `/integritycheck`; the boot-start signature is embedded in
   the `.sys`. Failure of the process-notify registration (which the
   identity-at-creation logic of V.2.2 depends on) is fatal-to-feature, not swallowed.
-- Self-protection primitives (HVCI, TPM 2.0 + kernel TBS, PPL, Dev Drive policy) are
-  runtime-detected; where present they are verified/configured, where absent the
-  dependent boundary descends (VII.5) and is recorded.
+- Self-protection primitives (HVCI, PPL, Dev Drive policy) are runtime-detected; where
+  present they are verified/configured, where absent the dependent boundary descends
+  (VII.5) and is recorded. TPM 2.0 presence is detected and reported in posture only;
+  no primitive in this system is conditioned on it (VII.1.2).
 - The protected service runs at the anti-malware PPL level via a signed ELAM driver that
   registers the service-binary signer (VII.3.1); where AM-PPL eligibility is absent the service
   runs unprotected and the descent is recorded (VII.5). The recovery assets do not depend on it.
@@ -1707,8 +1726,9 @@ An implementation is constitutional iff all hold.
       injection-detector is used as a gate (VI.3).
 
 **Self-protection (Part VII)**
-- [ ] Keystore is in kernel pool; the on-disk copy is keyed-MAC'd in kernel; it is
-      TPM-sealed where available and tamper-evident against key erasure (VII.1).
+- [ ] Keystore is in kernel pool; the on-disk copy is keyed-MAC'd in kernel and
+      tamper-evident against key erasure; its confidentiality is bounded at the
+      kernel-privilege line, a drawn boundary rather than an unfulfilled seal (VII.1).
 - [ ] The preservation store is encrypted at rest in kernel under a pool-resident sealed key;
       its plaintext never leaves the kernel; held entries are integrity-tagged and bound to
       (file, region) (VII.1.3).

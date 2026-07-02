@@ -22,3 +22,11 @@ target_include_directories(sarctl PRIVATE
 if(MSVC)
     target_compile_options(sarctl PRIVATE /W4 /WX)
 endif()
+
+add_executable(sar_install sar_install.c)
+set_target_properties(sar_install PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+target_compile_definitions(sar_install PRIVATE _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(sar_install PRIVATE /W4 /WX)
+endif()
+target_link_libraries(sar_install PRIVATE advapi32)

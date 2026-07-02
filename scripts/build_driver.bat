@@ -49,4 +49,13 @@ link /nologo /DRIVER /INTEGRITYCHECK /SUBSYSTEM:NATIVE,10.00 /ENTRY:DriverEntry 
   "%OUT%\*.obj" fltMgr.lib ntoskrnl.lib hal.lib ksecdd.lib cng.lib || ( echo LINK FAIL & exit /b 3 )
 
 echo === BUILD OK: %OUT%\semantics_ar.sys ===
+
+echo === compiling elam ===
+cl %CF% /Fo"%OUT%\elam.obj" "%REPO%\elam\elam.c" || ( echo COMPILE FAIL elam & exit /b 2 )
+echo === linking elam ===
+link /nologo /DRIVER /INTEGRITYCHECK /SUBSYSTEM:NATIVE,10.00 /ENTRY:DriverEntry /NODEFAULTLIB ^
+  /DEBUG /PDB:"%OUT%\semantics_ar_elam.pdb" /OUT:"%OUT%\semantics_ar_elam.sys" ^
+  "%OUT%\elam.obj" ntoskrnl.lib hal.lib || ( echo LINK FAIL elam & exit /b 3 )
+
+echo === BUILD OK: %OUT%\semantics_ar_elam.sys ===
 endlocal

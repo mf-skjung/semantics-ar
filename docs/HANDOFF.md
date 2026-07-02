@@ -1,17 +1,18 @@
 # Handoff — semantics-ar Windows realization — backend VM-verified 19/19; frontend design ratified (`docs/EXPERIENCE_CHARTER.md`), implementation is the next phase (2026-07-02)
 
 This is the single living handoff artifact for the chain that builds the Windows product
-against the clean Constitution. It supersedes and consolidates the scattered "Deferred (later
-slices)" / "Named deferrals" sections of `SLICE1_DESIGN.md`, `SLICE2_DESIGN.md`, and
-`SLICE3_DESIGN.md`. Read it after the Constitution and the four slice design docs. Each
-implementer updates it; the terminal implementer deletes it.
+against the clean Constitution. The `SLICE1_DESIGN.md` … `SLICE6_DESIGN.md` per-increment
+design docs this file used to supersede were themselves retired at commit `b6ee84b`, folded
+into `docs/CONSTITUTION.md` as ratified text; they no longer exist and are not to be
+recreated — this file and the Constitution are the only living design records now. Read this
+after the Constitution. Each implementer updates it; the terminal implementer deletes it.
 
 > Do not restate what the code or the slice design docs already show. This captures only the
 > chain state, the remaining units, and the traps.
 
 ---
 
-## 0. ACTIVE HANDOFF — passive capture-at-open (COO) landed; three units remain (read this first)
+## 0. ACTIVE HANDOFF — passive capture-at-open (COO) landed; self-protection (Unit 5) done, only Unit 4's named follow-ons + battery closure remain (read this first)
 
 ### 0.0 The constitutional trap that MUST NOT be repeated (read before touching the capture path)
 
@@ -70,6 +71,15 @@ benign false-positives 0 under AUDIT/ENFORCE/high-novelty, capacity fail-closed,
 **Host**: engine/keystore/keystore_mgr/preserve/gate/schedule/phantom/capture/recover/chassis/handshake all
 green (`cmake --build build_win`; run `build_win/tests/Debug/test_*.exe`). Driver builds clean via
 `scripts/build_driver.bat`.
+
+### 0.1a Self-protection (Part VII, Unit 5) — DONE against everything buildable pre-MVI-certificate (2026-07-02)
+Comm-port SD hardened to SYSTEM-only; a minimal ELAM driver (`elam/`) + installer (`tools/sar_install.c`)
+register the service for PPL-AM protected launch, gated so a missing certificate degrades to an ordinary
+unprotected start rather than a failed one; `scripts/package_driver.ps1` builds, self-signs (one dual-EKU
+test cert), and packages the whole chain end to end. Full detail, including two corrections caught before
+they shipped (Layer B must stay advisory, ELAM has no INF/PnP install path), is in unit 3 of §4 below.
+"Unit 3-Hardening" (TPM/VBS-rooted key confidentiality) was evaluated and deliberately **not** pursued —
+reasoning is now Constitution VII.1.2, not a backlog item.
 
 ### 0.2 NEXT PHASE — the operator frontend: DESIGN COMPLETE; implementation is the successor's
 
@@ -964,18 +974,23 @@ pass; not derivable from code):**
    uncompiled).** Cross-reboot survival now exists on every platform: the keystore + MAC key +
    external anchor persist to disk, are verified and restored at boot, and rollback/erasure/tamper
    are caught by the anchor state machine. The constitutional premise was corrected: a Windows
-   kernel driver has no TPM access, so VII.1.1/VII.1.2/VII.2.1 were rewritten (sealed-key unseal is
-   the PPL service's job; on-disk confidentiality and MAC-key secrecy descend and are recorded
-   where no TPM/VBS seal exists — VII.5). See `SLICE6_DESIGN.md`.
-   *Remaining — Unit 3-Hardening (VM-bound, raises the recorded descent to hardware-rooted):*
-   service-side TBS unseal of a TPM-sealed MAC key + IOCTL delivery to the kernel + application-PCR
-   cap; a TPM-NV-counter or VBS-enclave anchor; on-disk AEAD encryption of the records; and the
-   posture fields that report "rooted" vs "descended." *DoD:* on a TPM/VBS platform an attacker
-   without kernel-code execution cannot read captured keys off disk and cannot forge the store; the
-   bare-machine path keeps Core's recorded descent. *Deps:* Unit 3-Core (done); couples to Unit 5
-   (PPL) for the boot-time unseal window. *Remaining for Unit 3-Core itself:* only the VM behavioral
-   validations in `SLICE6_DESIGN.md` (boot-load timing, atomic-write power-loss, self-I/O skip) — it
-   already compiles + links against the real WDK.
+   kernel driver has no TPM access, so VII.1.1/VII.1.2/VII.2.1 were rewritten (on-disk key
+   confidentiality stands at the kernel-privilege line, VII.1.2).
+   *Remaining for Unit 3-Core itself:* only the VM behavioral validations (boot-load timing,
+   atomic-write power-loss, self-I/O skip) — it already compiles + links against the real WDK.
+   **"Unit 3-Hardening" (hardware-rooted sealing) — CLOSED, not deferred (2026-07-02).** Raising
+   the on-disk key's confidentiality past the kernel-privilege line was evaluated in depth and
+   deliberately not pursued; the reasoning is now the Constitution's own text (VII.1.2), not a
+   backlog item, so it is not re-opened here. In short: the correct TPM primitive for this
+   (`TPM2_Create`/`TPM2_Unseal` sealed-data object under a PCR policy) needs hand-built raw TBS
+   commands with no local TPM to verify them against; `NCRYPT_REQUIRE_VBS_FLAG` keys were
+   confirmed non-exportable by design (cannot deliver raw key bytes to the kernel at all, ruling
+   out VBS regardless of verification concerns); and machine-scoped DPAPI, the obvious low-risk
+   fallback, is unlockable by the same SYSTEM-without-kernel-code actor this boundary is about, so
+   it would add real complexity for no closed gap. No candidate cleared the bar of (a) real
+   protection against the actor this system defines and (b) confidence given the verification
+   tools at hand. Re-open only with new information — TSS.MSR vendored in, or real TPM/vTPM test
+   access — not by re-deriving the same tradeoff.
 2. **Windows recovery wiring (Unit 4) — CORE DONE (host-verified + compile/link-verified, unrun).**
    The optimal split ("Design C", recorded in §3) is implemented end-to-end for the dominant
    full-file provenance case: operator → service control pipe (`SAR_CTL_OP_RECOVER {key_id, target}`)
@@ -1003,11 +1018,40 @@ pass; not derivable from code):**
    before producing the temp. *DoD:* a wrong key can never overwrite a file. (d) **volume enumeration /
    recover-all** — a VERDICT_NOTIFY-fed catalog (key_id→provenance paths) + ReFS/same-volume specifics +
    residue clearing. *Deps:* Units 2/3-Core/6 (done).
-3. **PPL-AM / ELAM / MVI provisioning (Unit 5).** *Boundary:* the ELAM driver, MVI membership,
-   and PPL-AM service launch that turn comm-port auth Layer B from "queried + recorded" into
-   "enforced," and protect the service against injection (VII.4). *DoD:* the service runs PPL-AM
-   where the platform supports it; absence still degrades to Layer A + recorded posture. *Deps:*
-   none on the others; independently schedulable.
+3. **PPL-AM / ELAM / MVI provisioning (Unit 5) — DONE against everything buildable without the
+   real MVI certificate (2026-07-02); COMPILE_OK/LINK_OK/SIGN_OK verified end-to-end.**
+   Comm-port SD hardened from the FLT default (SYSTEM + Administrators) to SYSTEM-only
+   (`driver/commport.c SarBuildPortSecurity`, manual `RtlCreateSecurityDescriptor`/
+   `RtlAddAccessAllowedAce` — `ntifs.h` combines cleanly with `fltKernel.h` in this WDK, confirmed
+   by a real build, not assumed). Layer B (`SarQueryConnectorProtection`) stays advisory-only, by
+   design, permanently — an earlier draft of this unit planned to make it a hard gate on the
+   comm-port connection; that was wrong and was caught before implementation: VII.3.1 states
+   PPL's absence "is never claimed as a guarantee against SYSTEM" and recovery must not depend on
+   it, so gating the connection on it would have bricked every non-certified deployment exactly
+   like the `StartService` trap below. A new minimal ELAM driver (`elam/elam.c`, no third-party
+   driver classification logic — out of scope per VI.3.2, not needed for our own PPL-AM
+   registration) carries the `MicrosoftElamCertificateInfo` resource. **Corrected assumption:**
+   the ELAM driver does **not** install via INF/`Inf2Cat`/PnP staging like the main driver —
+   verified by actually running `Inf2Cat` against it, which rejected it ("no installation INF
+   found"); Microsoft's own ELAM sample installs via a direct `sc create ... group=Early-Launch`
+   instead, so `tools/sar_install.c` creates the ELAM service programmatically
+   (`SERVICE_KERNEL_DRIVER`, `SERVICE_BOOT_START`, `SERVICE_ERROR_NORMAL` — deliberately not
+   `error=critical` as Microsoft's sample uses, so our own protection layer can never be the
+   reason a machine fails to boot) instead of shipping an `.inf`. **The load-bearing safety
+   finding:** Microsoft's own documented sequence states `StartService` fails outright if the
+   service was never registered via `InstallELAMCertificateInfo` first — verified against the
+   primary source, not assumed. `sar_install.c` therefore only calls
+   `ChangeServiceConfig2(SERVICE_CONFIG_LAUNCH_PROTECTED)` after `InstallELAMCertificateInfo`
+   has already succeeded; on any host without a valid ELAM registration (every host until MVI
+   issues the real certificate) the protected-launch request is never sent at all, and the
+   service starts as an ordinary unprotected service — never blocked. `scripts/package_driver.ps1`
+   generates one self-signed test certificate carrying both the Code Signing and Early Launch
+   EKUs (mirroring a documented community pattern — Microsoft's own ELAM docs do not name a
+   pre-certification test path), uses it to sign the main driver, the ELAM driver, and the
+   service binary, and was run end-to-end to a clean package with 0 errors.
+   **What only the real MVI/ELAM certificate changes:** nothing in the code — the entire chain
+   above already runs, self-signed, in test-signing mode; production distribution is a signing
+   swap, not a re-implementation. *Deps:* none on the other units.
 4. **Battery / recovery coverage closure (small, ongoing).** *Boundary:* the named gaps in the
    slice docs — Salsa20/XSalsa20 lack an external KAT (self-consistency only); AES-192 register-
    granularity inversion is best-effort; HC-128/SOSEMANUK are confirmed-limit demotions. *DoD:*

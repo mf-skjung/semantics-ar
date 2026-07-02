@@ -6,6 +6,7 @@
 #include "preserve.h"
 
 #include <bcrypt.h>
+#include <ntifs.h>
 
 extern PSAR_STATE g_sar_state;
 
@@ -548,10 +549,65 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
     return status;
 }
 
+#define SAR_POOL_TAG_PORTSEC 'sPrS'
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarFreePortSecurity(_In_ PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    ExFreePoolWithTag(SecurityDescriptor, SAR_POOL_TAG_PORTSEC);
+}
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 static NTSTATUS SarBuildPortSecurity(_Outptr_ PSECURITY_DESCRIPTOR *SecurityDescriptor)
 {
-    return FltBuildDefaultSecurityDescriptor(SecurityDescriptor, FLT_PORT_ALL_ACCESS);
+    SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
+    ULONG acl_length;
+    PSID system_sid;
+    PACL acl;
+    PSECURITY_DESCRIPTOR sd;
+    PUCHAR base;
+    NTSTATUS status;
+
+    *SecurityDescriptor = NULL;
+
+    acl_length = (ULONG)(sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(ULONG) + sizeof(SID));
+
+    base = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                                   sizeof(SECURITY_DESCRIPTOR) + sizeof(SID) + acl_length,
+                                   SAR_POOL_TAG_PORTSEC);
+    if (base == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    sd = (PSECURITY_DESCRIPTOR)base;
+    system_sid = (PSID)(base + sizeof(SECURITY_DESCRIPTOR));
+    acl = (PACL)(base + sizeof(SECURITY_DESCRIPTOR) + sizeof(SID));
+
+    status = RtlInitializeSid(system_sid, &nt_authority, 1);
+    if (NT_SUCCESS(status))
+        *RtlSubAuthoritySid(system_sid, 0) = SECURITY_LOCAL_SYSTEM_RID;
+
+    if (NT_SUCCESS(status))
+        status = RtlCreateSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION);
+
+    if (NT_SUCCESS(status))
+        status = RtlCreateAcl(acl, acl_length, ACL_REVISION);
+
+    if (NT_SUCCESS(status))
+        status = RtlAddAccessAllowedAce(acl, ACL_REVISION, FLT_PORT_ALL_ACCESS, system_sid);
+
+    if (NT_SUCCESS(status))
+        status = RtlSetOwnerSecurityDescriptor(sd, system_sid, FALSE);
+
+    if (NT_SUCCESS(status))
+        status = RtlSetDaclSecurityDescriptor(sd, TRUE, acl, FALSE);
+
+    if (!NT_SUCCESS(status)) {
+        ExFreePoolWithTag(base, SAR_POOL_TAG_PORTSEC);
+        return status;
+    }
+
+    *SecurityDescriptor = sd;
+    return STATUS_SUCCESS;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -589,7 +645,7 @@ NTSTATUS SarCommPortCreate(_In_ PFLT_FILTER Filter, _Outptr_ struct _SAR_COMM **
     status = FltCreateCommunicationPort(Filter, &comm->server_port, &attr, comm,
                                         SarCommConnectNotify, SarCommDisconnectNotify,
                                         SarCommMessageNotify, 1);
-    FltFreeSecurityDescriptor(sd);
+    SarFreePortSecurity(sd);
 
     if (!NT_SUCCESS(status)) {
         ExFreePoolWithTag(comm, SAR_POOL_TAG_COMM);
