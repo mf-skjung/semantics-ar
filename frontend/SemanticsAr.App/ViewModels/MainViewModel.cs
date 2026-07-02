@@ -9,14 +9,14 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private SurfaceItem _selectedSurface;
 
-    public MainViewModel(PostureService posture)
+    public MainViewModel(PostureService posture, Func<IElevatedControlChannel> channelFactory)
     {
         Home = new HomeViewModel(posture);
 
         Surfaces =
         [
             new SurfaceItem("Home", Home),
-            new SurfaceItem("Recovery", new RecoveryPreviewViewModel()),
+            new SurfaceItem("Recovery", new RecoveryViewModel(posture, channelFactory)),
             new SurfaceItem("Activity",
                 new PlaceholderViewModel("Activity",
                     "The detection timeline arrives in a later build of this surface.")),

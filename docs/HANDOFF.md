@@ -239,6 +239,72 @@ behaviorally; the only backend edit is a pure header relocation, service re-veri
   current visual arrangement as disposable; the copy re-enters claims review (X.1) and is not final. What is
   binding is the Charter (IA, ladder, posture, a11y) and the real *state set*, not my pixels or wording.
   **Scope/priority is the successor's** (Charter names Home/Shield #1).
+**Elevated control-plane vertical (Recovery hero flow) — LANDED this session (the VM-verified 19/19 driver +
+service are UNTOUCHED: the only non-frontend edit is a one-line `add_subdirectory(frontend/elevation-host)` in
+the root `CMakeLists.txt`; no driver/service/engine/capture/common/control source changed, so VM stays 19/0).**
+Built the whole standard-user→SYSTEM elevated seam and its first consumer (Recovery), in four layers, each
+built/tested to the level this environment allows (native = compile+link, managed = build + host tests):
+- **Layer 0 — `sarapi` control ABI** (`frontend/sarapi/control_client.c` + control types in `sarapi.h`): opens the
+  hardened `SemanticsArControl` pipe, **verifies the server is SYSTEM** (reuses `server_identity.c`), full-duplex
+  fixed-struct txn (write-all/read-all loops); flat versioned ABI (catalog/preserve/identity blittable structs)
+  that structurally cannot carry key bytes/IV/tag. Five `_Static_assert`s bind the ABI to the wire
+  (key_id=**32**, path 260, subject 256, hash 32, page 8). `sarapi.dll` builds `/W4 /WX` clean. Statically
+  linkable via a new `SARAPI_STATIC` switch.
+- **Layer 1 — native C++ COM elevation host** (`frontend/elevation-host/`, `SemanticsArElevationHost.exe` + MIDL
+  `SemanticsArElevation.tlb`): `oleautomation` `ISarElevatedControl : IUnknown` marshaled by the **universal
+  marshaler via the registered TLB — no MIDL proxy/stub DLL** (page data crosses as `SAFEARRAY(VT_UI1)` blobs of
+  the raw blittable structs). `CoInitializeSecurity` with an **IU+SY access SD** (`O:BAG:BAD:(A;;0x3;;;IU)(A;;0x3;;;SY)`)
+  — the documented OTS fix, load-bearing under Windows 11 **Administrator Protection** where the elevated server
+  runs as the SMAA shadow identity (verified against the MS COM-elevation doc + AP token-shape sources).
+  Per-method **caller validation** (`CoImpersonateClient` → same-session ∧ IL≥Medium → `CoRevertToSelf`); the host
+  exposes only the fixed narrow verbs (no general exec/path sink = confused-deputy-safe). **Non-residency is
+  host-driven** (`CoAddRefServerProcess`/`CoReleaseServerProcess` + a `Shutdown` verb + shutdown event) — NOT
+  dependent on client RCW release (source-gen ComWrappers has no deterministic release; verified via
+  dotnet/runtime #54317/#100645). HKLM `RegServer`/`UnregServer` writes Elevation(`Enabled=1`)/`LocalizedString`/
+  `LocalServer32`/AppID/`AccessPermission`/Interface `ProxyStubClsid32`=oleaut32/TypeLib. **Compile+link verified;
+  runtime (COM registration, elevation, UAC, cross-process marshaling, caller validation) needs the target
+  environment — the same "compiles+links, unrun" bar the driver used.**
+- **Layer 2 — `SemanticsAr.Core`** (builds 0/0, **39/39 host tests**): source-gen `[GeneratedComInterface]`
+  (`[PreserveSig] int` for the custom `SAR_E_*` HRESULTs + `out nint` SAFEARRAY handles + interface-level
+  `BStrStringMarshaller`) **compiles under .NET 10 + `DisableRuntimeMarshalling` — the empirical confirmation that
+  the blob-marshalling shape is accepted** (the .NET side captures the universal-marshaler-produced SAFEARRAY* as
+  a raw pointer and reads it via `oleaut32` P/Invokes, decoupling from source-gen SAFEARRAY support).
+  `ElevationMoniker` (`CoGetObject("Elevation:Administrator!new:{CLSID}")` + `StrategyBasedComWrappers`; UAC-cancel
+  → `OperationCanceledException`); `RecoveryLadder` (blob→`RecoverableItem`, kernel result 0=verified/≠0=declined-
+  left-intact per III.4); `RecoverySession` state machine; `ElevatedControlChannel` (paged reads, rung-dispatched
+  recover, `Shutdown`-driven teardown).
+- **Layer 3 (functional) — `SemanticsAr.App` Recovery surface** (app builds 0/0): `RecoveryViewModel` drives
+  `RecoverySession` through the Charter VI.1 flow — pre-elevation posture summary → elevate → ladder-ranked list
+  (rung color+glyph+label via `CertaintyChip`) → **preview-before-commit** with the verify-before-replace
+  reassurance → execute → **loud per-item verified report** (restored/declined-left-intact/channel-error). Dead
+  `RecoveryPreview*` placeholder removed. **BOUNDED items degrade to conservative phrasing** (pool-status not
+  projected). The **XAML/copy are provisional (DesignSync + claims X.1 owed)** — anti-anchoring per the foundation
+  note; what is binding is the flow, the state set, and the ladder.
+- **Layer 4** — control integration negatives (`SarControlIntegrationTests`: no-server→`PipeUnavailable`,
+  non-SYSTEM server→`ServerUntrusted`) + build wiring; test project gained `AllowUnsafeBlocks` for `LibraryImport`.
+- **Research re-verified (primary sources) before implementing** the three review concerns: (1) AP → SMAA distinct
+  identity ⇒ the IU+SY `CoInitializeSecurity` OTS fix is documented, not speculative; (2) ComWrappers has no
+  deterministic release ⇒ host-driven teardown; (3) CIG `MicrosoftSignedOnly` would reject the own-signed `sarapi`
+  ⇒ mitigation set is CFG/CET/`NoRemoteImages`/`PreferSystem32`/ACG (or static-link `sarapi` to allow CIG).
+
+**Elevated-vertical follow-ups owed to the successor (outside the completed design/impl spec):**
+- **Runtime product-integration smoke of the elevated path** — register the host (HKLM, needs the TLB placed
+  beside the exe), launch via the moniker against the live driver+service, confirm no-UAC-free itemized read +
+  verified recovery. Structurally guaranteed by the DACL/token + universal-marshaler semantics; needs the target
+  environment. **VM-empirical items** (settle in-VM, do not re-research): AP token dump (SMAA + Administrators
+  ENABLED ⇒ `CheckTokenMembership` TRUE); the IU+SY-ACL-required-under-AP reproduction; host exit timing after
+  RCW drop; which `SetProcessMitigationPolicy` flags load the signed `sarapi`; control-pipe client SQOS.
+- **`OPEN` — UAC consent granularity** (one bounded elevated session + in-app per-mutation confirm vs one UAC per
+  verb): the design adopts the session model (habituation evidence); close by security review.
+- **NT-vs-Win32 recover target path**: the catalog projects NT device paths, `RECOVER` expects Win32 absolute
+  paths. Core carries the projected path verbatim (no guessed conversion); confirm at integration whether the
+  service resolves it or the projection must add a Win32 path (driver-side) / the client must `QueryDosDevice`.
+- **Signing/packaging**: app **and** the elevation host are Authenticode-signed (host publisher shows in the UAC
+  prompt; unsigned ⇒ "unknown publisher"); HKLM COM registration is an elevated install step; TLB ships beside
+  the host. (Driver chain unchanged — precond. 5.)
+- **Response/Policy + Settings surfaces** reuse this exact seam (`SetMode`/`SetBudget`/`Whitelist*`/`ResolveIdentity`
+  already in the sarapi ABI + COM host); they were deferred pending Recovery proving the seam.
+
 - **Remaining in the frontend phase (each its own slice, NOT research-firm-closable here):** tiered toast
   notifications (III.3/VIII.5 — open ADR: WinAppSDK `AppNotificationManager` vs. classic COM toast identity for a
   plain-exe); the elevated control path + itemized reads + consequential verbs (Recovery/Response/Settings) over

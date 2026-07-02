@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Interop;
 using SemanticsAr.App.Design;
 using SemanticsAr.App.Interop;
 using SemanticsAr.App.ViewModels;
@@ -25,7 +26,8 @@ public partial class App : Application
 
         _posture = new PostureService(new NativePostureReader());
 
-        _window = new MainWindow { DataContext = new MainViewModel(_posture) };
+        _window = new MainWindow();
+        _window.DataContext = new MainViewModel(_posture, OpenElevatedChannel);
         _window.Closing += OnWindowClosing;
         MainWindow = _window;
 
@@ -39,6 +41,12 @@ public partial class App : Application
     {
         e.Cancel = true;
         _window?.Hide();
+    }
+
+    private IElevatedControlChannel OpenElevatedChannel()
+    {
+        nint owner = _window is null ? nint.Zero : new WindowInteropHelper(_window).Handle;
+        return ElevatedControlChannel.Activate(owner);
     }
 
     private void ShowMainWindow()

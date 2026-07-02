@@ -2,9 +2,9 @@ using System.Windows.Controls;
 
 namespace SemanticsAr.App.Views;
 
-public partial class RecoveryPreviewView : UserControl
+public partial class RecoveryView : UserControl
 {
-    public RecoveryPreviewView()
+    public RecoveryView()
     {
         InitializeComponent();
     }

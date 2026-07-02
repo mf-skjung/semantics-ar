@@ -17,8 +17,8 @@
         <DataTemplate DataType="{x:Type vm:HomeViewModel}">
             <views:HomeView />
         </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:RecoveryPreviewViewModel}">
-            <views:RecoveryPreviewView />
+        <DataTemplate DataType="{x:Type vm:RecoveryViewModel}">
+            <views:RecoveryView />
         </DataTemplate>
         <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
             <views:PlaceholderView />

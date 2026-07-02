@@ -1,0 +1,175 @@
+<UserControl
+    x:Class="SemanticsAr.App.Views.RecoveryView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:SemanticsAr.App.Controls">
+
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="B2V" />
+    </UserControl.Resources>
+
+    <Grid Margin="32">
+
+        <StackPanel Visibility="{Binding ShowPreElevation, Converter={StaticResource B2V}}">
+            <TextBlock FontSize="28" FontWeight="SemiBold" Text="Recovery" />
+            <TextBlock
+                Margin="0,12,0,0"
+                MaxWidth="620"
+                Opacity="0.85"
+                TextWrapping="Wrap"
+                Text="{Binding Summary}" />
+
+            <controls:CertaintyChip Rung="Definitive" Margin="0,18,0,0" />
+            <TextBlock
+                Margin="30,4,0,0"
+                MaxWidth="560"
+                Opacity="0.8"
+                TextWrapping="Wrap"
+                Text="The encryption key was captured. The original is restored and each file is verified before it replaces anything." />
+
+            <controls:CertaintyChip Rung="Bounded" Margin="0,16,0,0" />
+            <TextBlock
+                Margin="30,4,0,0"
+                MaxWidth="560"
+                Opacity="0.8"
+                TextWrapping="Wrap"
+                Text="A copy was held before destruction, recoverable within a bounded, expiring window." />
+
+            <Button
+                Margin="0,24,0,0"
+                HorizontalAlignment="Left"
+                Padding="16,8"
+                Content="View &amp; recover"
+                Command="{Binding BeginCommand}" />
+        </StackPanel>
+
+        <DockPanel Visibility="{Binding ShowBrowsing, Converter={StaticResource B2V}}">
+            <TextBlock
+                DockPanel.Dock="Top"
+                FontSize="24"
+                FontWeight="SemiBold"
+                Text="Recoverable files" />
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Padding="16,8" Content="Preview selected" Command="{Binding PreviewCommand}" />
+                <Button Margin="8,0,0,0" Padding="16,8" Content="Close" Command="{Binding CloseCommand}" />
+            </StackPanel>
+            <ListBox
+                Margin="0,12,0,0"
+                ItemsSource="{Binding Items}"
+                HorizontalContentAlignment="Stretch"
+                AutomationProperties.Name="Recoverable files">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox
+                                Grid.Column="0"
+                                VerticalAlignment="Center"
+                                IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                AutomationProperties.Name="Select for recovery" />
+                            <controls:CertaintyChip
+                                Grid.Column="1"
+                                Margin="8,0"
+                                VerticalAlignment="Center"
+                                Rung="{Binding Rung}" />
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Opacity="0.7" FontSize="12" Text="{Binding Detail}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DockPanel>
+
+        <DockPanel Visibility="{Binding ShowPreview, Converter={StaticResource B2V}}">
+            <TextBlock
+                DockPanel.Dock="Top"
+                FontSize="24"
+                FontWeight="SemiBold"
+                Text="Confirm recovery" />
+            <TextBlock
+                DockPanel.Dock="Top"
+                Margin="0,8,0,0"
+                MaxWidth="620"
+                HorizontalAlignment="Left"
+                Opacity="0.85"
+                TextWrapping="Wrap"
+                Text="Your current files are safe. A file is replaced only after its restored bytes are verified against the capture-time record; anything that cannot be verified is left exactly as it is." />
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Padding="16,8" Content="Recover now" Command="{Binding ConfirmCommand}" />
+                <Button Margin="8,0,0,0" Padding="16,8" Content="Back" Command="{Binding BackToBrowsingCommand}" />
+            </StackPanel>
+            <ListBox
+                Margin="0,12,0,0"
+                ItemsSource="{Binding PreviewItems}"
+                HorizontalContentAlignment="Stretch"
+                AutomationProperties.Name="Files to recover">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <controls:CertaintyChip
+                                Grid.Column="0"
+                                Margin="0,0,8,0"
+                                VerticalAlignment="Center"
+                                Rung="{Binding Rung}" />
+                            <TextBlock
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Text="{Binding DisplayPath}"
+                                TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DockPanel>
+
+        <DockPanel Visibility="{Binding ShowReport, Converter={StaticResource B2V}}">
+            <TextBlock
+                DockPanel.Dock="Top"
+                FontSize="24"
+                FontWeight="SemiBold"
+                Text="Recovery report" />
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,12,0,0">
+                <Button Padding="16,8" Content="Done" Command="{Binding CloseCommand}" />
+            </StackPanel>
+            <ListBox
+                Margin="0,12,0,0"
+                ItemsSource="{Binding Report}"
+                HorizontalContentAlignment="Stretch"
+                AutomationProperties.Name="Recovery report">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="0,6">
+                            <TextBlock Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Opacity="0.8" FontSize="12" Text="{Binding StatusText}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </DockPanel>
+
+        <StackPanel Visibility="{Binding ShowUnavailable, Converter={StaticResource B2V}}">
+            <TextBlock FontSize="24" FontWeight="SemiBold" Text="Recovery unavailable" />
+            <TextBlock
+                Margin="0,12,0,0"
+                MaxWidth="620"
+                Opacity="0.85"
+                TextWrapping="Wrap"
+                Text="{Binding UnavailableText}" />
+            <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                <Button Padding="16,8" Content="Try again" Command="{Binding BeginCommand}" />
+                <Button Margin="8,0,0,0" Padding="16,8" Content="Close" Command="{Binding CloseCommand}" />
+            </StackPanel>
+        </StackPanel>
+
+    </Grid>
+</UserControl>

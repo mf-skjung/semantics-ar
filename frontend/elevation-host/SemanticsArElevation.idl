@@ -1,0 +1,58 @@
+import "oaidl.idl";
+import "ocidl.idl";
+
+[
+    uuid(B3F2A6C1-5D84-4E2A-9C77-1E5A0D9C4A11),
+    oleautomation,
+    pointer_default(unique)
+]
+interface ISarElevatedControl : IUnknown
+{
+    HRESULT CatalogPage([in] unsigned long start,
+                        [out] unsigned long *total,
+                        [out] unsigned long *returned,
+                        [out] SAFEARRAY(unsigned char) *blob);
+    HRESULT PreservePage([in] unsigned long start,
+                         [out] unsigned long *total,
+                         [out] unsigned long *returned,
+                         [out] SAFEARRAY(unsigned char) *blob);
+    HRESULT Recover([in] SAFEARRAY(unsigned char) keyId,
+                    [in] BSTR targetPath,
+                    [out] long *result);
+    HRESULT PreserveRecover([in] BSTR targetPath,
+                            [in] unsigned hyper offset,
+                            [in] unsigned hyper length,
+                            [out] long *result);
+    HRESULT SetMode([in] unsigned long mode, [out] long *result);
+    HRESULT SetBudget([in] unsigned hyper retention100ns,
+                      [in] unsigned hyper capacityBytes,
+                      [out] long *result);
+    HRESULT ResolveIdentity([in] BSTR imagePath,
+                            [out] SAFEARRAY(unsigned char) *identityBlob,
+                            [out] unsigned long *verdict,
+                            [out] long *result);
+    HRESULT WhitelistAdd([in] BSTR imagePath,
+                         [out] unsigned long *verdict,
+                         [out] long *result);
+    HRESULT WhitelistRemove([in] BSTR imagePath,
+                            [out] unsigned long *verdict,
+                            [out] long *result);
+    HRESULT Shutdown();
+};
+
+[
+    uuid(B3F2A6C1-5D84-4E2A-9C77-1E5A0D9C4A10),
+    version(1.0)
+]
+library SemanticsArElevationLib
+{
+    importlib("stdole2.tlb");
+
+    [
+        uuid(B3F2A6C1-5D84-4E2A-9C77-1E5A0D9C4A12)
+    ]
+    coclass SarElevatedControl
+    {
+        [default] interface ISarElevatedControl;
+    };
+};

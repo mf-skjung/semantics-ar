@@ -4,11 +4,14 @@ endif()
 
 add_library(sarapi SHARED
     src/posture_client.c
-    src/server_identity.c)
+    src/server_identity.c
+    src/control_client.c)
 
 target_include_directories(sarapi PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../common/include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../common/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../service"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../control/include")
 
 target_link_libraries(sarapi PRIVATE advapi32)
 
