@@ -6,6 +6,7 @@ add_executable(semantics_ar_service
     main.c
     commclient.c
     control.c
+    pipe_server.c
     recovery.c
     identity.c)
 

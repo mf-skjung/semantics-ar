@@ -1,17 +1,10 @@
 #include "control.h"
 
 #include <string.h>
-#include <sddl.h>
 
 #include "semantics_ar/protocol.h"
+#include "pipe_server.h"
 #include "recovery.h"
-
-typedef struct {
-    sar_comm_client_t *client;
-    volatile LONG      running;
-} sar_control_listener_t;
-
-static sar_control_listener_t g_control_listener;
 
 static int sar_catalog_fetch(sar_comm_client_t *client, uint32_t index,
                              semantics_ar_catalog_entry_t *out_entry,
@@ -131,6 +124,8 @@ int sar_control_apply(sar_comm_client_t *client,
         cs = sar_control_send_mode(client, cmd->mode);
         reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
         reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        if (cs == SAR_COMM_OK)
+            InterlockedExchange((volatile LONG *)&client->mode, (LONG)cmd->mode);
         break;
 
     case SAR_CTL_OP_WHITELIST_ADD:
@@ -153,6 +148,25 @@ int sar_control_apply(sar_comm_client_t *client,
 
         cs = sar_control_send_whitelist(client, cmd->op, &eval.identity);
         reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
+        break;
+    }
+
+    case SAR_CTL_OP_RESOLVE_IDENTITY: {
+        sar_identity_eval_t eval;
+        wchar_t path[SEMANTICS_AR_PROTO_PATH_MAX];
+        uint32_t i;
+
+        for (i = 0; i + 1 < SEMANTICS_AR_PROTO_PATH_MAX
+                    && cmd->image_path[i] != 0; i++)
+            path[i] = (wchar_t)cmd->image_path[i];
+        path[i] = L'\0';
+
+        memset(&eval, 0, sizeof(eval));
+        reply->verdict = sar_identity_evaluate(path, &eval);
+        memcpy(&reply->resolved, &eval.identity, sizeof(reply->resolved));
+        reply->result = (reply->verdict == SAR_IDENTITY_VERDICT_ERROR
+                         || reply->verdict == SAR_IDENTITY_VERDICT_PATH_FAILED)
+                        ? -1 : 0;
         break;
     }
 
@@ -271,85 +285,130 @@ int sar_control_apply(sar_comm_client_t *client,
     return 0;
 }
 
-static void sar_control_serve(sar_comm_client_t *client, HANDLE pipe)
+typedef struct {
+    sar_comm_client_t *client;
+    CRITICAL_SECTION  *lock;
+} sar_control_ctx_t;
+
+#define SAR_CONTROL_INSTANCES    4u
+#define SAR_POSTURE_INSTANCES    4u
+#define SAR_CONTROL_READ_TIMEOUT 5000u
+
+static sar_pipe_server_t g_control_server;
+static sar_pipe_server_t g_posture_server;
+static CRITICAL_SECTION  g_control_lock;
+static sar_control_ctx_t g_control_ctx;
+
+static BOOL sar_control_caller_is_admin(void)
 {
+    SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    PSID admins = NULL;
+    BOOL is_member = FALSE;
+
+    if (AllocateAndInitializeSid(&nt, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0,
+                                 &admins)) {
+        if (!CheckTokenMembership(NULL, admins, &is_member))
+            is_member = FALSE;
+        FreeSid(admins);
+    }
+    return is_member;
+}
+
+static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
+{
+    sar_control_ctx_t    *ctx = (sar_control_ctx_t *)vctx;
     sar_control_command_t cmd;
     sar_control_reply_t   reply;
     DWORD                 got = 0;
-    DWORD                 put = 0;
+    BOOL                  authorized = FALSE;
 
     memset(&cmd, 0, sizeof(cmd));
     memset(&reply, 0, sizeof(reply));
+    reply.result = -1;
+    reply.verdict = SAR_IDENTITY_VERDICT_ERROR;
 
-    if (ReadFile(pipe, &cmd, (DWORD)sizeof(cmd), &got, NULL)
-        && got == (DWORD)sizeof(cmd)) {
-        sar_control_apply(client, &cmd, &reply);
-    } else {
-        reply.result = -1;
-        reply.verdict = SAR_IDENTITY_VERDICT_ERROR;
+    if (!sar_pipe_recv(conn, &cmd, (DWORD)sizeof(cmd), &got,
+                       SAR_CONTROL_READ_TIMEOUT)
+        || got != (DWORD)sizeof(cmd)) {
+        sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
+        return;
     }
 
-    WriteFile(pipe, &reply, (DWORD)sizeof(reply), &put, NULL);
-    FlushFileBuffers(pipe);
+    if (ImpersonateNamedPipeClient(conn->pipe)) {
+        authorized = sar_control_caller_is_admin();
+        RevertToSelf();
+    }
+
+    if (!authorized) {
+        sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
+        return;
+    }
+
+    EnterCriticalSection(ctx->lock);
+    sar_control_apply(ctx->client, &cmd, &reply);
+    LeaveCriticalSection(ctx->lock);
+
+    sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
 }
 
-static DWORD WINAPI sar_control_thread(LPVOID param)
+static void sar_posture_serve(sar_pipe_conn_t *conn, void *vctx)
 {
-    sar_control_listener_t *self = (sar_control_listener_t *)param;
-    SECURITY_ATTRIBUTES sa;
-    PSECURITY_DESCRIPTOR sd = NULL;
+    sar_comm_client_t  *client = (sar_comm_client_t *)vctx;
+    sar_posture_frame_t frame;
 
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            L"D:P(A;;GA;;;SY)(A;;GA;;;BA)", SDDL_REVISION_1, &sd, NULL))
-        return 0;
-    memset(&sa, 0, sizeof(sa));
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = sd;
-    sa.bInheritHandle = FALSE;
+    memset(&frame, 0, sizeof(frame));
+    frame.frame_type = SAR_POSTURE_FRAME_STATUS;
+    frame.frame_length = (uint32_t)sizeof(frame);
+    frame.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    frame.flags = SAR_POSTURE_FLAG_SERVICE_RUNNING;
+    if (client->port != INVALID_HANDLE_VALUE
+        && InterlockedCompareExchange(&client->running, 1, 1) == 1)
+        frame.flags |= SAR_POSTURE_FLAG_DRIVER_CONNECTED;
+    frame.mode = client->mode;
+    frame.captured_key_count = (uint64_t)InterlockedCompareExchange64(
+        (volatile LONG64 *)&client->captured_key_count, 0, 0);
 
-    while (InterlockedCompareExchange(&self->running, 1, 1) == 1) {
-        HANDLE pipe = CreateNamedPipeW(SAR_CONTROL_PIPE_NAME,
-                                       PIPE_ACCESS_DUPLEX,
-                                       PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE
-                                       | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                       1,
-                                       (DWORD)sizeof(sar_control_reply_t),
-                                       (DWORD)sizeof(sar_control_command_t),
-                                       0, &sa);
-        if (pipe == INVALID_HANDLE_VALUE)
-            break;
+    sar_pipe_send(conn, &frame, (DWORD)sizeof(frame));
+}
 
-        if (ConnectNamedPipe(pipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED) {
-            if (InterlockedCompareExchange(&self->running, 1, 1) == 1)
-                sar_control_serve(self->client, pipe);
-        }
+int sar_control_listener_start(sar_comm_client_t *client)
+{
+    if (!client)
+        return -1;
 
-        FlushFileBuffers(pipe);
-        DisconnectNamedPipe(pipe);
-        CloseHandle(pipe);
+    InitializeCriticalSection(&g_control_lock);
+    g_control_ctx.client = client;
+    g_control_ctx.lock = &g_control_lock;
+
+    if (sar_pipe_server_start(&g_control_server, SAR_CONTROL_PIPE_NAME,
+                              L"D:P(A;;GA;;;SY)(A;;GA;;;BA)",
+                              PIPE_ACCESS_DUPLEX,
+                              (DWORD)sizeof(sar_control_reply_t),
+                              (DWORD)sizeof(sar_control_command_t),
+                              SAR_CONTROL_INSTANCES,
+                              sar_control_serve, &g_control_ctx) != 0) {
+        DeleteCriticalSection(&g_control_lock);
+        return -1;
     }
 
-    LocalFree(sd);
+    if (sar_pipe_server_start(&g_posture_server, SAR_POSTURE_PIPE_NAME,
+                              L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)",
+                              PIPE_ACCESS_OUTBOUND,
+                              (DWORD)sizeof(sar_posture_frame_t), 0,
+                              SAR_POSTURE_INSTANCES,
+                              sar_posture_serve, client) != 0) {
+        sar_pipe_server_stop(&g_control_server);
+        DeleteCriticalSection(&g_control_lock);
+        return -1;
+    }
+
     return 0;
 }
 
-HANDLE sar_control_listener_start(sar_comm_client_t *client)
+void sar_control_listener_stop(void)
 {
-    g_control_listener.client = client;
-    InterlockedExchange(&g_control_listener.running, 1);
-    return CreateThread(NULL, 0, sar_control_thread, &g_control_listener,
-                        0, NULL);
-}
-
-void sar_control_listener_stop(HANDLE thread)
-{
-    InterlockedExchange(&g_control_listener.running, 0);
-    if (thread) {
-        HANDLE client = CreateFileW(SAR_CONTROL_PIPE_NAME, GENERIC_READ,
-                                    0, NULL, OPEN_EXISTING, 0, NULL);
-        if (client != INVALID_HANDLE_VALUE)
-            CloseHandle(client);
-        WaitForSingleObject(thread, 5000);
-        CloseHandle(thread);
-    }
+    sar_pipe_server_stop(&g_posture_server);
+    sar_pipe_server_stop(&g_control_server);
+    DeleteCriticalSection(&g_control_lock);
 }

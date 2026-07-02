@@ -13,7 +13,6 @@ typedef struct {
     SERVICE_STATUS_HANDLE status_handle;
     SERVICE_STATUS        status;
     sar_comm_client_t     comm;
-    HANDLE                control_thread;
     HANDLE                stop_event;
 } sar_service_t;
 
@@ -128,7 +127,11 @@ static void WINAPI sar_service_main(DWORD argc, LPWSTR *argv)
         return;
     }
 
-    g_service.control_thread = sar_control_listener_start(&g_service.comm);
+    if (sar_control_listener_start(&g_service.comm) != 0) {
+        sar_comm_close(&g_service.comm);
+        sar_set_status(SERVICE_STOPPED, ERROR_GEN_FAILURE, 0);
+        return;
+    }
 
     {
         sar_comm_dispatch_t dispatch;
@@ -137,8 +140,7 @@ static void WINAPI sar_service_main(DWORD argc, LPWSTR *argv)
         sar_comm_run(&g_service.comm, &dispatch);
     }
 
-    sar_control_listener_stop(g_service.control_thread);
-    g_service.control_thread = NULL;
+    sar_control_listener_stop();
 
     sar_comm_close(&g_service.comm);
 

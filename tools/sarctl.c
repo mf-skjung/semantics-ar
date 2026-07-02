@@ -176,6 +176,92 @@ static int cmd_budget(const char *retention_sec, const char *capacity_mb)
     return reply.result == 0 ? 0 : 3;
 }
 
+static int cmd_status(void)
+{
+    HANDLE pipe;
+    sar_posture_frame_t frame;
+    DWORD got = 0;
+
+    pipe = CreateFileW(SAR_POSTURE_PIPE_NAME, GENERIC_READ, 0, NULL,
+                       OPEN_EXISTING, 0, NULL);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        fwprintf(stderr, L"posture connect failed (%lu) - is the service running?\n",
+                 GetLastError());
+        return 1;
+    }
+
+    memset(&frame, 0, sizeof frame);
+    if (!ReadFile(pipe, &frame, (DWORD)sizeof frame, &got, NULL)
+        || got < sizeof frame) {
+        fwprintf(stderr, L"posture read failed (%lu)\n", GetLastError());
+        CloseHandle(pipe);
+        return 1;
+    }
+    CloseHandle(pipe);
+
+    wprintf(L"service_running=%d driver_connected=%d mode=%ls captured=%llu\n",
+            (frame.flags & SAR_POSTURE_FLAG_SERVICE_RUNNING) ? 1 : 0,
+            (frame.flags & SAR_POSTURE_FLAG_DRIVER_CONNECTED) ? 1 : 0,
+            frame.mode == SEMANTICS_AR_MODE_ENFORCE ? L"enforce" : L"audit",
+            (unsigned long long)frame.captured_key_count);
+    return 0;
+}
+
+static const wchar_t *verdict_str(uint32_t v)
+{
+    switch (v) {
+    case 0: return L"verified";
+    case 1: return L"unsigned";
+    case 2: return L"hash-failed";
+    case 3: return L"path-failed";
+    default: return L"error";
+    }
+}
+
+static int cmd_resolve(const char *path)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+    wchar_t img[SEMANTICS_AR_PROTO_PATH_MAX], subj[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+    uint32_t j;
+    int k;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = SAR_CTL_OP_RESOLVE_IDENTITY;
+    put_path(path, cmd.image_path);
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    if (reply.result != 0) {
+        wprintf(L"resolve verdict=%ls (could not resolve)\n", verdict_str(reply.verdict));
+        return 3;
+    }
+    for (j = 0; j + 1 < SEMANTICS_AR_PROTO_PATH_MAX && reply.resolved.image_path[j] != 0; j++)
+        img[j] = (wchar_t)reply.resolved.image_path[j];
+    img[j] = 0;
+    for (j = 0; j + 1 < SEMANTICS_AR_PROTO_SUBJECT_MAX && reply.resolved.cert_subject[j] != 0; j++)
+        subj[j] = (wchar_t)reply.resolved.cert_subject[j];
+    subj[j] = 0;
+    wprintf(L"verdict=%ls\n  image =%ls\n  signer=%ls\n  sha256=", verdict_str(reply.verdict), img, subj);
+    for (k = 0; k < SEMANTICS_AR_CONTENT_HASH_SIZE; k++)
+        wprintf(L"%02x", reply.resolved.content_hash[k]);
+    wprintf(L"\n");
+    return 0;
+}
+
+static int cmd_whitelist(uint32_t op, const char *path)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = op;
+    put_path(path, cmd.image_path);
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    wprintf(L"whitelist result=%d verdict=%ls\n", reply.result, verdict_str(reply.verdict));
+    return reply.result == 0 ? 0 : 3;
+}
+
 static int cmd_mode(const char *m)
 {
     sar_control_command_t cmd;
@@ -211,10 +297,19 @@ int main(int argc, char **argv)
         return cmd_preserve_recover(argv[2], argv[3], argv[4]);
     if (argc == 4 && strcmp(argv[1], "budget") == 0)
         return cmd_budget(argv[2], argv[3]);
+    if (argc >= 2 && strcmp(argv[1], "status") == 0)
+        return cmd_status();
+    if (argc == 3 && strcmp(argv[1], "resolve") == 0)
+        return cmd_resolve(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "whitelist-add") == 0)
+        return cmd_whitelist(SAR_CTL_OP_WHITELIST_ADD, argv[2]);
+    if (argc == 3 && strcmp(argv[1], "whitelist-remove") == 0)
+        return cmd_whitelist(SAR_CTL_OP_WHITELIST_REMOVE, argv[2]);
 
     fwprintf(stderr,
-             L"usage: sarctl list | recover <key_id-hex> <path> | mode <audit|enforce>\n"
+             L"usage: sarctl status | list | recover <key_id-hex> <path> | mode <audit|enforce>\n"
              L"       | preserve-list | preserve-recover <path> <offset> <length>\n"
-             L"       | budget <retention-seconds> <capacity-MB>\n");
+             L"       | budget <retention-seconds> <capacity-MB>\n"
+             L"       | resolve <path> | whitelist-add <path> | whitelist-remove <path>\n");
     return 2;
 }
