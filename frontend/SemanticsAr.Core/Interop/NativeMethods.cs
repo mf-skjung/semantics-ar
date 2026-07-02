@@ -18,4 +18,16 @@ internal static partial class NativeMethods
     [LibraryImport(Library)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial SarApiResult sarapi_posture_read(out SarApiPosture posture);
+
+    [LibraryImport(Library)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial SarApiResult sarapi_events_open(out nint handle);
+
+    [LibraryImport(Library)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial SarApiResult sarapi_events_read(nint handle, out SarApiEvent evt);
+
+    [LibraryImport(Library)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void sarapi_events_close(nint handle);
 }

@@ -23,6 +23,10 @@
 #define SAR_POSTURE_EXPIRY_LE_7D          2u
 #define SAR_POSTURE_EXPIRY_LE_24H         3u
 
+#define SAR_EVENTS_PIPE_NAME L"\\\\.\\pipe\\SemanticsAr.Events"
+
+#define SAR_EVENTS_FRAME_EVENT 1u
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -36,6 +40,19 @@ typedef struct {
     uint32_t preserve_health;
     uint32_t oldest_expiry_bucket;
 } sar_posture_frame_t;
+
+typedef struct {
+    uint32_t frame_type;
+    uint32_t frame_length;
+    uint32_t protocol_version;
+    uint32_t valid;
+    uint32_t gap;
+    uint32_t event_class;
+    uint64_t generation;
+    uint64_t sequence;
+    uint64_t timestamp;
+    uint64_t actor_start_key;
+} sar_events_frame_t;
 
 #pragma pack(pop)
 

@@ -123,6 +123,31 @@ SARAPI_API sarapi_result_t __cdecl sarapi_whitelist_remove(const uint16_t *image
                                                            uint32_t *out_verdict,
                                                            int32_t *out_result);
 
+#define SARAPI_EVENT_NONE              0u
+#define SARAPI_EVENT_KEY_CAPTURED      1u
+#define SARAPI_EVENT_BLOCK_FORWARD     2u
+#define SARAPI_EVENT_BLOCK_PHANTOM     3u
+#define SARAPI_EVENT_BLOCK_CAPACITY    4u
+#define SARAPI_EVENT_MODE_CHANGED      5u
+#define SARAPI_EVENT_WHITELIST_ADDED   6u
+#define SARAPI_EVENT_WHITELIST_REMOVED 7u
+
+typedef struct {
+    uint32_t valid;
+    uint32_t gap;
+    uint32_t event_class;
+    uint64_t generation;
+    uint64_t sequence;
+    uint64_t timestamp;
+    uint64_t actor_start_key;
+} sarapi_event_t;
+
+SARAPI_API sarapi_result_t __cdecl sarapi_events_open(void **out_handle);
+
+SARAPI_API sarapi_result_t __cdecl sarapi_events_read(void *handle, sarapi_event_t *out);
+
+SARAPI_API void __cdecl sarapi_events_close(void *handle);
+
 #ifdef __cplusplus
 }
 #endif

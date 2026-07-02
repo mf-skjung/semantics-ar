@@ -1,4 +1,4 @@
-# Handoff — semantics-ar Windows realization — backend VM-verified 19/19; frontend design ratified (`docs/EXPERIENCE_CHARTER.md`), implementation is the next phase (2026-07-02)
+# Handoff — semantics-ar Windows realization — backend + event journal VM-verified 22/22; frontend design ratified (`docs/EXPERIENCE_CHARTER.md`), implementation is the next phase (2026-07-03)
 
 This is the single living handoff artifact for the chain that builds the Windows product
 against the clean Constitution. The `SLICE1_DESIGN.md` … `SLICE6_DESIGN.md` per-increment
@@ -12,7 +12,9 @@ after the Constitution. Each implementer updates it; the terminal implementer de
 
 ---
 
-## 0. ACTIVE HANDOFF — passive capture-at-open (COO) landed; self-protection (Unit 5) done, only Unit 4's named follow-ons + battery closure remain (read this first)
+## 0. ACTIVE HANDOFF — passive capture-at-open (COO) landed; self-protection (Unit 5) done; event journal
+subsystem (§0.1b–§0.1d) landed backend-through-frontend-library, VM-verified 22/22; Unit 4's named follow-ons +
+battery closure + the Activity/Detections screen (design-gated, see §0.1d) remain (read this first)
 
 ### 0.0 The constitutional trap that MUST NOT be repeated (read before touching the capture path)
 
@@ -80,6 +82,182 @@ test cert), and packages the whole chain end to end. Full detail, including two 
 they shipped (Layer B must stay advisory, ELAM has no INF/PnP install path), is in unit 3 of §4 below.
 "Unit 3-Hardening" (TPM/VBS-rooted key confidentiality) was evaluated and deliberately **not** pursued —
 reasoning is now Constitution VII.1.2, not a backlog item.
+
+### 0.1b Event journal + push subsystem (Constitution VII.3.3, backend precondition 2) — driver+service
+landed this session, **VM-verified 22/22** (2026-07-03)
+The driver gains a fifth self-contained module, `driver/eventlog.c` + `.h`: a fixed-capacity
+(256-record), fixed-size-record ring in non-paged pool, guarded by an `EX_SPIN_LOCK` acquired shared
+for reads and exclusive for writes (chosen over `EX_PUSH_LOCK`/`ERESOURCE` specifically because writers
+run adjacent to IRP completion at IRQL <= DISPATCH_LEVEL, where pushlocks are illegal — confirmed against
+current MS Learn/OSR primary sources before implementing). Every record is timestamped and generation
++ sequence stamped (`SAR_EVENTLOG_CAPACITY`, `SarEventLogRecord`/`SarEventLogQuery` in `eventlog.h`); the
+generation is minted fresh from `KeQuerySystemTime` at `SarEventLogCreate` (called at `DriverEntry`,
+symmetric teardown added to all six existing unwind paths + `SarFilterUnload`), so a reconnecting reader
+can never confuse one driver load's history with another's — an aged-out or wrong-generation cursor gets
+the oldest record still held plus an honest `gap` flag, never silent continuity. No on-disk persistence
+was added (out of scope this session, and — per Constitution VII.3.3 as now written — deliberately a
+lower-trust tier if ever added, not the keystore's full chained-MAC apparatus).
+
+Five hook points populate the ring, reusing the existing three ENFORCE triggers (V.1.2) plus mode/whitelist
+change — **no new event taxonomy invented**: `SarCaptureCommit` (KEY_CAPTURED, capture.c, reuses the
+already-computed `record.actor_start_key` — no redundant `PsGetProcessStartKey` call), `SarCaptureBlockOriginator`
+(extended with a `Reason` parameter, now the single choke point for BLOCK_FORWARD/BLOCK_PHANTOM/BLOCK_CAPACITY
+across all five of its pre-existing call sites in capture.c + operations.c), and `SarStateModeSet` /
+`SarStateWhitelistAdd` / `SarStateWhitelistRemove` (state.c, MODE_CHANGED / WHITELIST_ADDED/REMOVED, no actor
+— these aren't convictions). A new authenticated comm-port op (`SEMANTICS_AR_MSG_EVENTS_QUERY/REPLY`,
+`SarHandleEventsQuery` in commport.c) mirrors the existing `CATALOG_QUERY` paging idiom exactly: cursor in,
+one record (or a gap-flagged oldest-available) out.
+
+Service side: a **third** named pipe, `\\.\pipe\SemanticsAr.Events` (identical session-readable DACL to the
+posture pipe, `PIPE_ACCESS_OUTBOUND` — no client write grant, so the read-only-posture-tier invariant is
+unchanged), served by `sar_events_serve` in `control.c`. Deliberately **one channel, not two**: because every
+event record already satisfies VII.3.2's posture-tier tuple by construction (no path/key/phantom-identity ever
+enters it), there is no separate elevated event channel — an elevated surface that wants full itemized
+correlation joins this stream to the existing catalog/preserve enumeration client-side. Each connection replays
+the ring from the start (no client-sent cursor — the posture pipe stays structurally read-only, no new write
+grant) then live-tails by polling the driver every 500 ms under the existing `g_control_lock`; a send that a
+client doesn't drain within 2 s is dropped (extended `sar_pipe_send` with a `timeout_ms` parameter — was
+hardcoded `INFINITE`, all four pre-existing call sites updated). `sarctl events [count]` added as the first
+consumer/verification client (reads N frames from a fresh connection).
+
+**Research-grounded before implementing** (targeted external research + independent design review, both
+fact-checked against this repo's actual code/Constitution text before acceptance — two review findings changed
+the shipped design: the generation/epoch anchor above was added only after the review pointed out the ring
+had no defense against a driver-reload confusing two epochs' sequence numbers, mirroring a bug class this
+project already fixed once for the keystore; and the on-disk durability tier was scoped down to an explicitly
+lower-trust tier after the review + the EDR-telemetry research converged on the same conclusion — full
+cryptographic sealing is not standard practice for non-recovery-critical telemetry). A proposed second
+elevated-tier SUBSCRIBE channel was considered and rejected as unnecessary scope, for the reason stated above.
+
+**Verification status — VM-run, not just compile-verified:** `cmake --build build_win` clean (service, sarapi,
+sarctl, all tests); `ctest` — all 11 suites pass when run directly (`test_engine`/`test_recover` showed
+`Process not started` under `ctest` itself in one sandbox, confirmed to be a ctest-invocation artifact, not a
+real failure, by running both executables directly: 73/73 and 91/91 green); `scripts/build_driver.bat` →
+`BUILD OK` (the real WDK kernel compiler — `eventlog.c` and every touched driver file compile and link clean
+against `fltMgr.lib`/`ntoskrnl.lib`). `scripts/vm_verify_coverage.ps1 -AttackCount 6` gained a new Phase EV (3
+assertions: journal connects, the mode-change events just performed surface, sequence numbers strictly increase
+within a connection) and was **run against the live `SarTarget` VM this session: 22/22 passed, 0 failed** — the
+pre-existing 19 assertions (Phase A/A2/P/E/F/B/C/C2/G/H/D) are unaffected by `SarCaptureBlockOriginator`'s new
+`Reason` parameter and the six-path `DriverEntry`/`SarFilterUnload` eventlog lifecycle wiring; Phase EV itself
+showed real `mode-changed` and `key-captured` records with correct monotonic sequencing and `gap=0`. Getting to
+green took two false starts, both environment bugs unrelated to the feature, both fixed and recorded in §0.3:
+a PowerShell-5.1 `2>&1`-under-`$ErrorActionPreference='Stop'` trap in `vm_verify_coverage.ps1` itself that
+aborted Phase 0 on a harmless stderr line, and a stale `build\tools\Release\sarctl.exe` — the VM deploys from
+the separate Release `build\` tree, not `build_win\`, and that tree needed an explicit `cmake --build build
+--config Release` before Phase EV could see the new `sarctl events` verb (the first run of Phase EV genuinely
+failed — `count=0` — for exactly this reason; it is not a false report). Constitution VII.3.3 was added
+(as-if-original) documenting the mechanism; no other clause changed.
+
+### 0.1c Event journal frontend consumption (sarapi + Core) — landed this session, host-verified 60/60
+(2026-07-03)
+`frontend/sarapi/src/events_client.c` mirrors `posture_client.c` exactly (SYSTEM-server verification via
+`sarapi_server_is_system`, `PIPE_READMODE_MESSAGE`) but exposes a persistent handle instead of one-shot
+open+read+close: `sarapi_events_open`/`sarapi_events_read`/`sarapi_events_close`. `sarapi_event_t` is 48 bytes
+(natural alignment, no `pack`) — deliberately not binary-compatible with the 56-byte packed wire
+`sar_events_frame_t`; the C code does an explicit field-by-field projection, the same pattern
+`sarapi_posture_read` already used, not a raw cast.
+
+`SemanticsAr.Core` gained `JournalService`: because the service-side design (§0.1b) deliberately keeps the
+posture/events pipe read-only (no client-sent cursor — every fresh connection replays the ring from its
+oldest surviving record), cross-reconnect continuity and gap detection are a **client-side** responsibility,
+not a wire feature. `JournalService` tracks the highest `(generation, sequence)` it has already delivered and,
+on each new frame: drops it silently if it is a duplicate of an already-delivered record (same generation,
+sequence ≤ high-water mark — expected on every reconnect, since backfill replays from the start), otherwise
+raises `EventReceived` with `Gap` set if either the server itself flagged the record (mid-connection ring
+eviction outrunning the service's poll cadence) or the client detects a sequence jump / generation change
+relative to its own last-seen point (the reconnect-boundary case the wire protocol cannot see). The public
+surface mirrors `PostureService`'s `Poll()`/`Start(interval)` split exactly: `ReadNext()` is a single
+synchronous, fully unit-testable step (open-if-needed, read one frame, dedupe/gap-flag, raise or suppress);
+`Start(TimeSpan)` runs it in a background thread with a reconnect backoff. All 8 `JournalServiceTests` drive
+`ReadNext()` directly against a scripted `IEventReader` fake — no thread, no timing dependency, matching
+TESTING.md 1.3's hermeticity requirement.
+
+`IncidentGrouper` (pure, `Domain/`) unions `IIncidentSource` records (`ActorStartKey`, `Timestamp`) — a
+plain-array union-find over every same-actor pair within a caller-supplied adjacency window, which is the
+correct, simplest way to get **chained** temporal-adjacency grouping (transitivity through an intermediate
+record is a natural side effect of pairwise union, verified by
+`ChainedAdjacency_TransitivelyGroupsAcrossTheWindow`), not a bespoke chaining scan. Records with
+`ActorStartKey == 0` (mode/whitelist-change events — not convictions) are excluded before grouping, per the
+design-review Finding 4 already recorded in this doc's history: those events have no actor to group by and
+are not what "incident" means here. `JournalEvent` implements `IIncidentSource` directly; the interface exists
+so a future `CatalogEntry` adapter (capture_time + actor_start_key, already projected per III.1.3, independent
+of the journal) can feed the same grouper without a redesign — that adapter is not built this session.
+
+**Not built in this increment (§0.1c) — toast notification wiring landed one increment later, in §0.1d, once
+its blocking precondition (Charter X.5) was closed; see §0.1d, not here, for it.** What remains genuinely
+not built as of §0.1d is narrower: the Activity/Detections **screen** in `SemanticsAr.App` (a UI/visual-design
+task, out of this subsystem's scope — see §0.1d's closing note) and an incident-grouping validation against a
+real, VM-observed multi-file campaign (Charter X.6's own stated closure bar; `IncidentGrouper` is proven
+against synthetic data only so far).
+
+**Verification:** `cmake --build build_win --target sarapi` clean (`/W4 /WX`, no new warnings) — `sarapi.dll`
+now exports the three new symbols alongside the existing posture/control surface. `dotnet build
+SemanticsAr.slnx` clean (0 warnings, 0 errors). `dotnet test SemanticsAr.Core.Tests`: **60/60 passed** (17 new:
+1 interop-layout, 8 `JournalServiceTests`, 8 `IncidentGrouperTests`, plus the pre-existing 43 unaffected). No
+VM run needed for this increment — it is entirely user-mode-service-consumer code behind the already-VM-verified
+§0.1b wire surface, the same reasoning §0.1a's D1a used to skip a VM run for a driver-untouched change.
+
+Not built in the backend-only pass this paragraph originally described (§0.1c and §0.1d, below, since landed
+`sarapi`/`SemanticsAr.Core` consumption and toast wiring — this paragraph is left here only for the still-true
+residual): an on-disk durability tier for the journal (deliberately deferred, see above — no session has
+built this, and none should without a fresh case for it). Targeted research run in advance, still current:
+Administrator Protection is still not GA (reverted from the Oct 2025 update, no ship date) so it has no present
+effect on this design; SYSTEM→session delivery needs no `WTS*` session enumeration for this pipe-based design
+(a connecting client already self-scopes to its own session via the pipe).
+
+### 0.1d Deployment-model decision (Charter X.5, closed) + toast notifications landed (2026-07-03)
+X.5 ("self-contained vs. framework-dependent") was closed by measurement, not assertion:
+`dotnet publish -c Release -r win-x64` on this build gives framework-dependent = 7.31 MB / 14 files,
+self-contained = 146.39 MB / 409 files — a 20x difference for a resident tray process. Framework-dependent
+was chosen (`EXPERIENCE_CHARTER.md` X.5, now `[DECISION]`); the app project already carried
+`SelfContained=false` as a provisional default, so no runtime-model code change was needed, only the
+ratification. The one real cost — .NET 10 Desktop Runtime is not preinstalled on Windows, unlike legacy .NET
+Framework 4.8 — is answered at the installer layer (a runtime-prerequisite check/install step, not built this
+session, tracked under precondition 5's packaging work), not by bundling a private runtime copy into the app.
+
+This unblocked the toast notification wiring §0.1b/§0.1c had left open pending exactly this decision.
+`SemanticsAr.App` gained `Microsoft.WindowsAppSDK` (1.8.260529003, the current stable series — re-verified via
+NuGet, not assumed) and a `Notifications/ToastNotifier` wrapping `AppNotificationManager`. Per Microsoft's own
+current guidance (Windows App SDK self-contained deployment guide, updated 2026-05-28, re-fetched this
+session): `AppNotificationManager`/`PushNotificationManager` depend on an OS-provided *Singleton* package
+**independent of the self-contained/framework-dependent choice** — the documented answer is
+`AppNotificationManager.IsSupported()` before `Register()`, lighting the feature up only where the OS
+component is present rather than assuming it. `ToastNotifier` does exactly that and degrades to a no-op
+otherwise — the same "detect the primitive, descend explicitly when absent" discipline Constitution VII.5.1
+already governs for TPM/VBS/PPL, applied to a frontend platform primitive for the first time. The prior
+concern about `microsoft/WindowsAppSDK#6071` (a self-contained-specific registration bug) is now moot for
+this app specifically, since the ratified deployment model is framework-dependent, not self-contained.
+
+**A real bug caught before it shipped:** `JournalService`'s design (§0.1c) means every fresh connection
+replays the *entire current ring* from its oldest surviving record, including events from **before** the app
+was even running — a naive "toast on every `EventReceived`" would have alarmed the user about historical
+conviction/block events on every app launch. Fixed at the wiring site (`App.xaml.cs`), not inside
+`JournalService` (whose tested dedupe/gap contract is unrelated and correct as-is): the app captures its own
+start timestamp and only forwards events whose `Timestamp` is at or after it to `ToastNotifier`. Only the four
+conviction/block classes toast (`KeyCaptured`/`BlockForward`/`BlockPhantom`/`BlockCapacity`); mode and
+whitelist changes stay silent-log tier, matching the Charter's own tiered-notification model (silent log /
+toast / modal). `SemanticsAr.App.csproj`'s `TargetFramework` needed `net10.0-windows10.0.19041.0` (WinAppSDK
+requires an OS-versioned TFM; the prior bare `net10.0-windows` failed to build with a Windows-App-SDK-specific
+MSBuild error) plus `WindowsAppSdkUndockedRegFreeWinRTInitialize=true` (needed for unpackaged WinRT activation
+outside the `WindowsAppSDKSelfContained=true` case the property otherwise defaults from).
+
+**Verification boundary, stated precisely (TESTING.md 4.1):** `dotnet build SemanticsAr.slnx` clean (0
+errors), `dotnet test SemanticsAr.Core.Tests` 60/60 unaffected. What is **not** verified: actual toast display,
+`Register()` success/failure at runtime, and the historical-backfill suppression's real-world behavior — none
+of these are host-testable without an interactive desktop session (no headless toast API), and none were run.
+The next implementer with an interactive session should smoke-test: launch the app, trigger a conviction (the
+harness executables already used by `vm_verify_coverage.ps1` work), confirm exactly one toast fires and no
+backfill flood occurs on a second launch with pending ring history.
+
+**Scope boundary — the Activity/Detections screen is deliberately not part of this thread.** §0.1b–§0.1d are
+the "Push + Event Journal subsystem" as scoped at the top of this thread: the wire mechanism, its native/managed
+consumption library, and the notification-trigger logic that consumes it — all logic, no pixels. The screen
+that would *display* the journal/incidents to an operator is a distinct, downstream consumer, and per this
+project's own established practice (§0.2 below: "Claude Design / DesignSync — HANDED OFF, not executed... the
+shipped XAML layout/typography... is a functional placeholder, NOT a design baseline") it is gated on a real
+design pass through DesignSync, not a freehand continuation of this thread's logic work. Building it without
+that pass would repeat the exact anti-pattern already flagged once in this file. `JournalService` and
+`IncidentGrouper` are ready for whoever runs that design pass to consume.
 
 ### 0.2 NEXT PHASE — the operator frontend: DESIGN COMPLETE; implementation is the successor's
 
@@ -436,6 +614,25 @@ budget <retention-seconds> <capacity-MB>`.
   + KDNET) — restore before each run. Live-KDNET: host `kd -k net:port=50000,key=1.2.3.4`; NMI-into-attached-kd
   is the only working hung-guest stack method (LiveKD-hv / vm2dmp / plain NMI-dump all fail on this host — see
   `docs/DEBUGGING.md`).
+- **The development host itself has Hyper-V + `SarTarget` running and reachable, and the operating account
+  holds local admin (Hyper-V + PowerShell Direct both require it) — an implementer working in this
+  environment, including an LLM coding agent with shell access, can and should run
+  `scripts/vm_verify_coverage.ps1` directly rather than deferring it to "the successor."** This was
+  confirmed the hard way: an earlier pass in this same chain assumed no VM access without checking (`Get-VM`
+  was never called) and shipped a driver change compile-verified only; asked to justify that, a `Get-VM
+  -Name SarTarget` check showed the VM running and reachable the whole time. Check before claiming this
+  environment can't reach the VM.
+- **`scripts/package_driver.ps1` / `vm_verify_coverage.ps1` PowerShell-5.1 stderr trap (found + fixed this
+  session):** piping a native command through `2>&1` under `$ErrorActionPreference='Stop'` (PS 5.1, not a
+  problem in 7+) turns any stderr line — even from a command that exits 0 — into a terminating
+  `NativeCommandError`. `vm_verify_coverage.ps1`'s own `Phase 0` invoked `build_driver.bat` and
+  `package_driver.ps1` through exactly this pattern, so a harmless stderr line several layers deep inside
+  the ELAM sub-build (`package_driver.ps1`'s nested `cmd /c` → `build_elam.bat`) aborted the whole run before
+  Phase A ever started. Fixed by dropping the `2>&1` merge at both call sites (`Out-Null` alone is enough —
+  the scripts don't consume that output). If a future run fails immediately at "Phase 0: Package & Deploy"
+  with a `NativeCommandError` whose message looks unrelated to an actual missing tool, suspect this pattern
+  first — do not add `2>&1`/`*>&1` back at any layer above a native `cmd`/`link`/`rc` invocation in this
+  chain, including in whatever wrapper invokes `vm_verify_coverage.ps1` itself.
 - **Phase-G "hang" is not a bug:** it is CPU saturation (our Oracle crypto-battery `scan_battery`/`sar_convict`
   on ~1 core + Defender `mpengine` on the rest), diagnosed by live kernel stacks; it completes and passes
   fail-closed if waited out (~5-6 min). Do NOT power-cycle prematurely. Bounding the battery / excluding

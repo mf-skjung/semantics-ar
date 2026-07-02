@@ -3,6 +3,7 @@
 #include "commport.h"
 #include "keystore_persist.h"
 #include "preserve.h"
+#include "eventlog.h"
 #include "ntsystem.h"
 
 #include <ntifs.h>
@@ -258,7 +259,8 @@ static VOID SarCaptureSendNotify(_In_ PSAR_CAPTURE_CTX Ctx,
 }
 
 _IRQL_requires_max_(APC_LEVEL)
-VOID SarCaptureBlockOriginator(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PEPROCESS Originator)
+VOID SarCaptureBlockOriginator(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PEPROCESS Originator,
+                               _In_ UINT32 EventClass)
 {
     ULONG i;
     BOOLEAN present = FALSE;
@@ -276,6 +278,8 @@ VOID SarCaptureBlockOriginator(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PEPROCESS Origina
         Ctx->blocked_count++;
     }
     FltReleasePushLock(&Ctx->blocked_lock);
+
+    SarEventLogRecord(g_sar.eventlog, EventClass, PsGetProcessStartKey(Originator));
 }
 
 _IRQL_requires_max_(APC_LEVEL)
@@ -302,8 +306,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 static VOID SarCaptureCommit(_In_ PSAR_CAPTURE_CTX Ctx, _In_ sar_capture_result_t *Result,
                              _In_ PEPROCESS Originator)
 {
-    if (SarKeystoreAppend(g_sar.keystore, &Result->record) == 1)
+    if (SarKeystoreAppend(g_sar.keystore, &Result->record) == 1) {
         SarCaptureSendNotify(Ctx, &Result->notify);
+        SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_KEY_CAPTURED,
+                          Result->record.actor_start_key);
+    }
 
     SarPreserveReconcile(g_sar.preserve, Result->record.provenance_path,
                          Result->record.provenance_offset, Result->record.provenance_length);
@@ -311,7 +318,7 @@ static VOID SarCaptureCommit(_In_ PSAR_CAPTURE_CTX Ctx, _In_ sar_capture_result_
     SarPreservePromote(g_sar.preserve, (UINT64)(ULONG_PTR)PsGetProcessId(Originator));
 
     if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE)
-        SarCaptureBlockOriginator(Ctx, Originator);
+        SarCaptureBlockOriginator(Ctx, Originator, SAR_EVENT_CLASS_BLOCK_FORWARD);
 }
 
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -327,7 +334,7 @@ static VOID SarCapturePreserveFromWork(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PSAR_CAPT
 
     if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
         SarPreserveWouldExceed(g_sar.preserve, Work->write_length)) {
-        SarCaptureBlockOriginator(Ctx, Work->originator_process);
+        SarCaptureBlockOriginator(Ctx, Work->originator_process, SAR_EVENT_CLASS_BLOCK_CAPACITY);
         return;
     }
 
@@ -463,7 +470,7 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
             g_sar.preserve != NULL && SarPreserveReady(g_sar.preserve) &&
             work->write_length > 0 && work->write_length <= SAR_PRESERVE_STAGE_MAX &&
             SarPreserveWouldExceed(g_sar.preserve, work->write_length)) {
-            SarCaptureBlockOriginator(ctx, work->originator_process);
+            SarCaptureBlockOriginator(ctx, work->originator_process, SAR_EVENT_CLASS_BLOCK_CAPACITY);
         }
         if (gate.candidate) {
             BOOLEAN already_scanned = FALSE;
@@ -728,7 +735,7 @@ static VOID SarCaptureStageRegion(_In_ PSAR_CAPTURE_CTX Ctx, _In_opt_ PFLT_INSTA
 
     if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
         SarPreserveWouldExceed(g_sar.preserve, region)) {
-        SarCaptureBlockOriginator(Ctx, Originator);
+        SarCaptureBlockOriginator(Ctx, Originator, SAR_EVENT_CLASS_BLOCK_CAPACITY);
         return;
     }
 

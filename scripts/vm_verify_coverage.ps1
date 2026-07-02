@@ -82,9 +82,9 @@ Assert "PowerShell Direct session is stable" ($null -ne $ping)
 # ── Deploy ─────────────────────────────────────────────────────────────
 Write-Host "Phase 0: Package & Deploy" -ForegroundColor Yellow
 if (-not (Test-Path "$Repo\build_driver\semantics_ar.sys")) {
-    & cmd /c "`"$Repo\scripts\build_driver.bat`" `"$Repo\build_driver`"" 2>&1 | Out-Null
+    & cmd /c "`"$Repo\scripts\build_driver.bat`" `"$Repo\build_driver`"" | Out-Null
 }
-& "$Repo\scripts\package_driver.ps1" -Out "$Repo\build_driver" -Repo $Repo 2>&1 | Out-Null
+& "$Repo\scripts\package_driver.ps1" -Out "$Repo\build_driver" -Repo $Repo | Out-Null
 $pkg = "$Repo\build_driver\pkg"
 if (-not (Test-Path "$pkg\semantics_ar.sys")) { throw "Package failed" }
 
@@ -425,6 +425,32 @@ Metric "Oracle reconcile: convicted files still held in preserve" "$oReconStill/
 foreach ($s in $oRes.samples) { Write-Host "      $s" -ForegroundColor DarkGray }
 Assert "Oracle captures reused key (forward-proof, all victims)" ($oRes.captured -eq $oCount) "captured=$($oRes.captured)/$oCount"
 Assert "Oracle decrypts forward to golden (all victims)" ($oRes.recovered -eq $oCount) "recovered=$($oRes.recovered)/$oCount"
+
+# ── Phase EV: Event journal (posture-tier push/backfill, VII.3.2/3.3) ──
+# Each `sarctl events` invocation is a fresh connection, so it always replays
+# from the ring's oldest surviving entry (the (0,0) sentinel) — this exercises
+# backfill, not live-tail, but within one connection the read loop drains the
+# ring in order, which is enough to prove ordering + delivery end to end.
+Write-Host "`nPhase EV: Event journal (mode-change events, ordered, gap-honest)" -ForegroundColor Yellow
+VM { & C:\sar\sarctl.exe mode enforce 2>&1 | Out-Null }
+Start-Sleep -Seconds 1
+VM { & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null }
+Start-Sleep -Seconds 1
+$evOut = VM { (& C:\sar\sarctl.exe events 5 2>&1) -join "`n" }
+Write-Host $evOut -ForegroundColor DarkGray
+$evLines = $evOut -split "`n" | Where-Object { $_ -match '^event \d+: class=' }
+$evCount = $evLines.Count
+$evModeChanges = ($evLines | Select-String 'class=mode-changed').Count
+$seqs = @()
+foreach ($l in $evLines) { if ($l -match 'sequence=(\d+)') { $seqs += [uint64]$Matches[1] } }
+$evMonotonic = $true
+for ($i = 1; $i -lt $seqs.Count; $i++) { if ($seqs[$i] -le $seqs[$i - 1]) { $evMonotonic = $false } }
+Metric "events read (single connection, backfill from ring start)" "$evCount"
+Metric "mode-changed events observed" "$evModeChanges"
+Assert "event journal connects and surfaces at least one event" ($evCount -gt 0) "count=$evCount"
+Assert "event journal surfaces the mode-change events just performed" ($evModeChanges -ge 2) "mode-changed=$evModeChanges"
+Assert "event journal sequence numbers strictly increase within a connection" ($evMonotonic) ("sequences: " + ($seqs -join ','))
+VM { & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null }
 
 # ── Phase B: FP / availability under AUDIT ─────────────────────────────
 Write-Host "`nPhase B: Benign workload under AUDIT (FP load + availability)" -ForegroundColor Yellow

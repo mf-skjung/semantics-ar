@@ -7,6 +7,7 @@
 #include "keystore_persist.h"
 #include "preserve.h"
 #include "phantom.h"
+#include "eventlog.h"
 
 SAR_GLOBALS g_sar;
 PSAR_STATE g_sar_state;
@@ -138,6 +139,11 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
         g_sar.filter = NULL;
     }
 
+    if (g_sar.eventlog != NULL) {
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
+    }
+
     if (g_sar.state != NULL) {
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
@@ -237,8 +243,18 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         return status;
     g_sar_state = g_sar.state;
 
+    status = SarEventLogCreate(&g_sar.eventlog);
+    if (!NT_SUCCESS(status)) {
+        SarStateDestroy(g_sar.state);
+        g_sar.state = NULL;
+        g_sar_state = NULL;
+        return status;
+    }
+
     status = FltRegisterFilter(DriverObject, &g_sar_registration, &g_sar.filter);
     if (!NT_SUCCESS(status)) {
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
         g_sar_state = NULL;
@@ -249,6 +265,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     if (!NT_SUCCESS(status)) {
         FltUnregisterFilter(g_sar.filter);
         g_sar.filter = NULL;
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
         g_sar_state = NULL;
@@ -261,6 +279,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
         g_sar.filter = NULL;
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
         g_sar_state = NULL;
@@ -274,6 +294,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
         g_sar.filter = NULL;
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
         g_sar_state = NULL;
@@ -299,6 +321,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
         g_sar.filter = NULL;
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
         g_sar_state = NULL;
@@ -330,6 +354,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
         g_sar.filter = NULL;
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
         SarStateDestroy(g_sar.state);
         g_sar.state = NULL;
         g_sar_state = NULL;

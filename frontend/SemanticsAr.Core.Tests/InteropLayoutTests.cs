@@ -11,4 +11,10 @@ public sealed class InteropLayoutTests
     {
         Assert.Equal(40, Unsafe.SizeOf<SarApiPosture>());
     }
+
+    [Fact]
+    public void SarApiEvent_MatchesNativeLayout()
+    {
+        Assert.Equal(48, Unsafe.SizeOf<SarApiEvent>());
+    }
 }

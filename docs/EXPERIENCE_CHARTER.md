@@ -548,9 +548,29 @@ precondition is not yet met, the dependent frontend decision degrades as stated 
 - **[OPEN] X.4 — Self-protection posture surfacing.** How the UI reflects the PPL/ELAM
   self-protection unit (Const. VII; HANDOFF Unit 5) once present, beyond the descent/halt
   mapping already fixed in III.2a. *Closes by:* that unit landing.
-- **[OPEN] X.5 — Deployment footprint target.** Self-contained WPF is large and non-trimmable;
-  framework-dependent + a bundled runtime installer is smaller. *Closes by:* measuring the
-  actual installer/idle-memory size against the trust/footprint goal (see X.7).
+- **[DECISION] X.5 — Deployment footprint: framework-dependent, with the runtime as an installer
+  precondition, not a bundled copy.** Measured on this build (`dotnet publish -r win-x64`):
+  framework-dependent is 7.31 MB across 14 files; self-contained is 146.39 MB across 409 files —
+  a 20x difference for a resident tray process, which the trust/footprint goal (X.7) weighs
+  against. Framework-dependent also carries a security-specific advantage a self-contained copy
+  does not: the .NET runtime is serviced centrally by the OS's own update channel, so a runtime
+  CVE is patched without this app being redeployed; a self-contained app freezes its own runtime
+  copy and only gets that patch when the vendor republishes. For a protective agent, that is the
+  same reasoning already governing the driver's signing chain (Const. X.2) — patchability of the
+  privileged, always-running component is a security property, not just an operational
+  convenience. The one real risk framework-dependent carries — the .NET 10 Desktop Runtime is
+  not preinstalled on Windows by default (unlike legacy .NET Framework 4.8) — is not a reason to
+  bundle a private runtime copy into every install; it is answered at the **installer** layer
+  (detect-and-install the shared runtime as a prerequisite, the same pattern used for VC++
+  redistributables and already the shape of this project's own driver/service installer), which
+  keeps the running app itself framework-dependent and centrally serviceable. This was
+  independently confirmed compatible with the notification surface (VII.3.3/X.6's consumer):
+  `AppNotificationManager`'s dependency on the OS-provided *Singleton* package is orthogonal to
+  self-contained vs. framework-dependent (Microsoft, Windows App SDK self-contained deployment
+  guide, updated 2026-05-28) — the correct pattern either way is `IsSupported()` before
+  `Register()`, degrading the feature off rather than assuming it, mirroring this project's own
+  VII.5.1 OS-generation-descent discipline. `SemanticsAr.App.csproj` already carried
+  `SelfContained=false` as a provisional default; this closes it as the ratified decision.
 - **[OPEN] X.6 — Incident definition and its data contract.** The grouping key for an "incident"
   (candidate: convicted-actor identity + temporal adjacency over journal events) and its
   degraded form when the journal is absent (v1 polling), plus the wire additions VII.3.4 names

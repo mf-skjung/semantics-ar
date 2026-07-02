@@ -45,6 +45,10 @@ sar_comm_status_t sar_comm_handshake(sar_comm_client_t *client);
 sar_comm_status_t sar_comm_query_status(sar_comm_client_t *client,
                                         semantics_ar_status_reply_t *reply);
 
+sar_comm_status_t sar_comm_query_events(sar_comm_client_t *client,
+                                        uint64_t generation, uint64_t sequence,
+                                        semantics_ar_events_reply_t *reply);
+
 sar_comm_status_t sar_comm_run(sar_comm_client_t *client,
                                const sar_comm_dispatch_t *dispatch);
 

@@ -33,6 +33,7 @@ BOOLEAN SarCaptureOriginatorBlocked(_In_opt_ PSAR_CAPTURE_CTX Ctx,
                                     _In_ PEPROCESS Originator);
 
 _IRQL_requires_max_(APC_LEVEL)
-VOID SarCaptureBlockOriginator(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PEPROCESS Originator);
+VOID SarCaptureBlockOriginator(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PEPROCESS Originator,
+                               _In_ UINT32 EventClass);
 
 #endif

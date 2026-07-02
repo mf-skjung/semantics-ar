@@ -56,7 +56,8 @@ BOOL sar_pipe_recv(sar_pipe_conn_t *conn, void *buffer, DWORD capacity,
     return ok;
 }
 
-BOOL sar_pipe_send(sar_pipe_conn_t *conn, const void *buffer, DWORD length)
+BOOL sar_pipe_send(sar_pipe_conn_t *conn, const void *buffer, DWORD length,
+                   DWORD timeout_ms)
 {
     OVERLAPPED ov;
     HANDLE     ev;
@@ -77,7 +78,7 @@ BOOL sar_pipe_send(sar_pipe_conn_t *conn, const void *buffer, DWORD length)
 
         waits[0] = ev;
         waits[1] = conn->stop;
-        w = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        w = WaitForMultipleObjects(2, waits, FALSE, timeout_ms);
         if (w == WAIT_OBJECT_0) {
             ok = GetOverlappedResult(conn->pipe, &ov, &n, FALSE);
         } else {

@@ -4,6 +4,7 @@ endif()
 
 add_library(sarapi SHARED
     src/posture_client.c
+    src/events_client.c
     src/server_identity.c
     src/control_client.c)
 

@@ -1002,6 +1002,37 @@ posture channel that reports false health would claim more certainty than the ev
 The operator surface is a projection consumer, not a security boundary: it holds no authority
 the service does not re-authorize per call (IX.1).
 
+**[DECISION] VII.3.3 — The event journal is bounded, kernel-authoritative, and generation-anchored;
+no new event taxonomy, no second protected channel.** The posture-tier redacted event stream
+promised by VII.3.2 (event class, time, convicted-process identity) is backed by a single
+bounded, fixed-capacity record ring held in kernel pool. As with the keystore's enumeration
+(III.1.3), there is no second, user-mode-trusted copy of this history: the service re-derives
+every reader's view from the kernel ring on demand rather than caching its own, so a service
+restart cannot leave a stale or diverging picture of what happened. Each record's sequence
+number is monotonic within a **generation** minted fresh at driver load (mirroring the keystore's
+own `{generation, head_mac}` freshness anchor, VII.1.4) — a reader presents the last point it has
+seen, and the driver either resumes exactly, or, when that point has aged out of the bounded ring
+or belongs to a generation the current load never produced, returns the oldest record it still
+holds and marks the reply as a **gap**. A reader is never told it is current when history has
+been lost; the honest alternative to false continuity is a declared gap, not silence (the same
+discipline IX.2 already applies to a destroyed preservation store). The ring is a resource, not a
+detection knob (V.1.3, III.5.5): under pressure the oldest record is retired first, the mechanism
+never blocks the response paths that populate it, and it is not runtime-tunable. The event
+taxonomy is not new: it is exactly the three ENFORCE triggers of V.1.2 (forward conviction,
+phantom conviction, capacity exhaustion) plus a mode change and a whitelist change, each already
+defined elsewhere in this document. Because every record already satisfies VII.3.2's posture-tier
+tuple by construction — it structurally cannot carry a path, key material, or phantom identity —
+the same stream serves both audiences; there is no separate elevated event channel to build or
+maintain. An elevated surface that needs full itemized correlation joins this stream to the
+existing catalog and preservation enumeration client-side, by the convicted-actor start key and
+temporal proximity, not through a second protected channel. An optional on-disk durability tier
+for continuity across a service or driver restart may reuse the on-disk assets' append and
+keyed-MAC construction for accidental-corruption detection, but it is not one of the two recovery
+assets (III.1.1) and carries none of their guarantees: its confidentiality and integrity against a
+SYSTEM-privileged, non-kernel-code actor are not claimed, exactly as VII.1.4 already declines to
+claim them for the preservation store beyond its stated bound. Loss or tampering of the journal
+changes what the operator is told happened; it never changes what can be recovered.
+
 ### VII.4 Our own process is where hijack-prevention lives
 **[DECISION] VII.4.1.** Code-integrity guards (e.g. CIG / ACG where the platform and
 the process model allow) and PPL protect the **system's own** service and driver

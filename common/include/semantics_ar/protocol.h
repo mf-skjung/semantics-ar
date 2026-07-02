@@ -25,9 +25,20 @@
 #define SEMANTICS_AR_MSG_PRESERVE_RECOVER 15
 #define SEMANTICS_AR_MSG_PRESERVE_RESULT  16
 #define SEMANTICS_AR_MSG_SET_BUDGET       17
+#define SEMANTICS_AR_MSG_EVENTS_QUERY     18
+#define SEMANTICS_AR_MSG_EVENTS_REPLY     19
 
 #define SEMANTICS_AR_MODE_AUDIT   0
 #define SEMANTICS_AR_MODE_ENFORCE 1
+
+#define SAR_EVENT_CLASS_NONE               0u
+#define SAR_EVENT_CLASS_KEY_CAPTURED       1u
+#define SAR_EVENT_CLASS_BLOCK_FORWARD      2u
+#define SAR_EVENT_CLASS_BLOCK_PHANTOM      3u
+#define SAR_EVENT_CLASS_BLOCK_CAPACITY     4u
+#define SAR_EVENT_CLASS_MODE_CHANGED       5u
+#define SAR_EVENT_CLASS_WHITELIST_ADDED    6u
+#define SAR_EVENT_CLASS_WHITELIST_REMOVED  7u
 
 #define SEMANTICS_AR_PROTO_PATH_MAX  260
 #define SEMANTICS_AR_PROTO_SUBJECT_MAX 256
@@ -164,6 +175,24 @@ typedef struct {
     uint64_t retention_100ns;
     uint64_t capacity_bytes;
 } semantics_ar_set_budget_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint64_t generation;
+    uint64_t sequence;
+} semantics_ar_events_query_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    int32_t  result;
+    uint32_t valid;
+    uint32_t gap;
+    uint32_t event_class;
+    uint64_t generation;
+    uint64_t sequence;
+    uint64_t timestamp;
+    uint64_t actor_start_key;
+} semantics_ar_events_reply_t;
 
 #pragma pack(pop)
 

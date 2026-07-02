@@ -1,5 +1,6 @@
 #include "state.h"
 #include "driver.h"
+#include "eventlog.h"
 
 static ULONG SarIdentityHash(_In_ HANDLE ProcessId, _In_ ULONG BucketCount)
 {
@@ -98,6 +99,7 @@ BOOLEAN SarStateModeSet(_Inout_ PSAR_STATE State, _In_ ULONG RequestedMode)
     if (!sar_mode_set(&local, RequestedMode))
         return FALSE;
     InterlockedExchange(&State->mode, (LONG)local.mode);
+    SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_MODE_CHANGED, 0);
     return TRUE;
 }
 
@@ -109,6 +111,8 @@ sar_wl_status_t SarStateWhitelistAdd(_Inout_ PSAR_STATE State, _In_ const sar_id
     FltAcquirePushLockExclusive(&State->whitelist_lock);
     status = sar_whitelist_add(&State->whitelist, Identity);
     FltReleasePushLock(&State->whitelist_lock);
+    if (status == SAR_WL_OK)
+        SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_WHITELIST_ADDED, 0);
     return status;
 }
 
@@ -120,6 +124,8 @@ sar_wl_status_t SarStateWhitelistRemove(_Inout_ PSAR_STATE State, _In_ const sar
     FltAcquirePushLockExclusive(&State->whitelist_lock);
     status = sar_whitelist_remove(&State->whitelist, Identity);
     FltReleasePushLock(&State->whitelist_lock);
+    if (status == SAR_WL_OK)
+        SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_WHITELIST_REMOVED, 0);
     return status;
 }
 

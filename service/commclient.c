@@ -267,6 +267,32 @@ sar_comm_status_t sar_comm_query_status(sar_comm_client_t *client,
     return SAR_COMM_OK;
 }
 
+sar_comm_status_t sar_comm_query_events(sar_comm_client_t *client,
+                                        uint64_t generation, uint64_t sequence,
+                                        semantics_ar_events_reply_t *reply)
+{
+    semantics_ar_events_query_t query;
+    sar_comm_status_t cs;
+
+    if (!client || !reply)
+        return SAR_COMM_ERR_PROTOCOL;
+
+    memset(&query, 0, sizeof(query));
+    memset(reply, 0, sizeof(*reply));
+    sar_comm_init_header(&query.header, SEMANTICS_AR_MSG_EVENTS_QUERY,
+                         (uint32_t)sizeof(query));
+    query.generation = generation;
+    query.sequence = sequence;
+
+    cs = sar_comm_send_recv(client, &query, (uint32_t)sizeof(query),
+                            reply, (uint32_t)sizeof(*reply),
+                            SEMANTICS_AR_MSG_EVENTS_REPLY);
+    if (cs != SAR_COMM_OK)
+        return cs;
+
+    return SAR_COMM_OK;
+}
+
 sar_comm_status_t sar_comm_run(sar_comm_client_t *client,
                                const sar_comm_dispatch_t *dispatch)
 {

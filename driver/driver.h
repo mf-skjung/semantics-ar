@@ -35,6 +35,7 @@
 #define SAR_POOL_TAG_PRESKEY   'kPrS'
 #define SAR_POOL_TAG_PHANTOM  'hPrS'
 #define SAR_POOL_TAG_SECTION  'cSeS'
+#define SAR_POOL_TAG_EVENTLOG 'lErS'
 
 #define SAR_WHITELIST_CAPACITY    256u
 #define SAR_IDENTITY_BUCKET_COUNT 1024u
@@ -107,6 +108,7 @@ struct _SAR_CAPTURE_CTX;
 struct _SAR_KEYSTORE;
 struct _SAR_PRESERVE;
 struct _SAR_PHANTOM;
+struct _SAR_EVENTLOG;
 
 typedef struct _SAR_GLOBALS {
     PDRIVER_OBJECT driver_object;
@@ -117,6 +119,7 @@ typedef struct _SAR_GLOBALS {
     struct _SAR_CAPTURE_CTX *capture;
     struct _SAR_PRESERVE *preserve;
     struct _SAR_PHANTOM *phantom;
+    struct _SAR_EVENTLOG *eventlog;
     SAR_POSTURE posture;
     BOOLEAN process_notify_registered;
 } SAR_GLOBALS, *PSAR_GLOBALS;

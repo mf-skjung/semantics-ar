@@ -295,10 +295,15 @@ typedef struct {
 
 #define SAR_CONTROL_INSTANCES    4u
 #define SAR_POSTURE_INSTANCES    4u
+#define SAR_EVENTS_INSTANCES     4u
 #define SAR_CONTROL_READ_TIMEOUT 5000u
+#define SAR_CONTROL_SEND_TIMEOUT 5000u
+#define SAR_EVENTS_SEND_TIMEOUT  2000u
+#define SAR_EVENTS_POLL_MS        500u
 
 static sar_pipe_server_t g_control_server;
 static sar_pipe_server_t g_posture_server;
+static sar_pipe_server_t g_events_server;
 static CRITICAL_SECTION  g_control_lock;
 static sar_control_ctx_t g_control_ctx;
 
@@ -334,7 +339,7 @@ static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
     if (!sar_pipe_recv(conn, &cmd, (DWORD)sizeof(cmd), &got,
                        SAR_CONTROL_READ_TIMEOUT)
         || got != (DWORD)sizeof(cmd)) {
-        sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
+        sar_pipe_send(conn, &reply, (DWORD)sizeof(reply), SAR_CONTROL_SEND_TIMEOUT);
         return;
     }
 
@@ -344,7 +349,7 @@ static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
     }
 
     if (!authorized) {
-        sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
+        sar_pipe_send(conn, &reply, (DWORD)sizeof(reply), SAR_CONTROL_SEND_TIMEOUT);
         return;
     }
 
@@ -352,7 +357,7 @@ static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
     sar_control_apply(ctx->client, &cmd, &reply);
     LeaveCriticalSection(ctx->lock);
 
-    sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
+    sar_pipe_send(conn, &reply, (DWORD)sizeof(reply), SAR_CONTROL_SEND_TIMEOUT);
 }
 
 static uint32_t sar_coarsen_health(uint64_t used, uint64_t capacity)
@@ -428,7 +433,55 @@ static void sar_posture_serve(sar_pipe_conn_t *conn, void *vctx)
     }
     frame.descents = sar_posture_descents();
 
-    sar_pipe_send(conn, &frame, (DWORD)sizeof(frame));
+    sar_pipe_send(conn, &frame, (DWORD)sizeof(frame), SAR_CONTROL_SEND_TIMEOUT);
+}
+
+static void sar_events_serve(sar_pipe_conn_t *conn, void *vctx)
+{
+    sar_comm_client_t *client = (sar_comm_client_t *)vctx;
+    uint64_t cursor_generation = 0;
+    uint64_t cursor_sequence = 0;
+
+    for (;;) {
+        semantics_ar_events_reply_t reply;
+        sar_comm_status_t cs;
+
+        if (WaitForSingleObject(conn->stop, 0) == WAIT_OBJECT_0)
+            return;
+
+        EnterCriticalSection(&g_control_lock);
+        cs = sar_comm_query_events(client, cursor_generation, cursor_sequence, &reply);
+        LeaveCriticalSection(&g_control_lock);
+
+        if (cs != SAR_COMM_OK)
+            return;
+
+        if (reply.valid) {
+            sar_events_frame_t frame;
+
+            memset(&frame, 0, sizeof(frame));
+            frame.frame_type = SAR_EVENTS_FRAME_EVENT;
+            frame.frame_length = (uint32_t)sizeof(frame);
+            frame.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+            frame.valid = 1u;
+            frame.gap = reply.gap;
+            frame.event_class = reply.event_class;
+            frame.generation = reply.generation;
+            frame.sequence = reply.sequence;
+            frame.timestamp = reply.timestamp;
+            frame.actor_start_key = reply.actor_start_key;
+
+            if (!sar_pipe_send(conn, &frame, (DWORD)sizeof(frame), SAR_EVENTS_SEND_TIMEOUT))
+                return;
+
+            cursor_generation = reply.generation;
+            cursor_sequence = reply.sequence;
+            continue;
+        }
+
+        if (WaitForSingleObject(conn->stop, SAR_EVENTS_POLL_MS) == WAIT_OBJECT_0)
+            return;
+    }
 }
 
 int sar_control_listener_start(sar_comm_client_t *client)
@@ -462,11 +515,24 @@ int sar_control_listener_start(sar_comm_client_t *client)
         return -1;
     }
 
+    if (sar_pipe_server_start(&g_events_server, SAR_EVENTS_PIPE_NAME,
+                              L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)",
+                              PIPE_ACCESS_OUTBOUND,
+                              (DWORD)sizeof(sar_events_frame_t), 0,
+                              SAR_EVENTS_INSTANCES,
+                              sar_events_serve, client) != 0) {
+        sar_pipe_server_stop(&g_posture_server);
+        sar_pipe_server_stop(&g_control_server);
+        DeleteCriticalSection(&g_control_lock);
+        return -1;
+    }
+
     return 0;
 }
 
 void sar_control_listener_stop(void)
 {
+    sar_pipe_server_stop(&g_events_server);
     sar_pipe_server_stop(&g_posture_server);
     sar_pipe_server_stop(&g_control_server);
     DeleteCriticalSection(&g_control_lock);

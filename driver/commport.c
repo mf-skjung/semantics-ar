@@ -4,6 +4,7 @@
 #include "recovery.h"
 #include "keystore_persist.h"
 #include "preserve.h"
+#include "eventlog.h"
 
 #include <bcrypt.h>
 #include <ntifs.h>
@@ -446,6 +447,48 @@ static NTSTATUS SarHandlePreserveRecover(_Inout_ PSAR_COMM Comm,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandleEventsQuery(_Inout_ PSAR_COMM Comm,
+                                     _In_ const semantics_ar_events_query_t *Request,
+                                     _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                     _In_ ULONG OutputBufferLength,
+                                     _Out_ PULONG ReturnLength)
+{
+    semantics_ar_events_reply_t reply;
+    SAR_EVENT_RECORD record;
+    BOOLEAN valid = FALSE;
+    BOOLEAN gap = FALSE;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_EVENTS_REPLY;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.result = 0;
+
+    SarEventLogQuery(g_sar.eventlog, Request->generation, Request->sequence,
+                     &record, &valid, &gap);
+    reply.valid = valid ? 1u : 0u;
+    reply.gap = gap ? 1u : 0u;
+    if (valid) {
+        reply.event_class = record.event_class;
+        reply.generation = record.generation;
+        reply.sequence = record.sequence;
+        reply.timestamp = record.timestamp_100ns;
+        reply.actor_start_key = record.actor_start_key;
+    }
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
                               _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
                               _In_ ULONG InputBufferLength,
@@ -494,6 +537,10 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
     case SEMANTICS_AR_MSG_PRESERVE_RECOVER:
         status = SarHandlePreserveRecover(comm, (const semantics_ar_preserve_recover_t *)InputBuffer,
                                           OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_EVENTS_QUERY:
+        status = SarHandleEventsQuery(comm, (const semantics_ar_events_query_t *)InputBuffer,
+                                      OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
         break;
     case SEMANTICS_AR_MSG_SET_BUDGET:
         if (!sar_handshake_authenticated(&comm->handshake)) {

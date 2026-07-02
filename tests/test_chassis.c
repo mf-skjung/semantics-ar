@@ -96,6 +96,10 @@ static void test_msg_validation(void) {
               == sizeof(semantics_ar_catalog_query_t), "expected len catalog query");
     CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_CATALOG_REPLY)
               == sizeof(semantics_ar_catalog_reply_t), "expected len catalog reply");
+    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_EVENTS_QUERY)
+              == sizeof(semantics_ar_events_query_t), "expected len events query");
+    CHECK(sar_msg_expected_length(SEMANTICS_AR_MSG_EVENTS_REPLY)
+              == sizeof(semantics_ar_events_reply_t), "expected len events reply");
     CHECK(sar_msg_expected_length(0u) == 0u, "expected len unknown is zero");
 }
 

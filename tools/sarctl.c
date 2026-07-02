@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "control.h"
@@ -207,6 +208,66 @@ static int cmd_status(void)
     return 0;
 }
 
+static const wchar_t *event_class_str(uint32_t c)
+{
+    switch (c) {
+    case SAR_EVENT_CLASS_KEY_CAPTURED:      return L"key-captured";
+    case SAR_EVENT_CLASS_BLOCK_FORWARD:     return L"block-forward";
+    case SAR_EVENT_CLASS_BLOCK_PHANTOM:     return L"block-phantom";
+    case SAR_EVENT_CLASS_BLOCK_CAPACITY:    return L"block-capacity";
+    case SAR_EVENT_CLASS_MODE_CHANGED:      return L"mode-changed";
+    case SAR_EVENT_CLASS_WHITELIST_ADDED:   return L"whitelist-added";
+    case SAR_EVENT_CLASS_WHITELIST_REMOVED: return L"whitelist-removed";
+    default:                                return L"unknown";
+    }
+}
+
+static int events_read_frame(HANDLE pipe, sar_events_frame_t *frame)
+{
+    uint8_t *buf = (uint8_t *)frame;
+    DWORD have = 0;
+
+    while (have < (DWORD)sizeof(*frame)) {
+        DWORD got = 0;
+        if (!ReadFile(pipe, buf + have, (DWORD)sizeof(*frame) - have, &got, NULL) || got == 0)
+            return -1;
+        have += got;
+    }
+    return 0;
+}
+
+static int cmd_events(int count)
+{
+    HANDLE pipe;
+    int i;
+
+    pipe = CreateFileW(SAR_EVENTS_PIPE_NAME, GENERIC_READ, 0, NULL,
+                       OPEN_EXISTING, 0, NULL);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        fwprintf(stderr, L"events connect failed (%lu) - is the service running?\n",
+                 GetLastError());
+        return 1;
+    }
+
+    for (i = 0; i < count; i++) {
+        sar_events_frame_t frame;
+
+        memset(&frame, 0, sizeof frame);
+        if (events_read_frame(pipe, &frame) != 0) {
+            fwprintf(stderr, L"events read failed (%lu)\n", GetLastError());
+            CloseHandle(pipe);
+            return 1;
+        }
+        wprintf(L"event %d: class=%ls gap=%d generation=%llu sequence=%llu timestamp=%llu actor=%016llx\n",
+                i, event_class_str(frame.event_class), frame.gap,
+                (unsigned long long)frame.generation, (unsigned long long)frame.sequence,
+                (unsigned long long)frame.timestamp, (unsigned long long)frame.actor_start_key);
+    }
+
+    CloseHandle(pipe);
+    return 0;
+}
+
 static const wchar_t *verdict_str(uint32_t v)
 {
     switch (v) {
@@ -305,11 +366,16 @@ int main(int argc, char **argv)
         return cmd_whitelist(SAR_CTL_OP_WHITELIST_ADD, argv[2]);
     if (argc == 3 && strcmp(argv[1], "whitelist-remove") == 0)
         return cmd_whitelist(SAR_CTL_OP_WHITELIST_REMOVE, argv[2]);
+    if (argc == 2 && strcmp(argv[1], "events") == 0)
+        return cmd_events(1);
+    if (argc == 3 && strcmp(argv[1], "events") == 0)
+        return cmd_events(atoi(argv[2]));
 
     fwprintf(stderr,
              L"usage: sarctl status | list | recover <key_id-hex> <path> | mode <audit|enforce>\n"
              L"       | preserve-list | preserve-recover <path> <offset> <length>\n"
              L"       | budget <retention-seconds> <capacity-MB>\n"
-             L"       | resolve <path> | whitelist-add <path> | whitelist-remove <path>\n");
+             L"       | resolve <path> | whitelist-add <path> | whitelist-remove <path>\n"
+             L"       | events [count]\n");
     return 2;
 }

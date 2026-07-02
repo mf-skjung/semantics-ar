@@ -384,7 +384,7 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
                 SarPhantomRecordEvidence(ppid);
                 if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
                     SarPhantomIsConvicted(ppid)) {
-                    SarCaptureBlockOriginator(g_sar.capture, process);
+                    SarCaptureBlockOriginator(g_sar.capture, process, SAR_EVENT_CLASS_BLOCK_PHANTOM);
                     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
                     Data->IoStatus.Information = 0;
                     return FLT_PREOP_COMPLETE;

@@ -37,6 +37,10 @@ uint32_t sar_msg_expected_length(uint32_t message_type) {
         return (uint32_t)sizeof(semantics_ar_recovery_result_t);
     case SEMANTICS_AR_MSG_SET_BUDGET:
         return (uint32_t)sizeof(semantics_ar_set_budget_t);
+    case SEMANTICS_AR_MSG_EVENTS_QUERY:
+        return (uint32_t)sizeof(semantics_ar_events_query_t);
+    case SEMANTICS_AR_MSG_EVENTS_REPLY:
+        return (uint32_t)sizeof(semantics_ar_events_reply_t);
     default:
         return 0u;
     }

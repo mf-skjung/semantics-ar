@@ -40,6 +40,7 @@ void sar_pipe_server_stop(sar_pipe_server_t *server);
 BOOL sar_pipe_recv(sar_pipe_conn_t *conn, void *buffer, DWORD capacity,
                    DWORD *received, DWORD timeout_ms);
 
-BOOL sar_pipe_send(sar_pipe_conn_t *conn, const void *buffer, DWORD length);
+BOOL sar_pipe_send(sar_pipe_conn_t *conn, const void *buffer, DWORD length,
+                   DWORD timeout_ms);
 
 #endif
