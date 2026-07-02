@@ -45,9 +45,9 @@ int main(void) {
     for (int i = 0; i < 64; i++) sample[i] = (uint8_t)(0x80 + i);
 
     semantics_ar_keystore_record_t ra, rb, rc;
-    sar_keystore_record_init(&ra, K, &va, NULL, 100, 4096, sample, sizeof sample, 0x1000);
-    sar_keystore_record_init(&rb, K, &vb, NULL, 200, 4096, NULL, 0, 0);
-    sar_keystore_record_init(&rc, K, &vc, NULL, 300, 4096, NULL, 0, 0);
+    sar_keystore_record_init(&ra, K, &va, NULL, 100, 4096, sample, sizeof sample, 0x1000, 0, 0);
+    sar_keystore_record_init(&rb, K, &vb, NULL, 200, 4096, NULL, 0, 0, 0, 0);
+    sar_keystore_record_init(&rc, K, &vc, NULL, 300, 4096, NULL, 0, 0, 0, 0);
 
     {
         uint8_t expect[SEMANTICS_AR_MAC_SIZE];
@@ -72,8 +72,8 @@ int main(void) {
         semantics_ar_keystore_record_t rp1, rp2;
         semantics_ar_keystore_record_t store2[4];
         uint64_t c2 = 0;
-        sar_keystore_record_init(&rp1, K, &va, pa, 0, 4096, sample, sizeof sample, 0);
-        sar_keystore_record_init(&rp2, K, &va, pb, 0, 4096, sample, sizeof sample, 0);
+        sar_keystore_record_init(&rp1, K, &va, pa, 0, 4096, sample, sizeof sample, 0, 0, 0);
+        sar_keystore_record_init(&rp2, K, &va, pb, 0, 4096, sample, sizeof sample, 0, 0, 0);
         int a1 = sar_keystore_append(store2, &c2, 4, &rp1);
         int a2 = sar_keystore_append(store2, &c2, 4, &rp1);
         int a3 = sar_keystore_append(store2, &c2, 4, &rp2);

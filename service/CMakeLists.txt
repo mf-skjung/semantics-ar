@@ -7,6 +7,7 @@ add_executable(semantics_ar_service
     commclient.c
     control.c
     pipe_server.c
+    posture.c
     recovery.c
     identity.c)
 
@@ -25,7 +26,8 @@ target_link_libraries(semantics_ar_service PRIVATE
     ncrypt
     wintrust
     crypt32
-    advapi32)
+    advapi32
+    tbs)
 
 set_target_properties(semantics_ar_service PROPERTIES
     C_STANDARD 11

@@ -8,6 +8,15 @@
 
 typedef struct _SAR_PRESERVE SAR_PRESERVE, *PSAR_PRESERVE;
 
+typedef struct _SAR_PRESERVE_STATS {
+    UINT64 capacity_bytes;
+    UINT64 used_bytes;
+    UINT64 retention_100ns;
+    UINT64 oldest_protected_time;
+    UINT32 protected_count;
+    UINT32 probation_count;
+} SAR_PRESERVE_STATS, *PSAR_PRESERVE_STATS;
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarPreserveCreate(_In_ PFLT_FILTER Filter, _In_ PSAR_POSTURE Posture,
                            _Outptr_ PSAR_PRESERVE *Preserve);
@@ -43,6 +52,9 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
 _IRQL_requires_max_(PASSIVE_LEVEL)
 int SarPreserveProject(_In_ PSAR_PRESERVE Preserve, _In_ ULONG64 Index,
                        _Out_ semantics_ar_preserve_entry_t *Entry, _Out_ ULONG64 *Total);
+
+_IRQL_requires_max_(APC_LEVEL)
+VOID SarPreserveStats(_In_opt_ PSAR_PRESERVE Preserve, _Out_ PSAR_PRESERVE_STATS Stats);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarPreserveSetBudget(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 Retention100ns,

@@ -7,13 +7,16 @@ namespace SemanticsAr.Core.Tests;
 
 public sealed class RecoveryLadderTests
 {
-    private static byte[] CatalogEntry(byte[] keyId, uint algorithm, uint mode, string path)
+    private static byte[] CatalogEntry(byte[] keyId, uint algorithm, uint mode, string path,
+        ulong captureTime = 0, ulong actorStartKey = 0)
     {
         byte[] e = new byte[RecoveryLadder.CatalogEntrySize];
         keyId.CopyTo(e, 0);
         BinaryPrimitives.WriteUInt32LittleEndian(e.AsSpan(32), algorithm);
         BinaryPrimitives.WriteUInt32LittleEndian(e.AsSpan(36), mode);
         Encoding.Unicode.GetBytes(path).CopyTo(e, 40);
+        BinaryPrimitives.WriteUInt64LittleEndian(e.AsSpan(560), captureTime);
+        BinaryPrimitives.WriteUInt64LittleEndian(e.AsSpan(568), actorStartKey);
         return e;
     }
 
@@ -33,7 +36,8 @@ public sealed class RecoveryLadderTests
     {
         byte[] key0 = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
         byte[] key1 = Enumerable.Range(100, 32).Select(i => (byte)i).ToArray();
-        byte[] blob = [.. CatalogEntry(key0, 3, 1, @"\Device\HarddiskVolume3\docs\a.txt"),
+        byte[] blob = [.. CatalogEntry(key0, 3, 1, @"\Device\HarddiskVolume3\docs\a.txt",
+                          133000000000000000, 0xAABBCCDD11223344),
                        .. CatalogEntry(key1, 5, 0, @"\Device\HarddiskVolume3\docs\b.txt")];
 
         IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParseCatalog(blob, 2);
@@ -44,6 +48,8 @@ public sealed class RecoveryLadderTests
         Assert.Equal(3u, items[0].Algorithm);
         Assert.Equal(1u, items[0].Mode);
         Assert.Equal(@"\Device\HarddiskVolume3\docs\a.txt", items[0].ProvenancePath);
+        Assert.Equal(133000000000000000ul, items[0].CaptureTime);
+        Assert.Equal(0xAABBCCDD11223344ul, items[0].ActorStartKey);
         Assert.Equal(key1, items[1].KeyId);
         Assert.Equal(@"\Device\HarddiskVolume3\docs\b.txt", items[1].ProvenancePath);
     }

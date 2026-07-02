@@ -11,4 +11,5 @@ public sealed record RecoverableItem
     public ulong Length { get; init; }
     public ulong Size { get; init; }
     public ulong CaptureTime { get; init; }
+    public ulong ActorStartKey { get; init; }
 }

@@ -42,6 +42,9 @@ sar_comm_status_t sar_comm_connect(sar_comm_client_t *client,
 
 sar_comm_status_t sar_comm_handshake(sar_comm_client_t *client);
 
+sar_comm_status_t sar_comm_query_status(sar_comm_client_t *client,
+                                        semantics_ar_status_reply_t *reply);
+
 sar_comm_status_t sar_comm_run(sar_comm_client_t *client,
                                const sar_comm_dispatch_t *dispatch);
 

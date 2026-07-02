@@ -825,6 +825,33 @@ int SarPreserveProject(_In_ PSAR_PRESERVE Preserve, _In_ ULONG64 Index,
     return valid;
 }
 
+_IRQL_requires_max_(APC_LEVEL)
+VOID SarPreserveStats(_In_opt_ PSAR_PRESERVE Preserve, _Out_ PSAR_PRESERVE_STATS Stats)
+{
+    ULONG64 i;
+
+    RtlZeroMemory(Stats, sizeof(*Stats));
+    if (Preserve == NULL || Preserve->ready == 0)
+        return;
+
+    FltAcquirePushLockShared(&Preserve->lock);
+    Stats->capacity_bytes = Preserve->capacity_bytes;
+    Stats->retention_100ns = Preserve->retention_100ns;
+    Stats->used_bytes = sar_preserve_total_bytes(Preserve->records, Preserve->record_count);
+    for (i = 0; i < Preserve->record_count; i++) {
+        const sar_preserve_record_t *r = &Preserve->records[i];
+        if (r->state == SAR_PRESERVE_PROTECTED) {
+            Stats->protected_count++;
+            if (Stats->oldest_protected_time == 0
+                || r->capture_time < Stats->oldest_protected_time)
+                Stats->oldest_protected_time = r->capture_time;
+        } else {
+            Stats->probation_count++;
+        }
+    }
+    FltReleasePushLock(&Preserve->lock);
+}
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarPreserveSetBudget(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 Retention100ns,
                           _In_ UINT64 CapacityBytes)

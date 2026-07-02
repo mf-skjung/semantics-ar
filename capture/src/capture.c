@@ -63,7 +63,8 @@ sar_capture_outcome_t sar_capture_run(const sar_capture_request_t *req,
     sar_keystore_record_init(&out->record, mac_key, &out->verdict,
                              req->provenance_path, req->provenance_offset,
                              req->provenance_length,
-                             req->plaintext, req->sample_size, req->file_offset);
+                             req->plaintext, req->sample_size, req->file_offset,
+                             req->capture_time, req->actor_start_key);
     sar_capture_build_notify(&out->record, &out->notify);
     out->outcome = SAR_CAPTURE_CONVICTED;
     return SAR_CAPTURE_CONVICTED;

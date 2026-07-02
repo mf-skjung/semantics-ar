@@ -27,6 +27,8 @@ typedef struct {
     const uint16_t *provenance_path;
     uint64_t        provenance_offset;
     uint64_t        provenance_length;
+    uint64_t        capture_time;
+    uint64_t        actor_start_key;
 } sar_capture_request_t;
 
 typedef struct {

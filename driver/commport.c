@@ -290,6 +290,17 @@ static NTSTATUS SarHandleGetStatus(_Inout_ PSAR_COMM Comm,
     reply.mode = SarStateModeGet(g_sar_state);
     reply.captured_key_count = (uint64_t)g_sar_state->captured_key_count;
 
+    {
+        SAR_PRESERVE_STATS stats;
+        SarPreserveStats(g_sar.preserve, &stats);
+        reply.preserve_capacity_bytes = stats.capacity_bytes;
+        reply.preserve_used_bytes = stats.used_bytes;
+        reply.preserve_retention_100ns = stats.retention_100ns;
+        reply.preserve_oldest_protected_time = stats.oldest_protected_time;
+        reply.preserve_protected_count = stats.protected_count;
+        reply.preserve_probation_count = stats.probation_count;
+    }
+
     RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
     *ReturnLength = (ULONG)sizeof(reply);
     return STATUS_SUCCESS;

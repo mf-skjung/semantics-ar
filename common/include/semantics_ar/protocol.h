@@ -87,6 +87,12 @@ typedef struct {
     uint32_t protocol_version;
     uint32_t mode;
     uint64_t captured_key_count;
+    uint64_t preserve_capacity_bytes;
+    uint64_t preserve_used_bytes;
+    uint64_t preserve_retention_100ns;
+    uint64_t preserve_oldest_protected_time;
+    uint32_t preserve_protected_count;
+    uint32_t preserve_probation_count;
 } semantics_ar_status_reply_t;
 
 typedef struct {
@@ -106,6 +112,8 @@ typedef struct {
     uint32_t mode;
     uint64_t provenance_offset;
     uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint64_t capture_time;
+    uint64_t actor_start_key;
 } semantics_ar_catalog_entry_t;
 
 typedef struct {

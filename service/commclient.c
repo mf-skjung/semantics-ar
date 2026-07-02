@@ -229,26 +229,40 @@ sar_comm_status_t sar_comm_handshake(sar_comm_client_t *client)
     }
 
     {
-        semantics_ar_get_status_t query;
         semantics_ar_status_reply_t reply;
 
-        memset(&query, 0, sizeof(query));
-        memset(&reply, 0, sizeof(reply));
-        sar_comm_init_header(&query.header, SEMANTICS_AR_MSG_GET_STATUS,
-                             (uint32_t)sizeof(query));
-
-        cs = sar_comm_send_recv(client, &query, (uint32_t)sizeof(query),
-                                &reply, (uint32_t)sizeof(reply),
-                                SEMANTICS_AR_MSG_STATUS_REPLY);
+        cs = sar_comm_query_status(client, &reply);
         if (cs != SAR_COMM_OK)
             return cs;
-
-        if (reply.protocol_version != SEMANTICS_AR_PROTOCOL_VERSION)
-            return SAR_COMM_ERR_VERSION;
 
         client->mode = reply.mode;
         client->captured_key_count = reply.captured_key_count;
     }
+
+    return SAR_COMM_OK;
+}
+
+sar_comm_status_t sar_comm_query_status(sar_comm_client_t *client,
+                                        semantics_ar_status_reply_t *reply)
+{
+    semantics_ar_get_status_t query;
+    sar_comm_status_t cs;
+
+    if (!client || !reply)
+        return SAR_COMM_ERR_PROTOCOL;
+
+    memset(&query, 0, sizeof(query));
+    memset(reply, 0, sizeof(*reply));
+    sar_comm_init_header(&query.header, SEMANTICS_AR_MSG_GET_STATUS,
+                         (uint32_t)sizeof(query));
+
+    cs = sar_comm_send_recv(client, &query, (uint32_t)sizeof(query),
+                            reply, (uint32_t)sizeof(*reply),
+                            SEMANTICS_AR_MSG_STATUS_REPLY);
+    if (cs != SAR_COMM_OK)
+        return cs;
+    if (reply->protocol_version != SEMANTICS_AR_PROTOCOL_VERSION)
+        return SAR_COMM_ERR_VERSION;
 
     return SAR_COMM_OK;
 }

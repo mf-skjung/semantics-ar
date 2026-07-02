@@ -141,6 +141,8 @@ sarapi_result_t __cdecl sarapi_catalog_page(uint32_t start,
         entries[i].mode = reply.entries[i].mode;
         memcpy(entries[i].provenance_path, reply.entries[i].provenance_path,
                sizeof(entries[i].provenance_path));
+        entries[i].capture_time = reply.entries[i].capture_time;
+        entries[i].actor_start_key = reply.entries[i].actor_start_key;
     }
     *out_total = reply.total;
     *out_returned = reply.returned;

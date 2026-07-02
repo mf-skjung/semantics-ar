@@ -9,19 +9,17 @@ public static class PostureEvaluator
         return result switch
         {
             SarApiResult.Ok => EvaluateFrame(in posture),
-            SarApiResult.ServerUntrusted => new PostureVerdict(
-                PostureLevel.Red, PostureReason.ServerUntrusted,
-                PostureMode.Unknown, false, 0, false),
-            SarApiResult.VersionMismatch => new PostureVerdict(
-                PostureLevel.Amber, PostureReason.VersionMismatch,
-                PostureMode.Unknown, false, 0, false),
-            SarApiResult.AccessDenied => new PostureVerdict(
-                PostureLevel.Red, PostureReason.AccessDenied,
-                PostureMode.Unknown, false, 0, false),
-            _ => new PostureVerdict(
-                PostureLevel.Red, PostureReason.ServiceUnreachable,
-                PostureMode.Unknown, false, 0, false),
+            SarApiResult.ServerUntrusted => Error(PostureLevel.Red, PostureReason.ServerUntrusted),
+            SarApiResult.VersionMismatch => Error(PostureLevel.Amber, PostureReason.VersionMismatch),
+            SarApiResult.AccessDenied => Error(PostureLevel.Red, PostureReason.AccessDenied),
+            _ => Error(PostureLevel.Red, PostureReason.ServiceUnreachable),
         };
+    }
+
+    private static PostureVerdict Error(PostureLevel level, PostureReason reason)
+    {
+        return new PostureVerdict(level, reason, PostureMode.Unknown, false, 0, false,
+            PostureDescent.None, PreserveHealth.Unknown, PreserveExpiry.None);
     }
 
     private static PostureVerdict EvaluateFrame(in SarApiPosture p)
@@ -33,23 +31,27 @@ public static class PostureEvaluator
             _ => PostureMode.Unknown,
         };
 
+        PostureDescent descents = (PostureDescent)p.Descents;
+        PreserveHealth health = (PreserveHealth)p.PreserveHealth;
+        PreserveExpiry expiry = (PreserveExpiry)p.OldestExpiryBucket;
+
         if (p.ServiceRunning == 0)
             return new PostureVerdict(PostureLevel.Red, PostureReason.ServiceNotRunning,
-                mode, true, p.CapturedKeyCount, false);
+                mode, true, p.CapturedKeyCount, false, descents, health, expiry);
 
         if (p.DriverConnected == 0)
             return new PostureVerdict(PostureLevel.Red, PostureReason.DriverDisconnected,
-                mode, true, p.CapturedKeyCount, false);
+                mode, true, p.CapturedKeyCount, false, descents, health, expiry);
 
         if (mode == PostureMode.Enforce)
             return new PostureVerdict(PostureLevel.Green, PostureReason.Protected,
-                mode, true, p.CapturedKeyCount, false);
+                mode, true, p.CapturedKeyCount, false, descents, health, expiry);
 
         if (mode == PostureMode.Audit)
             return new PostureVerdict(PostureLevel.Amber, PostureReason.AuditMode,
-                mode, true, p.CapturedKeyCount, false);
+                mode, true, p.CapturedKeyCount, false, descents, health, expiry);
 
         return new PostureVerdict(PostureLevel.Amber, PostureReason.VersionMismatch,
-            mode, false, p.CapturedKeyCount, false);
+            mode, false, p.CapturedKeyCount, false, descents, health, expiry);
     }
 }

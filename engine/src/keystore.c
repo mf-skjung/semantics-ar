@@ -37,7 +37,9 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
                               uint64_t provenance_length,
                               const uint8_t *sample,
                               uint32_t sample_len,
-                              uint64_t sample_offset) {
+                              uint64_t sample_offset,
+                              uint64_t capture_time,
+                              uint64_t actor_start_key) {
     sar_memset(rec, 0, sizeof(*rec));
     rec->algorithm = verdict->algorithm;
     rec->mode = verdict->mode;
@@ -60,6 +62,8 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
         }
     }
     rec->sample_offset = sample_offset;
+    rec->capture_time = capture_time;
+    rec->actor_start_key = actor_start_key;
     if (sample && sample_len > 0) {
         uint32_t sl = sample_len > SEMANTICS_AR_SAMPLE_TAG_MAX
                           ? SEMANTICS_AR_SAMPLE_TAG_MAX : sample_len;

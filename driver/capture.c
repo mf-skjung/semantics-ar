@@ -533,6 +533,12 @@ static VOID SarCaptureWorker(_In_ PFLT_GENERIC_WORKITEM FltWorkItem, _In_ PVOID 
         req.provenance_path = work->provenance_path;
         req.provenance_offset = work->provenance_offset;
         req.provenance_length = work->write_length;
+        {
+            LARGE_INTEGER now;
+            KeQuerySystemTime(&now);
+            req.capture_time = (UINT64)now.QuadPart;
+        }
+        req.actor_start_key = PsGetProcessStartKey(work->originator_process);
 
         if (sar_capture_run(&req, map, SarKeystoreMacKey(g_sar.keystore), result) ==
             SAR_CAPTURE_CONVICTED) {

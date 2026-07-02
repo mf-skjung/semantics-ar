@@ -148,20 +148,72 @@ slices are user-mode-service-only, so no full attack-matrix regression was neede
   re-protection, opposite of execution allow-listing where publisher rules survive updates; signer CN is
   adequate because the exact-hash AND is the load-bearing binding.
 
+**Operator read-plane data-projection foundation — LANDED this session (posture enrichment +
+incident data contract; both driver-touching increments VM-verified `vm_verify_coverage.ps1
+-AttackCount 6` → 19/0, so the driver invariant holds). Externally-researched (independent analyst
++ own primary-source web re-verification) before implementing; three insights are load-bearing and
+are cited inline below.**
+- **D1a — platform descents on the posture endpoint (driver-free; host-verified).** The SYSTEM service
+  computes the recorded descents itself and projects them into the posture frame: TPM via
+  `Tbsi_GetDeviceInfo` (TPM 2.0), VBS/HVCI via user-mode `NtQuerySystemInformation(SystemIsolatedUser
+  ModeInformation)` reading **only** the HIGH-confidence low bits (SecureKernelRunning/HvciEnabled),
+  self-PPL via documented `GetProcessInformation(ProcessProtectionLevelInfo)`. New
+  `service/posture.{c,h}`; `sar_posture_frame_t` gained a `descents` bitmap. **Research insight
+  (re-verified):** compute descents in the service via documented APIs, NOT by decoding the driver's
+  hand-declared `ntsystem.h` higher bits, which drift across builds — the low bits are stable, the
+  high bits are not. No driver change, so this alone needed no VM run.
+- **D1b — preservation-window health, COARSENED on the session-readable endpoint (VM 19/0).** New
+  driver `SarPreserveStats` (shared-lock aggregate: used/capacity, oldest-protected capture time, pool
+  counts) projected through an extended `STATUS_REPLY`; the service does a live, `g_control_lock`-serialized
+  `GET_STATUS` per posture read (fresh + honest) and **coarsens** it to a band (healthy/low/critical) +
+  a bucketed oldest-protected-expiry before it reaches the frame. **Research insight (re-verified against
+  MITRE T1490 / VSS `maxsize` FIFO eviction): exposing exact preservation capacity/expiry to a
+  non-admin same-session process is a real eviction/timing ORACLE** (the same primitive ransomware uses
+  to FIFO-evict shadow copies), so exact figures are elevation-only and only a coarsened band/bucket
+  crosses the session endpoint. `frame` gained `preserve_health` + `oldest_expiry_bucket`.
+- **D2 — incident data contract (VM 19/0, capture path touched minimally).** The keystore record gained
+  `capture_time` + `actor_start_key`; the capture worker stamps them just before `sar_capture_run`
+  (`KeQuerySystemTime`; **`PsGetProcessStartKey`** on the held originator `PEPROCESS`). Projected through
+  the catalog (`SarKeystoreProject` → control reply → `sarapi_catalog_page` → `RecoveryLadder`
+  `CatalogEntrySize` 560→576 → `RecoverableItem`). **Research insight (re-verified on MS Learn):**
+  `PsGetProcessStartKey` is a real exported ntddk routine, "unique across boot sessions," reuse-proof and
+  parent-spoof-proof — the correct actor identity vs a recyclable PID. Phase F (Oracle) + Phase H
+  (reboot persistence of the new record struct) both green.
+- **Constitution amended as-if-original (written this session):** VII.3.2 now states the posture endpoint
+  surfaces the recorded descents and the **coarsening discipline** (no exact figure that arms a local
+  eviction/expiry oracle; exact preservation figures belong to the elevated control plane); III.1.3's
+  catalog tuple gained `capture time` + the **boot-unique convicted-actor start key** as the incident
+  temporal/causal anchors (non-secret, not a PID, not a path). This **discharges** the prior "normative
+  home still owed" item.
+- **Scope honesty — what this foundation did NOT include (each a separate follow-on, none half-built):**
+  (a) **`parent_start_key`** for union-find grouping of process-split campaigns (Naked Sun) — an optional
+  robustness *enhancement* of the D2 contract, deferred; needs a `state.{c,h}` identity-record extension
+  (cache the parent start key at process-create, since the parent may exit before capture) → DRIVER change
+  + VM. (b) the **incident grouping algorithm** (managed `{actor + temporal-adjacency}` union-find) — the
+  frontend *consumer* of the contract, pure host-testable .NET. (c) a **T2 exact-preservation-stats op** for
+  the elevated Response/Settings surface (the Constitution already classifies exact figures as elevated).
+  (d) **EXPERIENCE_CHARTER X.2 full closure** — advanced by the coarsening discipline but its final close
+  is a live standard-user product-integration test (reads posture with no prompt, obtains no path/key), per
+  the existing GUI-integration deferral.
+- **Build/verify surface:** host `ctest` (`build_fe`) keystore/keystore_mgr/capture/recover/schedule green;
+  `dotnet test` 43/43; service+sarctl (`build`) + sarapi (`build_fe`) `/W4 /WX` clean; driver
+  `scripts/build_driver.bat` → `BUILD OK`; two full VM runs (D1b, D2) each 19/0.
+
 **Backend-precondition follow-up backlog (each a separate role-bounded slice):**
 - **identity.c catalog-signature fallback** — realization refinement (NOT a direction fix): verify is
   embedded-only (`WTD_CHOICE_FILE`) so catalog-signed apps read "unsigned"; Microsoft's documented pattern is
   catalog lookup (`CryptCATAdminCalcHashFromFileHandle` / `CryptCATAdminEnumCatalogFromHash`) → fall back to
   embedded. Coverage gain, no security loss; the primary target (embedded-signed third-party apps) already works.
-- **Posture enrichment** (preserve capacity / oldest-protected-expiry, pool status, platform descents) and the
-  **incident data contract** (precondition 4: catalog `capture_time` + convicted-actor identity) both need NEW
-  driver-side projection → **DRIVER change + full VM regression** (`vm_verify_coverage.ps1 -AttackCount 6` → 19/0).
+- **Posture enrichment** (descents, preserve capacity / oldest-protected-expiry, pool status) and the
+  **incident data contract** (precondition 4: catalog `capture_time` + convicted-actor identity) — **DONE this
+  session, VM 19/0** (see the read-plane foundation block above). Remaining within this line: `parent_start_key`
+  (split-campaign union-find), the managed incident-grouping algorithm, and a T2 exact-preservation-stats op.
 - **Push + event journal** (precondition 2) — opens a user-mode integrity / secret-management axis; the posture
   frame already carries an opcode header (`frame_type` / `frame_length`) for a future subscribe stream (v1
-  degrades to polling per EXPERIENCE_CHARTER VII.3.3).
-- **Normative home still owed**: the posture-endpoint authority split + redaction discipline + the two new
-  projected fields need a **Constitution Part VII amendment** (as-if-original, per EXPERIENCE_CHARTER VII.0) —
-  not yet written.
+  degrades to polling per EXPERIENCE_CHARTER VII.3.3). The redacted event class + convicted-process identity it
+  must carry are now defined by the VII.3.2 amendment.
+- **Normative home** for the posture-endpoint authority split + redaction/coarsening discipline + the new
+  projected fields — **written this session** (Constitution VII.3.2 + III.1.3, as-if-original). No longer owed.
 
 **Immediate next steps for the successor (frontend implementer):**
 - Produce the UI/UX with **claude design (DesignSync)** per the charter — priority: Home/Shield posture hero,

@@ -38,6 +38,8 @@ typedef struct {
     uint32_t algorithm;
     uint32_t mode;
     uint16_t provenance_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint64_t capture_time;
+    uint64_t actor_start_key;
 } sar_catalog_entry_t;
 
 typedef struct {

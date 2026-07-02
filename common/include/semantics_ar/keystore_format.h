@@ -52,6 +52,8 @@ typedef struct {
     uint64_t sample_offset;
     uint32_t sample_length;
     uint8_t  sample_tag[SEMANTICS_AR_MAC_SIZE];
+    uint64_t capture_time;
+    uint64_t actor_start_key;
 } semantics_ar_keystore_record_t;
 
 typedef struct {

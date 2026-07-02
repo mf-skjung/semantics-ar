@@ -4,6 +4,7 @@
 
 #include "semantics_ar/protocol.h"
 #include "pipe_server.h"
+#include "posture.h"
 #include "recovery.h"
 
 static int sar_catalog_fetch(sar_comm_client_t *client, uint32_t index,
@@ -207,6 +208,8 @@ int sar_control_apply(sar_comm_client_t *client,
             reply->entries[n].mode = e.mode;
             memcpy(reply->entries[n].provenance_path, e.provenance_path,
                    sizeof(reply->entries[n].provenance_path));
+            reply->entries[n].capture_time = e.capture_time;
+            reply->entries[n].actor_start_key = e.actor_start_key;
         }
         reply->total = total;
         reply->returned = n;
@@ -352,22 +355,78 @@ static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
     sar_pipe_send(conn, &reply, (DWORD)sizeof(reply));
 }
 
+static uint32_t sar_coarsen_health(uint64_t used, uint64_t capacity)
+{
+    uint64_t pct;
+
+    if (capacity == 0)
+        return SAR_POSTURE_PRESERVE_UNKNOWN;
+    pct = (used * 100) / capacity;
+    if (pct >= 90)
+        return SAR_POSTURE_PRESERVE_CRITICAL;
+    if (pct >= 75)
+        return SAR_POSTURE_PRESERVE_LOW;
+    return SAR_POSTURE_PRESERVE_HEALTHY;
+}
+
+static uint32_t sar_coarsen_expiry(uint64_t oldest_protected_100ns, uint64_t retention_100ns)
+{
+    FILETIME ft;
+    ULARGE_INTEGER now;
+    uint64_t expiry;
+    uint64_t remaining;
+
+    if (oldest_protected_100ns == 0)
+        return SAR_POSTURE_EXPIRY_NONE;
+
+    GetSystemTimeAsFileTime(&ft);
+    now.LowPart = ft.dwLowDateTime;
+    now.HighPart = ft.dwHighDateTime;
+
+    expiry = oldest_protected_100ns + retention_100ns;
+    if (expiry <= now.QuadPart)
+        return SAR_POSTURE_EXPIRY_LE_24H;
+
+    remaining = expiry - now.QuadPart;
+    if (remaining <= 24ULL * 3600ULL * 10000000ULL)
+        return SAR_POSTURE_EXPIRY_LE_24H;
+    if (remaining <= 7ULL * 24ULL * 3600ULL * 10000000ULL)
+        return SAR_POSTURE_EXPIRY_LE_7D;
+    return SAR_POSTURE_EXPIRY_GT_7D;
+}
+
 static void sar_posture_serve(sar_pipe_conn_t *conn, void *vctx)
 {
-    sar_comm_client_t  *client = (sar_comm_client_t *)vctx;
-    sar_posture_frame_t frame;
+    sar_comm_client_t          *client = (sar_comm_client_t *)vctx;
+    sar_posture_frame_t         frame;
+    semantics_ar_status_reply_t status;
+    sar_comm_status_t           cs;
 
     memset(&frame, 0, sizeof(frame));
     frame.frame_type = SAR_POSTURE_FRAME_STATUS;
     frame.frame_length = (uint32_t)sizeof(frame);
     frame.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
     frame.flags = SAR_POSTURE_FLAG_SERVICE_RUNNING;
-    if (client->port != INVALID_HANDLE_VALUE
-        && InterlockedCompareExchange(&client->running, 1, 1) == 1)
+
+    memset(&status, 0, sizeof(status));
+    EnterCriticalSection(&g_control_lock);
+    cs = sar_comm_query_status(client, &status);
+    LeaveCriticalSection(&g_control_lock);
+
+    if (cs == SAR_COMM_OK) {
         frame.flags |= SAR_POSTURE_FLAG_DRIVER_CONNECTED;
-    frame.mode = client->mode;
-    frame.captured_key_count = (uint64_t)InterlockedCompareExchange64(
-        (volatile LONG64 *)&client->captured_key_count, 0, 0);
+        frame.mode = status.mode;
+        frame.captured_key_count = status.captured_key_count;
+        frame.preserve_health = sar_coarsen_health(status.preserve_used_bytes,
+                                                   status.preserve_capacity_bytes);
+        frame.oldest_expiry_bucket = sar_coarsen_expiry(
+            status.preserve_oldest_protected_time, status.preserve_retention_100ns);
+    } else {
+        frame.mode = client->mode;
+        frame.captured_key_count = (uint64_t)InterlockedCompareExchange64(
+            (volatile LONG64 *)&client->captured_key_count, 0, 0);
+    }
+    frame.descents = sar_posture_descents();
 
     sar_pipe_send(conn, &frame, (DWORD)sizeof(frame));
 }

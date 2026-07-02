@@ -40,7 +40,9 @@ void sar_keystore_record_init(semantics_ar_keystore_record_t *rec,
                               uint64_t provenance_length,
                               const uint8_t *sample,
                               uint32_t sample_len,
-                              uint64_t sample_offset);
+                              uint64_t sample_offset,
+                              uint64_t capture_time,
+                              uint64_t actor_start_key);
 
 int sar_keystore_append(semantics_ar_keystore_record_t *records,
                         uint64_t *count, uint64_t capacity,

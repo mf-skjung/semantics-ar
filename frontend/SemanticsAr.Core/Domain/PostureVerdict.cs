@@ -6,4 +6,7 @@ public readonly record struct PostureVerdict(
     PostureMode Mode,
     bool ManagementAvailable,
     ulong CapturedKeyCount,
-    bool IsStale);
+    bool IsStale,
+    PostureDescent Descents,
+    PreserveHealth PreserveHealth,
+    PreserveExpiry OldestProtectedExpiry);

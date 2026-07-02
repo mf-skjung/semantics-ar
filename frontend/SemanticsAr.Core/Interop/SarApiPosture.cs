@@ -10,4 +10,7 @@ public struct SarApiPosture
     public uint DriverConnected;
     public uint Mode;
     public ulong CapturedKeyCount;
+    public uint Descents;
+    public uint PreserveHealth;
+    public uint OldestExpiryBucket;
 }

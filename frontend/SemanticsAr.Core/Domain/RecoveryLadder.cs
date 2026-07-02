@@ -5,7 +5,7 @@ namespace SemanticsAr.Core.Domain;
 
 public static class RecoveryLadder
 {
-    public const int CatalogEntrySize = 560;
+    public const int CatalogEntrySize = 576;
     public const int PreserveEntrySize = 552;
     public const int KeyIdSize = 32;
 
@@ -22,6 +22,8 @@ public static class RecoveryLadder
             uint algorithm = BinaryPrimitives.ReadUInt32LittleEndian(e.Slice(32, 4));
             uint mode = BinaryPrimitives.ReadUInt32LittleEndian(e.Slice(36, 4));
             string path = ReadPath(e.Slice(40, PathBytes));
+            ulong capture = BinaryPrimitives.ReadUInt64LittleEndian(e.Slice(560, 8));
+            ulong actor = BinaryPrimitives.ReadUInt64LittleEndian(e.Slice(568, 8));
 
             items.Add(new RecoverableItem
             {
@@ -30,6 +32,8 @@ public static class RecoveryLadder
                 KeyId = keyId,
                 Algorithm = algorithm,
                 Mode = mode,
+                CaptureTime = capture,
+                ActorStartKey = actor,
             });
         }
         return items;

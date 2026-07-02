@@ -27,12 +27,29 @@ typedef enum {
     SARAPI_TRANSPORT_ERROR = 6
 } sarapi_result_t;
 
+#define SARAPI_DESCENT_NO_TPM      0x1u
+#define SARAPI_DESCENT_NO_VBS_HVCI 0x2u
+#define SARAPI_DESCENT_NO_PPL      0x4u
+
+#define SARAPI_PRESERVE_UNKNOWN    0u
+#define SARAPI_PRESERVE_HEALTHY    1u
+#define SARAPI_PRESERVE_LOW        2u
+#define SARAPI_PRESERVE_CRITICAL   3u
+
+#define SARAPI_EXPIRY_NONE         0u
+#define SARAPI_EXPIRY_GT_7D        1u
+#define SARAPI_EXPIRY_LE_7D        2u
+#define SARAPI_EXPIRY_LE_24H       3u
+
 typedef struct {
     uint32_t protocol_version;
     uint32_t service_running;
     uint32_t driver_connected;
     uint32_t mode;
     uint64_t captured_key_count;
+    uint32_t descents;
+    uint32_t preserve_health;
+    uint32_t oldest_expiry_bucket;
 } sarapi_posture_t;
 
 SARAPI_API uint32_t __cdecl sarapi_abi_version(void);
@@ -50,6 +67,8 @@ typedef struct {
     uint32_t algorithm;
     uint32_t mode;
     uint16_t provenance_path[SARAPI_PATH_MAX];
+    uint64_t capture_time;
+    uint64_t actor_start_key;
 } sarapi_catalog_entry_t;
 
 typedef struct {

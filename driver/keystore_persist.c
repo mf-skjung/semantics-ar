@@ -331,6 +331,8 @@ int SarKeystoreProject(_In_ PSAR_KEYSTORE Keystore, _In_ ULONG64 Index,
         Entry->provenance_offset = r->provenance_offset;
         RtlCopyMemory(Entry->provenance_path, r->provenance_path,
                       sizeof(Entry->provenance_path));
+        Entry->capture_time = r->capture_time;
+        Entry->actor_start_key = r->actor_start_key;
         valid = 1;
     }
     FltReleasePushLock(&Keystore->lock);

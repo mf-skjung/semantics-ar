@@ -373,12 +373,18 @@ would diverge from the keystore (most visibly, it would not survive a service re
 while the keystore does) and would be a second thing to protect. On the authenticated
 communication port — and only after the client handshake completes (VII.3) — the kernel
 projects, per record, the **non-secret** tuple {key identifier, algorithm, mode,
-provenance offset, provenance path}. It never projects key material, the IV, or the
-verification tag. This is the same non-secret tuple the post-conviction notification
-already carries (II.5), pulled on demand rather than pushed; enumeration therefore widens
-the recovery exchange of III.1.2 by exactly these non-secret fields and by nothing else,
-and III.1.2's "key identifier, target path, status only" continues to bind the *recovery*
-exchange unchanged. Because the keystore holds one record per encrypted region (II.5.1), the
+provenance offset, provenance path, capture time, convicted-actor start key}. It never projects
+key material, the IV, or the verification tag. The capture time and the actor start key are the
+temporal and causal anchors that let the operator surface group a multi-file destruction into a
+single **incident** — they record *when* a file was convicted and *which process instance*
+convicted it, never a second file path or any secret. The actor start key is the writing
+process's **boot-session-unique** start key (a reuse-proof, parent-spoof-proof identifier of the
+process instance itself), not a recyclable process id and not an image path; identity enters the
+catalog only as this opaque evidence about a convicted actor (VI.1), never as the basis of
+capture. This is the post-conviction notification's non-secret tuple (II.5), extended by the two
+incident anchors, pulled on demand rather than pushed; enumeration therefore widens the recovery
+exchange of III.1.2 by exactly these non-secret fields and by nothing else, and III.1.2's "key
+identifier, target path, status only" continues to bind the *recovery* exchange unchanged. Because the keystore holds one record per encrypted region (II.5.1), the
 catalog enumerates one entry per captured region, so a reused key's whole recoverable set is
 visible, not just a single representative. The preservation store is enumerated the same way
 (III.5.6): per held original the kernel projects only the non-secret {provenance path, region
@@ -963,11 +969,17 @@ it owns the first instance of its name, and a pre-existing name is treated as ta
 (the `NT AUTHORITY\INTERACTIVE` group, SID `S-1-5-4`, granted read access but **not** the right
 to create a pipe instance), so a standard-user surface can show whether protection is healthy
 without forcing an elevation prompt. It projects only **non-secret posture** — protocol version,
-service and driver health, mode, aggregate captured-key count, and, where the platform later
-projects them, preservation capacity, oldest-protected-hold expiry, and a redacted event stream
-(event class, time, and convicted-process identity). It never carries a file path, provenance,
-key material, an IV, a verification tag, a held original's bytes, or any phantom identity
-(VIII.0). The client authenticates the endpoint before trusting it — a read that cannot be
+service and driver health, mode, aggregate captured-key count, the recorded platform descents
+(no hardware-sealed keystore, no VBS/HVCI, no protected-process self-protection — VII.5), the
+**preservation-window health**, and a redacted event stream (event class, time, and
+convicted-process identity). Because the session-readable audience includes a possibly-hostile
+same-host process, no figure on this endpoint may hand a local adversary a precise eviction or
+expiry oracle: the preservation store's used and total capacity, the oldest protected hold's
+remaining window, and the per-pool hold counts are projected only as a **coarsened band**
+(healthy / low / critical) and a **bucketed** remaining window, never as an exact quantity or
+timestamp. Exact preservation figures are itemized posture and belong to the elevated control
+plane, never to the session-readable endpoint. It never carries a file path, provenance, key
+material, an IV, a verification tag, a held original's bytes, or any phantom identity (VIII.0). The client authenticates the endpoint before trusting it — a read that cannot be
 confirmed to originate from the SYSTEM service is discarded, not shown — because a squatted
 posture channel that reports false health would claim more certainty than the evidence holds.
 The operator surface is a projection consumer, not a security boundary: it holds no authority

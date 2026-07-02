@@ -6,7 +6,8 @@ namespace SemanticsAr.Core.Tests;
 
 public sealed class PostureEvaluatorTests
 {
-    private static SarApiPosture Frame(uint service, uint driver, uint mode, ulong count = 0)
+    private static SarApiPosture Frame(uint service, uint driver, uint mode,
+        ulong count = 0, uint descents = 0, uint health = 0, uint expiry = 0)
     {
         return new SarApiPosture
         {
@@ -15,6 +16,9 @@ public sealed class PostureEvaluatorTests
             DriverConnected = driver,
             Mode = mode,
             CapturedKeyCount = count,
+            Descents = descents,
+            PreserveHealth = health,
+            OldestExpiryBucket = expiry,
         };
     }
 
@@ -62,6 +66,39 @@ public sealed class PostureEvaluatorTests
         Assert.Equal(PostureLevel.Amber, v.Level);
         Assert.Equal(PostureReason.VersionMismatch, v.Reason);
         Assert.False(v.ManagementAvailable);
+    }
+
+    [Fact]
+    public void Descents_ArePassedThroughWithoutChangingLevel()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok,
+            Frame(1, 1, 1, 0, 0x1u | 0x4u));
+        Assert.Equal(PostureLevel.Green, v.Level);
+        Assert.Equal(PostureDescent.NoTpm | PostureDescent.NoPpl, v.Descents);
+    }
+
+    [Fact]
+    public void NoDescents_IsPostureDescentNone()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1));
+        Assert.Equal(PostureDescent.None, v.Descents);
+    }
+
+    [Fact]
+    public void PreserveHealthAndExpiry_ArePassedThrough()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok,
+            Frame(1, 1, 1, 0, 0, health: 3u, expiry: 3u));
+        Assert.Equal(PreserveHealth.Critical, v.PreserveHealth);
+        Assert.Equal(PreserveExpiry.WithinOneDay, v.OldestProtectedExpiry);
+    }
+
+    [Fact]
+    public void PreserveHealthUnknown_WhenStatsAbsent()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1));
+        Assert.Equal(PreserveHealth.Unknown, v.PreserveHealth);
+        Assert.Equal(PreserveExpiry.None, v.OldestProtectedExpiry);
     }
 
     [Fact]

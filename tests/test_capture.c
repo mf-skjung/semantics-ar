@@ -72,6 +72,7 @@ static int key_in_buffer(const void *buf, size_t buf_len, const uint8_t *key, si
 static void fill_request(sar_capture_request_t *req,
                          const uint8_t *p, const uint8_t *c, uint32_t len)
 {
+    memset(req, 0, sizeof(*req));
     req->plaintext = p;
     req->ciphertext = c;
     req->sample_size = len;
