@@ -22,11 +22,13 @@ static USHORT SarRecBuildPaths(_In_reads_(SEMANTICS_AR_PROTO_PATH_MAX) const UIN
 {
     USHORT n = 0;
     USHORT i;
+    USHORT prefixCch = (In[0] == (UINT16)L'\\') ? 0 : SAR_REC_NT_PREFIX_CCH;
 
-    RtlCopyMemory(Target, SAR_REC_NT_PREFIX, SAR_REC_NT_PREFIX_CCH * sizeof(WCHAR));
+    if (prefixCch != 0)
+        RtlCopyMemory(Target, SAR_REC_NT_PREFIX, prefixCch * sizeof(WCHAR));
     for (i = 0; i < SEMANTICS_AR_PROTO_PATH_MAX && In[i] != 0; i++)
-        Target[SAR_REC_NT_PREFIX_CCH + i] = (WCHAR)In[i];
-    n = (USHORT)(SAR_REC_NT_PREFIX_CCH + i);
+        Target[prefixCch + i] = (WCHAR)In[i];
+    n = (USHORT)(prefixCch + i);
     Target[n] = L'\0';
     if (i == 0)
         return 0;
@@ -89,6 +91,7 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
     int matched = 0;
     int applied = 0;
     UINT64 recovered = 0;
+    UINT64 recoveredEnd = 0;
 
     *BytesRecovered = 0;
 
@@ -235,6 +238,8 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
         RtlSecureZeroMemory(&rk, sizeof(rk));
         applied++;
         recovered += rlen;
+        if (off + rlen > recoveredEnd)
+            recoveredEnd = off + rlen;
     }
 
     if (!matched) {
@@ -244,6 +249,15 @@ int SarRecoveryExecute(_In_ const semantics_ar_recovery_exec_t *Request,
     if (!applied) {
         result = SAR_RECOVER_DECLINED_MISMATCH;
         goto cleanup;
+    }
+    if (oh != NULL && recoveredEnd < targetlen) {
+        FILE_END_OF_FILE_INFORMATION eof;
+        eof.EndOfFile.QuadPart = (LONGLONG)recoveredEnd;
+        if (!NT_SUCCESS(ZwSetInformationFile(oh, &iosb, &eof, sizeof(eof),
+                                             FileEndOfFileInformation))) {
+            result = SAR_RECOVER_DECLINED_TARGET_IO;
+            goto cleanup;
+        }
     }
     if (oh != NULL && !NT_SUCCESS(ZwFlushBuffersFile(oh, &iosb))) {
         result = SAR_RECOVER_DECLINED_TARGET_IO;

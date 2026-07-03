@@ -13,7 +13,8 @@ target_include_directories(semantics_ar_control PRIVATE
 
 set_target_properties(semantics_ar_control PROPERTIES
     C_STANDARD 11
-    C_STANDARD_REQUIRED ON)
+    C_STANDARD_REQUIRED ON
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
     target_compile_options(semantics_ar_control PRIVATE /W4 /WX)

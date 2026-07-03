@@ -50,6 +50,12 @@ public sealed class RecoverySession
             State = RecoverySessionState.Idle;
             return;
         }
+        catch (System.Runtime.InteropServices.COMException comEx)
+        {
+            State = RecoverySessionState.Unavailable;
+            LastError = ElevatedErrors.FromHResult(comEx.HResult);
+            return;
+        }
         catch
         {
             State = RecoverySessionState.Unavailable;

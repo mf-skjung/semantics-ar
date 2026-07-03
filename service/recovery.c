@@ -7,6 +7,22 @@
 #include "sar_recover.h"
 #include "sar_recover_file.h"
 
+#define SAR_GLOBALROOT_PREFIX L"\\\\.\\GLOBALROOT"
+
+static int sar_win32_path_utf8(const wchar_t *path, char *out, size_t out_cap)
+{
+    if (path[0] == L'\\') {
+        wchar_t rooted[SEMANTICS_AR_PROTO_PATH_MAX + 32];
+        if (_snwprintf_s(rooted, SEMANTICS_AR_PROTO_PATH_MAX + 32, _TRUNCATE,
+                         L"%s%s", SAR_GLOBALROOT_PREFIX, path) < 0)
+            return -1;
+        return WideCharToMultiByte(CP_UTF8, 0, rooted, -1, out, (int)out_cap,
+                                   NULL, NULL) > 0 ? 0 : -1;
+    }
+    return WideCharToMultiByte(CP_UTF8, 0, path, -1, out, (int)out_cap,
+                               NULL, NULL) > 0 ? 0 : -1;
+}
+
 int32_t sar_recovery_run(sar_comm_client_t *client,
                          const uint8_t *key_id,
                          const wchar_t *target_path,
@@ -42,8 +58,7 @@ int32_t sar_recovery_run(sar_comm_client_t *client,
     if (res.status != SAR_RECOVER_OK)
         return res.status;
 
-    if (WideCharToMultiByte(CP_UTF8, 0, target_path, -1, target_utf8,
-                            (int)sizeof(target_utf8), NULL, NULL) <= 0)
+    if (sar_win32_path_utf8(target_path, target_utf8, sizeof(target_utf8)) != 0)
         return SAR_RECOVER_INVALID;
     if (_snprintf_s(temp_utf8, sizeof(temp_utf8), _TRUNCATE, "%s.sarrectmp", target_utf8) < 0)
         return SAR_RECOVER_INVALID;
@@ -93,8 +108,7 @@ int32_t sar_preserve_recovery_run(sar_comm_client_t *client,
     if (res.status != SAR_RECOVER_OK)
         return res.status;
 
-    if (WideCharToMultiByte(CP_UTF8, 0, target_path, -1, target_utf8,
-                            (int)sizeof(target_utf8), NULL, NULL) <= 0)
+    if (sar_win32_path_utf8(target_path, target_utf8, sizeof(target_utf8)) != 0)
         return SAR_RECOVER_INVALID;
     if (_snprintf_s(temp_utf8, sizeof(temp_utf8), _TRUNCATE, "%s.sarrectmp", target_utf8) < 0)
         return SAR_RECOVER_INVALID;

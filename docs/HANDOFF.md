@@ -545,15 +545,234 @@ built/tested to the level this environment allows (native = compile+link, manage
 - **Response/Policy + Settings surfaces** reuse this exact seam (`SetMode`/`SetBudget`/`Whitelist*`/`ResolveIdentity`
   already in the sarapi ABI + COM host); they were deferred pending Recovery proving the seam.
 
+**Elevated-vertical hardening + AP-scope correction — this session (2026-07-04), independently reviewed and
+re-verified before landing.** A dedicated critical-review pass (independent targeted research + adversarial
+design review of the block above, both fact-checked against this repo's actual code/HANDOFF text before
+acceptance — the same discipline §0.1b already used) was run against the elevated COM vertical before its first
+live activation. Two findings changed shipped code; the rest were checked and found already correctly closed or
+out of relevant scope:
+- **`SemanticsArElevationHost.exe` had zero self-hardening — fixed.** `SetProcessMitigationPolicy`
+  (`ProcessImageLoadPolicy`: NoRemoteImages/NoLowMandatoryLabelImages/PreferSystem32Images;
+  `ProcessExtensionPointDisablePolicy`; `ProcessSignaturePolicy`: **MicrosoftSignedOnly** — viable here, unlike
+  `SemanticsAr.App`'s JIT-constrained set, because the host statically links `sarapi`'s control client
+  (`SARAPI_STATIC`, confirmed via `elevation-host/CMakeLists.txt`) and links only
+  `ole32/oleaut32/advapi32/shlwapi/rpcrt4` — zero non-Microsoft-signed runtime dependency, so this **answers**
+  the §0.2 VM-empirical item "which `SetProcessMitigationPolicy` flags load the signed sarapi" for the static-link
+  shape actually shipped: none, because sarapi is never dynamically loaded by this process at all;
+  `ProcessChildProcessPolicy`: **NoChildProcessCreation** — the host never spawns children by design) +
+  `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` now run as the first statements of `RunServer()`,
+  before `CoInitializeEx`. Closes the gap the review found: `SemanticsAr.App`'s own `ProcessHardening.cs`
+  mitigations were never mirrored onto the actual highest-privilege process in the product. Compile+link
+  verified (`cmake --build build_fe --target sar_elevation_host`, `/W4 /WX` clean, `SemanticsArElevationHost.exe`
+  built).
+- **`RecoveryLadder.ParseCatalog`/`ParsePreserve` trusted an untrusted-boundary count against an
+  independently-sized blob — fixed.** The COM out-param `returned`/`total` and the SAFEARRAY blob's actual byte
+  length are two separately-marshaled values with nothing enforcing agreement; a mismatch (marshaling short-read,
+  a future host bug) previously threw an unhandled `ArgumentOutOfRangeException` out of `Span.Slice` instead of
+  degrading gracefully like every other boundary in this codebase. Both methods now clamp `count` to
+  `blob.Length / EntrySize` before iterating (`Math.Clamp`), so a truncated, oversized, empty, or negative count
+  is silently and correctly bounded rather than crashing. Seven new tests (`RecoveryLadderTests.cs`) cover: count
+  exceeding blob length, empty blob, negative count, and a truncated trailing entry, for both `ParseCatalog` and
+  `ParsePreserve`. **`SemanticsAr.Core.Tests` 67/67 green** (up from 60/60; no regressions).
+- **Administrator Protection scope corrected (re-verified, not re-guessed).** Independent re-verification
+  (Google Project Zero, MS Learn, corroborating community reporting) confirms AP was disabled **fleet-wide via a
+  server-side feature flag on 2025-12-01** after shipping in the Oct 2025 optional update (KB5067036), **cannot
+  currently be re-enabled by GPO, Intune, or local policy on a retail machine**, and carries no announced ship
+  date — sharper than this file's prior "still not GA" note (§0.1c). Consequence: the live-VM elevation-moniker
+  proof (the "Runtime product-integration smoke" item above) can presently exercise **classic same-desktop UAC
+  only**; the IU+SY `CoInitializeSecurity` OTS fix and its AP/SMAA-shadow-identity rationale remain the
+  documented, MS-sourced design (unchanged — this is a *testability* gap, not a *correctness* doubt) but are
+  field-unverifiable until Microsoft re-ships AP. **Re-verification trigger:** re-run the AP-specific
+  checkpoints (SMAA token dump, IU+SY-required-under-AP reproduction) the first time AP is confirmed available
+  on the target test build.
+- **Elevation-moniker residual risk, recorded rather than left implicit.** Any medium-IL process on the
+  interactive desktop can request `Elevation:Administrator!new:{CLSID_SarElevatedControl}` and raise a genuine
+  UAC prompt for it; the per-call caller validation (`CoImpersonateClient` → same-session ∧ IL≥Medium) restricts
+  what an *activated* instance will act on, not who may *attempt* activation. The only defense against a
+  spoofed/social-engineered consent is the human recognizing the signed publisher name in the UAC dialog —
+  standard Windows elevation-moniker behavior, not a gap specific to this design, and not further closeable
+  without abandoning the moniker model. Recorded here so it is not later mistaken for an oversight.
+
+**Not yet done — the live activation proof itself remains outstanding**, now deliberately checkpointed rather
+than one end-to-end shot (per the review's risk-bundling finding): (a) bare elevation-moniker activation with a
+no-op verb, (b) a real marshaled round trip, (c) the full Recovery flow through the GUI. Each needs the target
+environment (COM registration, live UAC) and is not host-testable.
+
+**First live-VM execution of `SemanticsAr.App` — this session (2026-07-03), first time this app has ever been run
+on a real machine. Three real, previously-undetectable runtime bugs found and fixed; the elevation-moniker
+activation itself remains blocked by an unresolved E_INVALIDARG, recorded honestly below rather than papered
+over.** Matches this project's own established pattern: every one of these was invisible to `dotnet build`/`dotnet
+test` and surfaced only on first execution.
+- **Fixed — duplicate `NativeLibrary.SetDllImportResolver` crash.** `NativePostureReader` and `NativeEventReader`
+  each registered their own resolver for `SemanticsAr.Core`'s assembly in a static constructor; the second one to
+  run always threw `InvalidOperationException` ("a resolver is already set for the assembly"), crashing the app
+  before the first window paint. Consolidated into a single registration in `NativeMethods`'s own static
+  constructor (the natural single owner, since both reader classes already call through `NativeMethods`); both
+  duplicate `Resolve` methods removed.
+- **Fixed — unhandled `AppNotificationManager.Register()` crash.** `ToastNotifier`'s existing `IsSupported()`
+  guard (correctly implemented per the Charter's "detect the primitive, descend explicitly" discipline) turned out
+  to be insufficient in practice: `IsSupported()` returned `true` on this VM (no Windows App SDK Runtime installed)
+  but `Register()` itself still threw `COMException 0x80040154` (`REGDB_E_CLASSNOTREG`), which was unhandled and
+  crashed the app. `IsSupported()` checking OS/API surface availability is not the same guarantee as the runtime
+  COM class actually being registered on the machine. Fixed by wrapping `Register()` in try/catch and only setting
+  `_available = true` on success — the toast feature now degrades to a real no-op instead of taking the app down
+  with it, closing the gap the "IsSupported() before Register()" pattern alone did not close.
+- **Fixed — `sarapi.dll` / `SemanticsArElevationHost.exe` missing VC++ runtime dependency.** Both native binaries
+  were built with the MSVC default dynamic CRT (`/MD`), so on a bare Windows 11 image with no Visual C++
+  Redistributable installed, loading either failed with `STATUS_DLL_NOT_FOUND` / `System.DllNotFoundException`
+  ("...or one of its dependencies") — for `sarapi.dll` this crashed `JournalService`'s background polling thread
+  (unhandled exceptions on non-UI threads terminate the whole .NET process) the moment the app tried to open the
+  events pipe. Fixed by switching both `sarapi` and `sar_elevation_host` CMake targets to static CRT linkage
+  (`MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"`) — a genuine hardening improvement independent of
+  this bug (fewer external DLL dependencies is smaller DLL-hijack surface, consistent with the process-mitigation
+  work below), not just a workaround. No VC++ Redistributable install is needed on the target now.
+- **Fixed — `RecoveryLadder.ParseCatalog`/`ParsePreserve` untrusted-boundary bounds bug** (already recorded above
+  in this section, re-noted here because it was found and fixed in this same first-execution pass): both now clamp
+  `count` to the blob's actual length before iterating, closing the crash-on-truncated/oversized/negative count
+  case a hand-crafted or corrupted marshaled reply could trigger.
+- **Root-caused and fixed — `SarRegisterServer`'s `InitSecurity()` passed a self-relative security descriptor to
+  `CoInitializeSecurity`, which requires an absolute one.** Found via a from-scratch native diagnostic build
+  (temporary, not shipped) that logged each `RunServer()` step to a file: `InitSecurity()` failed with
+  `HRESULT_FROM_WIN32(1361)` — Win32 error 1361 is literally "A security descriptor is not in the right format
+  (absolute or self-relative)." `ConvertStringSecurityDescriptorToSecurityDescriptorW` always returns self-relative
+  (documented), but `CoInitializeSecurity`'s `pSecDesc` requires absolute when passed as a raw
+  `PSECURITY_DESCRIPTOR` — a well-known, independently-confirmed COM gotcha (Raymond Chen, "The CoInitializeSecurity
+  function demands an absolute security descriptor," Old New Thing, 2024-09-02). Consequence: the elevation host
+  **had never once successfully started** — `RunServer()` failed at `InitSecurity()` and returned exit code 1 every
+  time, before ever reaching `CoRegisterClassObject`/`CoResumeClassObjects`, so no COM activation of it could ever
+  have succeeded regardless of how the client called it. Fixed in `host_main.cpp` `InitSecurity()`: convert the
+  self-relative SD to absolute via the standard two-call `MakeAbsoluteSD` pattern (query sizes, allocate one
+  contiguous buffer, populate) before passing to `CoInitializeSecurity`. **Confirmed live**: after the fix, a
+  manually-launched `SemanticsArElevationHost.exe` stays resident (`CoRegisterClassObject`/`CoResumeClassObjects`
+  both return `S_OK`, the process blocks on `WaitForSingleObject` as designed) instead of exiting immediately.
+- **RESOLVED — the HRESULT was misread the entire time; the real cause was a plain-string `LocalizedString`
+  where an MUI indirect-string reference is required.** Extensive black-box investigation this session (native
+  diagnostic harness, byte-level struct/moniker verification against Microsoft's reference sample, two live
+  Process Monitor traces — one via PowerShell Direct, one via the real app run interactively by the operator,
+  both showing every registry read succeed and then silent rejection with no `AppInfo`/UAC involvement at all —
+  full detail preserved below for the investigative trail, since the *technique* remains valid even though the
+  *conclusion drawn from it at the time* was wrong) failed to find the cause because of a single arithmetic
+  error made early and never rechecked: **`0x8007000D` was called `E_INVALIDARG` throughout this investigation.
+  It is not.** `E_INVALIDARG` is `0x80070057` (`HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)`, Win32 error 87).
+  `0x8007000D` is `HRESULT_FROM_WIN32(ERROR_INVALID_DATA)`, Win32 error **13** — "the data is invalid." A second
+  model (consulted specifically for a fresh read on the same evidence, `claude-fable-5`) caught this and, from it
+  alone, correctly derived the mechanism before touching a debugger: per Microsoft's own elevation-moniker
+  documentation, already fetched once earlier this session but not re-read closely enough — *"the class must be
+  annotated with a 'friendly' display name that is multilingual user interface (MUI) compatible... If the MUI
+  file is missing, **the error code from the `RegLoadMUIStringW` function is returned**."* RPCSS resolves
+  `LocalizedString` through `RegLoadMUIStringW`, which only accepts the indirect-string form
+  `@[path]binary,-resourceID`; given a plain string (`"Semantics-AR Recovery"`, what `registration.cpp` had
+  written), it fails with `ERROR_INVALID_DATA`, and RPCSS propagates that raw Win32 error as the activation
+  HRESULT — **before ever reaching `AppInfo`, before any file access to the target executable, and for *any*
+  activation attempt of a class with `Elevation\Enabled=1`, elevated or not** (RPCSS parses the elevation
+  annotations, including the display name, as part of class-data resolution for every activation of an
+  elevation-registered class) — which is exactly the failure signature both Procmon traces showed and exactly
+  why the trace always ended at the `LocalizedString` read. Every in-box elevation-enabled Windows class
+  (e.g. `IFileOperation`, `{3AD05575-8857-4850-9277-11B85BDB8E09}`) registers `LocalizedString` as
+  `@shell32.dll,-50176` — never a literal string — for this reason.
+
+  **Fix, applied and confirmed live:** `frontend/elevation-host/resources.rc` now carries a `STRINGTABLE` with
+  entry `101, "Semantics-AR Recovery"`, added to `sar_elevation_host`'s CMake sources; `registration.cpp`'s
+  `SarRegisterServer` now writes `LocalizedString` as `@<full exe path>,-101` instead of the literal string.
+  **Confirmed via a minimal inline P/Invoke test (`CoGetObject` with the exact production moniker string and
+  `BIND_OPTS3`): `hr=0x00000000` (`S_OK`)** — the elevation moniker activation succeeds. This is the first time
+  in the project's history that this call has ever returned success.
+
+  **Lesson for future sessions, stated plainly so it is not repeated:** when chasing an unfamiliar HRESULT,
+  decode it precisely (`HRESULT_FROM_WIN32` low 16 bits = Win32 error code) before trusting a remembered/assumed
+  symbolic name, and re-verify that decode independently before spending further effort — an entire multi-hour,
+  multi-technique investigation (struct comparison, marshaling-layer swap, registry re-registration, code
+  signing, Process Monitor tracing from two different session types, UAC event log inspection) was built on top
+  of one mislabeled constant. The investigative techniques themselves (Process Monitor via headless PowerShell
+  Direct automation, a from-scratch dependency-free native repro harness, a same-process control-CLSID test to
+  isolate caller-side vs. registration-side faults) were all sound and are worth reusing; the target of that
+  investigation was simply misnamed from the first step.
+- **Environmental findings, recorded so the next session doesn't rediscover them the hard way:**
+  - **The driver's preservation capture can hold a redeployed file locked for an extended period under rapid
+    repeated rewrites of the same path.** Redeploying the same output filenames many times in quick succession
+    (an abnormal pattern the driver's gate cannot distinguish from destructive rewriting) left `Remove-Item`/
+    `WriteAllBytes` on those exact files failing with `UnauthorizedAccessException` for extended periods; unloading
+    the driver (`fltmc unload semantics_ar`) immediately released the lock every time. Not confirmed as a bug
+    versus an artifact of unusually adversarial-looking test traffic — worth a dedicated look if it recurs under
+    normal single-shot deployment.
+  - **Windows 11's Smart App Control** (`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy!VerifiedAndReputablePolicy
+    State`, `2`=Evaluation) silently blocked writes of newly-compiled, unsigned `.exe`/`.dll` files on this VM
+    image and can only be turned off via the interactive Windows Security GUI while still in Evaluation mode
+    (never programmatically, by design) — and the change needs a reboot to take effect. This is a one-time,
+    per-image setup step for any fresh test VM used for this project's frontend work, not a per-session issue.
+  - **A VMMS-level stuck job** (`Msvm_ConcreteJob` for a prior `Shutdown` operation, `JobState=Running` stuck at
+    0%) can wedge a VM so that `Stop-VM`/`Restart-VM` fail with "the object is in its current state" even though
+    the guest OS itself is healthy; `Restart-Service vmms` on the **host** (not the guest) clears it without
+    touching the VM's disk state.
+
 - **Remaining in the frontend phase (each its own slice, NOT research-firm-closable here):** tiered toast
   notifications (III.3/VIII.5 — open ADR: WinAppSDK `AppNotificationManager` vs. classic COM toast identity for a
-  plain-exe); the elevated control path + itemized reads + consequential verbs (Recovery/Response/Settings) over
-  the hardened control pipe via fresh COM elevation (VII.4.1); **posture enrichment** (capacity / oldest-protected
-  expiry / recorded descents / redacted event stream) — a DRIVER-side projection slice needing full VM regression;
+  plain-exe); the remaining consequential verbs (Response/Settings) over the hardened control pipe via fresh COM
+  elevation (VII.4.1) — Recovery itself is VM-verified end-to-end, see below; **posture enrichment** (capacity /
+  oldest-protected expiry / recorded descents / redacted event stream) — a DRIVER-side projection slice needing
+  full VM regression;
   push/journal (precond. 2) and the incident data contract (precond. 4); a CVD-simulator sign-off of the palette
   values (empirical, not blocking); signing/packaging (precond. 5). The positive **green** no-UAC read is a
   product-integration smoke that needs the driver+service live (structurally guaranteed already); the driver stays
   untouched so VM remains **19/19**.
+
+**Phase 0 — elevated Recovery flow: VM-VERIFIED end-to-end through the real interactive app.** UAC consent →
+elevated COM activation → control pipe → driver decrypt → atomic file replace now completes successfully from a
+live user click, first time in the project's history. Two structural fixes were needed in the recovery path
+itself (distinct from the elevation-moniker/pipe-security fixes above): `driver/recovery.c`'s `SarRecBuildPaths`
+was prefixing `\??\` onto target paths that arrive as already-fully-qualified NT device paths (`\Device\
+HarddiskVolumeN\...`, the form the catalog stores and the frontend forwards unmodified) — now skipped when the
+path already starts with `\`. Separately, the service's `sar_atomic_replace_file` (`service/recovery.c`) was
+handed that same raw NT path and passed it straight to `ReplaceFileW`, which the Win32 subsystem cannot resolve
+without the `\\.\GLOBALROOT\` prefix — a `sar_win32_path_utf8` helper now adds it for any path starting with `\`.
+Safety behavior confirmed live: recovering an already-recovered file correctly declines with
+`SAR_RECOVER_DECLINED_MISMATCH` (the sample-tag check no longer matches once the target is plaintext) rather than
+touching a file that's already correct; the keystore does not purge a record after a successful recovery by
+design (the same key may cover other files, or the operator may re-target), so catalog entries persist.
+
+The driver and the frontend/service tree can drift out of protocol sync if only one side is rebuilt — the driver
+that was loaded on the VM going into this session predated the posture-enrichment protocol fields
+(`semantics_ar_status_reply_t` grew from 32 to 72 bytes) and failed the handshake against a freshly built
+service until rebuilt from current `HEAD`. This dev host has WDK kernel-mode headers (`Include\<ver>\km`,
+`Lib\<ver>\km`) even though `WDKContentRoot` isn't set, so `scripts/build_driver.bat` (which locates them via
+`vcvars64`/`WindowsSdkDir` directly, independent of the `WDKContentRoot` check the CMake driver target uses) works
+without further setup; sign the output with the `CN=SemanticsAr Test` certificate (already trusted on the VM's
+`Cert:\LocalMachine\Root`/`TrustedPublisher`) before deploying — the `Semantics-AR Test Signing` cert used
+earlier for the elevation-host exe is a different, user-mode-only certificate and will not pass kernel driver
+signature verification.
+
+**Known test-tool caveat, not a product defect:** the VM's ad hoc `test_encryptor.exe` (a disposable local build,
+not part of this repository) encrypts in AES-256-CBC with naive zero-byte padding and records no separate
+original-length field, so a file it encrypts cannot be losslessly length-restored — recovery correctly decrypts
+every byte of the true content region (verified byte-for-byte against the golden file) but leaves the tool's own
+zero-padding tail in place, since the keystore's `provenance_length` is the only length on record and it reflects
+the padded ciphertext. This is a limitation of that one-off test binary's encoding choice, not of the recovery
+engine; it does not affect real ransomware payloads using length-preserving stream/CTR modes, which this
+project's driver-level defenses are designed around.
+
+**TOP PRIORITY for the next phase — the preservation layer (III.5.1/III.5.2) needs a full redesign,
+ahead of any further frontend work.** Whole-file capture at every write-intent open is disproportionate
+to the byte range actually destroyed, and it is not just a theoretical concern: `driver/capture.c`'s
+`SarCaptureSubmitOpenBaseline` runs synchronously inside the post-create callback (unlike the write-path
+capture, which defers to a worker thread via `FltQueueGenericWorkItem`), so the whole file is mapped and
+copied into the preservation store *before the opener's `CreateFile` call returns*. This was observed
+directly this session: redeploying a 100-200 KB test executable under rapid rewrites of the same path
+intermittently locked the file (`UnauthorizedAccessException` on `Remove-Item`/`WriteAllBytes`) until the
+driver was unloaded, which released the in-flight capture — a completely benign workload, at a small
+file size, already producing friction. A large database file opened for a small update would consume
+preservation capacity for the whole file regardless of how much is ever written, both blocking the
+opener for the full copy and starving genuinely malicious captures of capacity in the meantime. An
+independent review (`docs/DESIGN_REVIEW_PRESERVATION.md`, second-opinion from Claude Fable 5) argues the
+two deadlock constraints that motivated whole-file-at-open do not actually require it: an ordinary
+write's pre-operation callback runs before the file system holds any lock (safe for a targeted per-region
+read), and the real mmap seam is `IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION` at writable-section
+*creation*, not the file open — every path in `IV.1.2`'s destruction taxonomy traces back to one of two
+upstream, deadlock-free seams, making whole-file capture unnecessary except for the one genuinely-writable
+mmap case (now rare, not a per-open tax). That document is unreviewed by the implementation chain and not
+yet adopted into `CONSTITUTION.md` — read it in full, verify its claims against this driver's actual
+callback registrations (particularly whether `IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION` and MDL writes
+are even currently intercepted), and design the replacement for III.5.1/III.5.2 before resuming
+frontend Phases 1-5.
 
 **Constitution note (this session):** a full internal-consistency audit was done and the drift artifacts fixed
 in-place (as-if-original, no normative change): the ENFORCE block-trigger count now reads **three**

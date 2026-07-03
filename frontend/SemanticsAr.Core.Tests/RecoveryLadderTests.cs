@@ -72,6 +72,77 @@ public sealed class RecoveryLadderTests
     }
 
     [Fact]
+    public void ParseCatalog_CountExceedingBlobLength_ReturnsOnlyWhatFits()
+    {
+        byte[] key0 = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        byte[] blob = CatalogEntry(key0, 3, 1, @"\Device\HarddiskVolume3\docs\a.txt");
+
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParseCatalog(blob, 5);
+
+        Assert.Single(items);
+        Assert.Equal(key0, items[0].KeyId);
+    }
+
+    [Fact]
+    public void ParseCatalog_EmptyBlobWithPositiveCount_ReturnsEmpty()
+    {
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParseCatalog(ReadOnlySpan<byte>.Empty, 3);
+
+        Assert.Empty(items);
+    }
+
+    [Fact]
+    public void ParseCatalog_NegativeCount_ReturnsEmpty()
+    {
+        byte[] key0 = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        byte[] blob = CatalogEntry(key0, 3, 1, @"\Device\HarddiskVolume3\docs\a.txt");
+
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParseCatalog(blob, -1);
+
+        Assert.Empty(items);
+    }
+
+    [Fact]
+    public void ParseCatalog_TruncatedTrailingEntry_IgnoresPartialEntry()
+    {
+        byte[] key0 = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        byte[] full = CatalogEntry(key0, 3, 1, @"\Device\HarddiskVolume3\docs\a.txt");
+        byte[] blob = [.. full, .. full.AsSpan(0, RecoveryLadder.CatalogEntrySize / 2)];
+
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParseCatalog(blob, 2);
+
+        Assert.Single(items);
+    }
+
+    [Fact]
+    public void ParsePreserve_CountExceedingBlobLength_ReturnsOnlyWhatFits()
+    {
+        byte[] blob = PreserveEntry(@"\Device\HarddiskVolume3\img\c.raw", 4096, 65536, 133000000000000000, 262144);
+
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParsePreserve(blob, 4);
+
+        Assert.Single(items);
+    }
+
+    [Fact]
+    public void ParsePreserve_EmptyBlobWithPositiveCount_ReturnsEmpty()
+    {
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParsePreserve(ReadOnlySpan<byte>.Empty, 2);
+
+        Assert.Empty(items);
+    }
+
+    [Fact]
+    public void ParsePreserve_NegativeCount_ReturnsEmpty()
+    {
+        byte[] blob = PreserveEntry(@"\Device\HarddiskVolume3\img\c.raw", 4096, 65536, 133000000000000000, 262144);
+
+        IReadOnlyList<RecoverableItem> items = RecoveryLadder.ParsePreserve(blob, -3);
+
+        Assert.Empty(items);
+    }
+
+    [Fact]
     public void MapResult_ZeroIsRestoredVerified()
     {
         RecoverableItem item = new() { Rung = CertaintyRung.Definitive, ProvenancePath = "x" };

@@ -14,6 +14,7 @@ public static class RecoveryLadder
 
     public static IReadOnlyList<RecoverableItem> ParseCatalog(ReadOnlySpan<byte> blob, int count)
     {
+        count = Math.Clamp(count, 0, blob.Length / CatalogEntrySize);
         List<RecoverableItem> items = new(count);
         for (int i = 0; i < count; i++)
         {
@@ -41,6 +42,7 @@ public static class RecoveryLadder
 
     public static IReadOnlyList<RecoverableItem> ParsePreserve(ReadOnlySpan<byte> blob, int count)
     {
+        count = Math.Clamp(count, 0, blob.Length / PreserveEntrySize);
         List<RecoverableItem> items = new(count);
         for (int i = 0; i < count; i++)
         {

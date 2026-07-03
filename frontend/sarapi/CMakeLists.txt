@@ -22,7 +22,8 @@ target_compile_definitions(sarapi PRIVATE
 set_target_properties(sarapi PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
-    OUTPUT_NAME sarapi)
+    OUTPUT_NAME sarapi
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
     target_compile_options(sarapi PRIVATE /W4 /WX /guard:cf /guard:ehcont /Qspectre /sdl)

@@ -82,7 +82,11 @@ HRESULT SarRegisterServer(void)
     swprintf(sub, 256, L"Software\\Classes\\CLSID\\%ls", clsid);
     if (SetSz(sub, NULL, L"Semantics-AR Elevated Control") != ERROR_SUCCESS)
         return E_ACCESSDENIED;
-    SetSz(sub, L"LocalizedString", L"Semantics-AR Recovery");
+    {
+        wchar_t localizedString[MAX_PATH + 16];
+        swprintf(localizedString, MAX_PATH + 16, L"@%ls,-101", exe);
+        SetSz(sub, L"LocalizedString", localizedString);
+    }
     SetSz(sub, L"AppID", appid);
 
     swprintf(sub, 256, L"Software\\Classes\\CLSID\\%ls\\LocalServer32", clsid);

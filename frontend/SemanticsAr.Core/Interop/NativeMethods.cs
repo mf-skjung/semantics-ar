@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -10,6 +11,19 @@ internal static partial class NativeMethods
     internal const uint ExpectedAbiVersion = 1u;
 
     private const string Library = "sarapi";
+
+    static NativeMethods()
+    {
+        NativeLibrary.SetDllImportResolver(typeof(NativeMethods).Assembly, Resolve);
+    }
+
+    private static nint Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+    {
+        if (!string.Equals(libraryName, Library, StringComparison.Ordinal))
+            return nint.Zero;
+
+        return NativeLibrary.Load(Path.Combine(AppContext.BaseDirectory, "sarapi.dll"));
+    }
 
     [LibraryImport(Library)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

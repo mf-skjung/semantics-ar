@@ -32,7 +32,8 @@ target_link_libraries(semantics_ar_service PRIVATE
 set_target_properties(semantics_ar_service PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
-    WIN32_EXECUTABLE OFF)
+    WIN32_EXECUTABLE OFF
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
     target_compile_definitions(semantics_ar_service PRIVATE

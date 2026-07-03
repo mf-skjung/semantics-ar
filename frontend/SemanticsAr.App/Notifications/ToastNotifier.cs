@@ -10,9 +10,18 @@ internal sealed class ToastNotifier : IDisposable
 
     public ToastNotifier()
     {
-        _available = AppNotificationManager.IsSupported();
-        if (_available)
+        _available = false;
+        if (!AppNotificationManager.IsSupported())
+            return;
+
+        try
+        {
             AppNotificationManager.Default.Register();
+            _available = true;
+        }
+        catch (Exception)
+        {
+        }
     }
 
     public void Notify(JournalEvent journalEvent)

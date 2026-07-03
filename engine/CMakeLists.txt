@@ -23,7 +23,8 @@ target_include_directories(semantics_ar_engine PUBLIC
 
 set_target_properties(semantics_ar_engine PROPERTIES
     C_STANDARD 11
-    C_STANDARD_REQUIRED ON)
+    C_STANDARD_REQUIRED ON
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
     target_compile_options(semantics_ar_engine PRIVATE /W4 /WX)
@@ -46,7 +47,8 @@ target_include_directories(semantics_ar_recovery_host PUBLIC
 target_link_libraries(semantics_ar_recovery_host PUBLIC semantics_ar_engine)
 
 set_target_properties(semantics_ar_recovery_host PROPERTIES
-    C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    C_STANDARD 11 C_STANDARD_REQUIRED ON
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(MSVC)
     target_compile_definitions(semantics_ar_recovery_host PRIVATE

@@ -9,6 +9,7 @@ enable_language(CXX)
 
 add_executable(sar_elevation_host WIN32
     SemanticsArElevation.idl
+    resources.rc
     src/host_main.cpp
     src/control_object.cpp
     src/class_factory.cpp
@@ -35,7 +36,8 @@ set_target_properties(sar_elevation_host PROPERTIES
     CXX_STANDARD_REQUIRED ON
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
-    OUTPUT_NAME SemanticsArElevationHost)
+    OUTPUT_NAME SemanticsArElevationHost
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 target_compile_options(sar_elevation_host PRIVATE
     /W4 /WX /guard:cf /guard:ehcont /Qspectre /sdl)
