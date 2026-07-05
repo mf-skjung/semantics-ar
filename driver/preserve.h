@@ -8,6 +8,13 @@
 
 typedef struct _SAR_PRESERVE SAR_PRESERVE, *PSAR_PRESERVE;
 
+typedef enum _SAR_STAGE_RESULT {
+    SAR_STAGE_STORED = 0,
+    SAR_STAGE_ALREADY_COVERED,
+    SAR_STAGE_DROPPED,
+    SAR_STAGE_FAILED
+} SAR_STAGE_RESULT;
+
 typedef struct _SAR_PRESERVE_STATS {
     UINT64 capacity_bytes;
     UINT64 used_bytes;
@@ -28,10 +35,21 @@ _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarPreserveReady(_In_opt_ PSAR_PRESERVE Preserve);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
-                          _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
-                          _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
-                          _In_ ULONG PlaintextLen);
+SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
+                                  _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
+                                  _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
+                                  _In_ ULONG PlaintextLen);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS SarPreserveStageLink(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
+                              _In_ UINT64 FileSize, _In_ UINT64 ActorId, _In_ UINT64 LinkId);
+
+UINT64 SarPreserveAllocLinkId(_Inout_ PSAR_PRESERVE Preserve);
+
+BOOLEAN SarPreserveQuarantinePaths(_In_ const UINT16 *Path, _In_ UINT64 LinkId,
+                                   _Out_writes_(DirCapChars) PWCHAR DirBuf, _In_ USHORT DirCapChars,
+                                   _Out_writes_(LinkCapChars) PWCHAR LinkBuf,
+                                   _In_ USHORT LinkCapChars);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarPreservePromote(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 ActorId);
@@ -39,6 +57,10 @@ VOID SarPreservePromote(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 ActorId);
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarPreserveReconcile(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
                           _In_ UINT64 KeyOffset, _In_ UINT64 KeyLength);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarPreserveRename(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *OldPath,
+                       _In_ const UINT16 *NewPath);
 
 _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarPreserveWouldExceed(_In_opt_ PSAR_PRESERVE Preserve, _In_ UINT64 IncomingBytes);

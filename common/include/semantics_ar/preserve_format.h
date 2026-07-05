@@ -9,6 +9,9 @@
 #define SAR_PRESERVE_PROBATION 0u
 #define SAR_PRESERVE_PROTECTED 1u
 
+#define SAR_PRESERVE_KIND_BYTERANGE 0u
+#define SAR_PRESERVE_KIND_NAMESPACE 1u
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -20,6 +23,7 @@ typedef struct {
     uint64_t payload_length;
     uint64_t actor_id;
     uint32_t state;
+    uint8_t  kind;
     uint8_t  iv[SEMANTICS_AR_IV_MAX];
     uint8_t  iv_length;
     uint8_t  content_tag[SEMANTICS_AR_MAC_SIZE];

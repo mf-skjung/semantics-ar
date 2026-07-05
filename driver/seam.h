@@ -8,12 +8,38 @@
 #define SAR_STREAMCTX_FLAG_SECTION_DIRTY 0x00000001u
 #define SAR_STREAMCTX_FLAG_OWN_STORE     0x00000002u
 #define SAR_STREAMCTX_FLAG_PHANTOM_BACKING 0x00000004u
-#define SAR_STREAMCTX_FLAG_BASELINE_STAGED 0x00000008u
+#define SAR_STREAMCTX_FLAG_READ_OBSERVED 0x00000010u
+#define SAR_STREAMCTX_FLAG_TRACKED_FROM_OPEN 0x00000020u
+
+typedef struct _SAR_CAPTURED_RANGE {
+    UINT64 start;
+    UINT64 end;
+} SAR_CAPTURED_RANGE, *PSAR_CAPTURED_RANGE;
+
+typedef struct _SAR_EXTENT {
+    UINT64 vcn_byte;
+    UINT64 len;
+    INT64  lcn_byte;
+} SAR_EXTENT, *PSAR_EXTENT;
+
+typedef struct _SAR_EXTENT_MAP {
+    ULONG  count;
+    ULONG  sector_size;
+    UINT64 covered_len;
+    SAR_EXTENT ext[1];
+} SAR_EXTENT_MAP, *PSAR_EXTENT_MAP;
 
 typedef struct _SAR_STREAM_CONTEXT {
     volatile LONG flags;
     volatile LONG read_length;
     UINT64        read_offset;
+    EX_PUSH_LOCK  cap_lock;
+    PSAR_CAPTURED_RANGE cap_ranges;
+    ULONG         cap_count;
+    ULONG         cap_capacity;
+    PSAR_EXTENT_MAP mmap_map;
+    PUINT16       mmap_path;
+    volatile HANDLE mmap_arm_pid;
     UCHAR         read_sample[SAR_CAPTURE_BUFFER_BYTES];
 } SAR_STREAM_CONTEXT, *PSAR_STREAM_CONTEXT;
 

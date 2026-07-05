@@ -42,17 +42,25 @@ int wmain(int argc, wchar_t **argv)
     for (i = 0; i < count; i++) {
         wchar_t p[MAX_PATH];
         HANDLE h;
-        swprintf(p, MAX_PATH, L"%s\\pf_%06u.bin", dir, i);
-        h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        swprintf(p, MAX_PATH, L"%s\\pfw_%06u.bin", dir, i);
+        h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
         if (h != INVALID_HANDLE_VALUE) { WriteFile(h, buf, size, &w, NULL); CloseHandle(h); }
     }
     t_create = now_ms(freq) - t0;
+
+    for (i = 0; i < count; i++) {
+        wchar_t p[MAX_PATH];
+        HANDLE h;
+        swprintf(p, MAX_PATH, L"%s\\pfr_%06u.bin", dir, i);
+        h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) { WriteFile(h, buf, size, &w, NULL); CloseHandle(h); }
+    }
 
     t0 = now_ms(freq);
     for (i = 0; i < count; i++) {
         wchar_t p[MAX_PATH];
         HANDLE h;
-        swprintf(p, MAX_PATH, L"%s\\pf_%06u.bin", dir, i);
+        swprintf(p, MAX_PATH, L"%s\\pfr_%06u.bin", dir, i);
         h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                         FILE_ATTRIBUTE_NORMAL, NULL);
         if (h != INVALID_HANDLE_VALUE) { ReadFile(h, rd, size, &g, NULL); CloseHandle(h); }
@@ -63,25 +71,25 @@ int wmain(int argc, wchar_t **argv)
     for (i = 0; i < count; i++) {
         wchar_t p[MAX_PATH];
         HANDLE h;
-        swprintf(p, MAX_PATH, L"%s\\pf_%06u.bin", dir, i);
-        h = CreateFileW(p, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
-                        FILE_ATTRIBUTE_NORMAL, NULL);
-        if (h != INVALID_HANDLE_VALUE) {
-            ReadFile(h, rd, size, &g, NULL);
-            SetFilePointer(h, 0, NULL, FILE_BEGIN);
-            WriteFile(h, buf, size, &w, NULL);
-            CloseHandle(h);
-        }
+        swprintf(p, MAX_PATH, L"%s\\pfw_%06u.bin", dir, i);
+        h = CreateFileW(p, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) { WriteFile(h, buf, size, &w, NULL); CloseHandle(h); }
     }
     t_overwrite = now_ms(freq) - t0;
 
     t0 = now_ms(freq);
     for (i = 0; i < count; i++) {
         wchar_t p[MAX_PATH];
-        swprintf(p, MAX_PATH, L"%s\\pf_%06u.bin", dir, i);
+        swprintf(p, MAX_PATH, L"%s\\pfw_%06u.bin", dir, i);
         DeleteFileW(p);
     }
     t_delete = now_ms(freq) - t0;
+
+    for (i = 0; i < count; i++) {
+        wchar_t p[MAX_PATH];
+        swprintf(p, MAX_PATH, L"%s\\pfr_%06u.bin", dir, i);
+        DeleteFileW(p);
+    }
 
     free(buf);
     free(rd);

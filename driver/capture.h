@@ -24,9 +24,47 @@ VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
                                   _In_ PEPROCESS Originator, _In_ PETHREAD Thread);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID SarCaptureSubmitOpenBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
-                                  _In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                  _In_ PEPROCESS Originator, _In_ PETHREAD Thread);
+VOID SarCaptureSubmitDelete(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                            _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PEPROCESS Originator,
+                            _In_ PETHREAD Thread);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCaptureSubmitRenameRekey(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                                 _In_ PCFLT_RELATED_OBJECTS FltObjects);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCaptureSubmitSupersede(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                               _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PEPROCESS Originator,
+                               _In_ PETHREAD Thread);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCaptureInPlaceRegion(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                             _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PEPROCESS Originator,
+                             _In_ UINT64 Offset, _In_ UINT64 Length);
+
+typedef struct _SAR_MMAP_INSTCTX {
+    PDEVICE_OBJECT disk_top;
+    ULONG bytes_per_cluster;
+    ULONG bytes_per_sector;
+} SAR_MMAP_INSTCTX, *PSAR_MMAP_INSTCTX;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapInstanceResolve(_In_ PFLT_FILTER Filter, _In_ PCFLT_RELATED_OBJECTS FltObjects);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapInstanceCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_TYPE ContextType);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapArm(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
+                _Inout_ PSAR_STREAM_CONTEXT Sc, _In_ HANDLE ArmPid);
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarMmapOnPagingWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                             _In_ PFLT_CALLBACK_DATA Data);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapCaptureNocache(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                           _In_ PFLT_CALLBACK_DATA Data, _In_ PEPROCESS Originator);
 
 _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarCaptureOriginatorBlocked(_In_opt_ PSAR_CAPTURE_CTX Ctx,

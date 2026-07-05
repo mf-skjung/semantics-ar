@@ -14,6 +14,9 @@ PSAR_STATE g_sar_state;
 
 DRIVER_INITIALIZE DriverEntry;
 
+FLT_PREOP_CALLBACK_STATUS SarPreCreate(_Inout_ PFLT_CALLBACK_DATA Data,
+                                       _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                       _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
 FLT_PREOP_CALLBACK_STATUS SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
                                       _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                       _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
@@ -41,12 +44,27 @@ VOID SarBypassIoResolve(_Inout_ PSAR_POSTURE Posture);
 _IRQL_requires_max_(PASSIVE_LEVEL)
 static VOID SarStreamContextCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_TYPE ContextType)
 {
-    UNREFERENCED_PARAMETER(Context);
+    PSAR_STREAM_CONTEXT sc = (PSAR_STREAM_CONTEXT)Context;
+
     UNREFERENCED_PARAMETER(ContextType);
+
+    if (sc->cap_ranges != NULL) {
+        ExFreePoolWithTag(sc->cap_ranges, SAR_POOL_TAG_STREAMCTX);
+        sc->cap_ranges = NULL;
+    }
+    if (sc->mmap_map != NULL) {
+        ExFreePoolWithTag(sc->mmap_map, SAR_POOL_TAG_STREAMCTX);
+        sc->mmap_map = NULL;
+    }
+    if (sc->mmap_path != NULL) {
+        ExFreePoolWithTag(sc->mmap_path, SAR_POOL_TAG_STREAMCTX);
+        sc->mmap_path = NULL;
+    }
+    FltDeletePushLock(&sc->cap_lock);
 }
 
 static const FLT_OPERATION_REGISTRATION g_sar_operations[] = {
-    { IRP_MJ_CREATE, 0, SarPhantomPreCreate, SarPostCreate },
+    { IRP_MJ_CREATE, 0, SarPreCreate, SarPostCreate },
     { IRP_MJ_READ, FLTFL_OPERATION_REGISTRATION_SKIP_PAGING_IO, NULL, SarPostRead },
     { IRP_MJ_WRITE, 0, SarPreWrite, NULL },
     { IRP_MJ_SET_INFORMATION, 0, SarPreSetInformation, NULL },
@@ -61,6 +79,7 @@ static const FLT_CONTEXT_REGISTRATION g_sar_contexts[] = {
     { FLT_STREAM_CONTEXT, 0, SarStreamContextCleanup, sizeof(SAR_STREAM_CONTEXT), SAR_POOL_TAG_STREAMCTX },
     { FLT_STREAMHANDLE_CONTEXT, 0, NULL, sizeof(SAR_PHANTOM_ENUM_CONTEXT), SAR_POOL_TAG_PHANTOM },
     { FLT_SECTION_CONTEXT, 0, NULL, sizeof(LONG), SAR_POOL_TAG_SECTION },
+    { FLT_INSTANCE_CONTEXT, 0, SarMmapInstanceCleanup, sizeof(SAR_MMAP_INSTCTX), SAR_POOL_TAG_STREAMCTX },
     { FLT_CONTEXT_END }
 };
 
@@ -89,6 +108,7 @@ static NTSTATUS SarInstanceSetup(_In_ PCFLT_RELATED_OBJECTS FltObjects,
 
     SarFeatureDetectDevDrive(FltObjects, &g_sar.posture);
     FltRegisterForDataScan(FltObjects->Instance);
+    SarMmapInstanceResolve(FltObjects->Filter, FltObjects);
     return STATUS_SUCCESS;
 }
 

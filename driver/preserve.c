@@ -67,6 +67,8 @@ struct _SAR_PRESERVE {
     KEVENT stop;
     PETHREAD persist_thread;
     BOOLEAN thread_started;
+
+    volatile LONG64 next_link_id;
 };
 
 static UINT64 SarPresRound16(UINT64 v)
@@ -330,12 +332,18 @@ static VOID SarPresPersistIndex(_Inout_ PSAR_PRESERVE P)
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarPresReapNamespace(_Inout_ PSAR_PRESERVE P, _In_ BOOLEAN ByAge, _In_ UINT64 Now,
+                                 _In_ UINT64 Retention, _In_opt_ const UINT16 *Path,
+                                 _In_ UINT64 KeyOff, _In_ UINT64 KeyLen);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 static VOID SarPresMaintain(_Inout_ PSAR_PRESERVE P)
 {
     LARGE_INTEGER now;
     uint64_t removed;
 
     KeQuerySystemTime(&now);
+    SarPresReapNamespace(P, TRUE, (uint64_t)now.QuadPart, P->retention_100ns, NULL, 0, 0);
     FltAcquirePushLockExclusive(&P->lock);
     removed = sar_preserve_evict_aged(P->records, &P->record_count, (uint64_t)now.QuadPart,
                                       P->retention_100ns);
@@ -405,6 +413,7 @@ NTSTATUS SarPreserveCreate(_In_ PFLT_FILTER Filter, _In_ PSAR_POSTURE Posture,
     p->dirty = 0;
     p->persist_thread = NULL;
     p->thread_started = FALSE;
+    p->next_link_id = 1;
     RtlZeroMemory(p->store_key, sizeof(p->store_key));
     RtlZeroMemory(p->mac_key, sizeof(p->mac_key));
 
@@ -544,6 +553,11 @@ VOID SarPreserveLoad(_Inout_ PSAR_PRESERVE Preserve)
             Preserve->anchor.generation = hdr.generation;
             RtlCopyMemory(Preserve->anchor.head_mac, hdr.head_mac, SEMANTICS_AR_MAC_SIZE);
             Preserve->free_dirty = TRUE;
+            for (i = 0; i < count; i++) {
+                if (Preserve->records[i].kind == SAR_PRESERVE_KIND_NAMESPACE &&
+                    (LONG64)Preserve->records[i].payload_offset >= Preserve->next_link_id)
+                    Preserve->next_link_id = (LONG64)Preserve->records[i].payload_offset + 1;
+            }
         } else {
             Preserve->record_count = 0;
         }
@@ -572,11 +586,181 @@ BOOLEAN SarPreserveReady(_In_opt_ PSAR_PRESERVE Preserve)
     return Preserve != NULL && Preserve->ready != 0;
 }
 
+static const WCHAR SAR_Q_SUBDIR[] = L"\\SemanticsArQuarantine";
+
+static USHORT SarPresVolPrefixChars(_In_ const UINT16 *Path)
+{
+    USHORT i;
+    USHORT slashes = 0;
+
+    for (i = 0; i < SEMANTICS_AR_PROVENANCE_PATH_MAX && Path[i] != 0; i++) {
+        if (Path[i] == L'\\') {
+            slashes++;
+            if (slashes == 3)
+                return i;
+        }
+    }
+    return 0;
+}
+
+static VOID SarPresHex64(_In_ UINT64 V, _Out_writes_(16) PWCHAR Out)
+{
+    static const WCHAR hexd[] = L"0123456789abcdef";
+    int i;
+
+    for (i = 15; i >= 0; i--) {
+        Out[i] = hexd[V & 0xF];
+        V >>= 4;
+    }
+}
+
+BOOLEAN SarPreserveQuarantinePaths(_In_ const UINT16 *Path, _In_ UINT64 LinkId,
+                                   _Out_writes_(DirCapChars) PWCHAR DirBuf, _In_ USHORT DirCapChars,
+                                   _Out_writes_(LinkCapChars) PWCHAR LinkBuf, _In_ USHORT LinkCapChars)
+{
+    USHORT vp = SarPresVolPrefixChars(Path);
+    USHORT sublen = (USHORT)(RTL_NUMBER_OF(SAR_Q_SUBDIR) - 1);
+    USHORT need_dir = (USHORT)(vp + sublen);
+    USHORT need_link = (USHORT)(need_dir + 1 + 16 + 2);
+    USHORT i;
+
+    if (vp == 0 || DirCapChars <= need_dir || LinkCapChars <= need_link)
+        return FALSE;
+
+    for (i = 0; i < vp; i++)
+        DirBuf[i] = (WCHAR)Path[i];
+    for (i = 0; i < sublen; i++)
+        DirBuf[vp + i] = SAR_Q_SUBDIR[i];
+    DirBuf[need_dir] = 0;
+
+    for (i = 0; i < need_dir; i++)
+        LinkBuf[i] = DirBuf[i];
+    LinkBuf[need_dir] = L'\\';
+    SarPresHex64(LinkId, &LinkBuf[need_dir + 1]);
+    LinkBuf[need_dir + 1 + 16] = L'.';
+    LinkBuf[need_dir + 1 + 16 + 1] = L'q';
+    LinkBuf[need_dir + 1 + 16 + 2] = 0;
+    return TRUE;
+}
+
+UINT64 SarPreserveAllocLinkId(_Inout_ PSAR_PRESERVE Preserve)
+{
+    return (UINT64)InterlockedExchangeAdd64(&Preserve->next_link_id, 1);
+}
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
-                          _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
-                          _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
-                          _In_ ULONG PlaintextLen)
+static VOID SarPresUnlinkQuarantine(_In_ const UINT16 *Path, _In_ UINT64 LinkId)
+{
+    WCHAR dirbuf[320];
+    WCHAR linkbuf[360];
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+
+    if (!SarPreserveQuarantinePaths(Path, LinkId, dirbuf, RTL_NUMBER_OF(dirbuf),
+                                    linkbuf, RTL_NUMBER_OF(linkbuf)))
+        return;
+    RtlInitUnicodeString(&name, linkbuf);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    ZwDeleteFile(&oa);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarPresReapNamespace(_Inout_ PSAR_PRESERVE P, _In_ BOOLEAN ByAge, _In_ UINT64 Now,
+                                 _In_ UINT64 Retention, _In_opt_ const UINT16 *Path,
+                                 _In_ UINT64 KeyOff, _In_ UINT64 KeyLen)
+{
+    for (;;) {
+        UINT16 vpath[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+        UINT64 linkid = 0;
+        BOOLEAN found = FALSE;
+        ULONG64 idx = 0, i, j;
+
+        FltAcquirePushLockExclusive(&P->lock);
+        for (i = 0; i < P->record_count; i++) {
+            sar_preserve_record_t *r = &P->records[i];
+            BOOLEAN match;
+            if (r->kind != SAR_PRESERVE_KIND_NAMESPACE)
+                continue;
+            if (ByAge)
+                match = (Now > r->capture_time && Now - r->capture_time >= Retention);
+            else
+                match = (Path != NULL &&
+                         RtlEqualMemory(r->provenance_path, Path,
+                                        SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16)) &&
+                         KeyOff <= r->provenance_offset &&
+                         r->provenance_offset + r->provenance_length <= KeyOff + KeyLen);
+            if (match) {
+                RtlCopyMemory(vpath, r->provenance_path, sizeof(vpath));
+                linkid = r->payload_offset;
+                idx = i;
+                found = TRUE;
+                break;
+            }
+        }
+        if (found) {
+            for (j = idx + 1; j < P->record_count; j++)
+                P->records[j - 1] = P->records[j];
+            P->record_count--;
+            InterlockedExchange(&P->dirty, 1);
+        }
+        FltReleasePushLock(&P->lock);
+
+        if (!found)
+            break;
+        SarPresUnlinkQuarantine(vpath, linkid);
+    }
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS SarPreserveStageLink(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
+                              _In_ UINT64 FileSize, _In_ UINT64 ActorId, _In_ UINT64 LinkId)
+{
+    LARGE_INTEGER now;
+    sar_preserve_record_t rec;
+    ULONG64 i;
+
+    if (Preserve == NULL || Preserve->ready == 0)
+        return STATUS_DEVICE_NOT_READY;
+
+    KeQuerySystemTime(&now);
+
+    FltAcquirePushLockExclusive(&Preserve->lock);
+
+    for (i = 0; i < Preserve->record_count; i++) {
+        if (Preserve->records[i].kind == SAR_PRESERVE_KIND_NAMESPACE &&
+            Preserve->records[i].provenance_offset == 0 &&
+            RtlEqualMemory(Preserve->records[i].provenance_path, Path,
+                           SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16))) {
+            FltReleasePushLock(&Preserve->lock);
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+    }
+
+    if (sar_preserve_evict_aged(Preserve->records, &Preserve->record_count,
+                                (uint64_t)now.QuadPart, Preserve->retention_100ns) > 0)
+        Preserve->free_dirty = TRUE;
+
+    if (Preserve->record_count >= Preserve->record_capacity) {
+        FltReleasePushLock(&Preserve->lock);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    sar_preserve_record_init(&rec, Path, 0, FileSize, (uint64_t)now.QuadPart, LinkId, 0, ActorId,
+                             NULL, 0, NULL, 0);
+    rec.kind = SAR_PRESERVE_KIND_NAMESPACE;
+    if (sar_preserve_append(Preserve->records, &Preserve->record_count, Preserve->record_capacity,
+                            &rec) == 1)
+        InterlockedExchange(&Preserve->dirty, 1);
+
+    FltReleasePushLock(&Preserve->lock);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
+                                  _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
+                                  _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
+                                  _In_ ULONG PlaintextLen)
 {
     UINT64 ct_len;
     UINT64 off;
@@ -588,21 +772,21 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     NTSTATUS status;
 
     if (Preserve == NULL || Preserve->ready == 0)
-        return STATUS_DEVICE_NOT_READY;
+        return SAR_STAGE_FAILED;
     if (PlaintextLen == 0 || Length == 0)
-        return STATUS_SUCCESS;
+        return SAR_STAGE_STORED;
 
     ct_len = SarPresRound16(PlaintextLen);
     if (ct_len > Preserve->capacity_bytes)
-        return STATUS_SUCCESS;
+        return SAR_STAGE_DROPPED;
 
     if (!NT_SUCCESS(BCryptGenRandom(NULL, iv, SAR_PRESERVE_AES_BLOCK,
                                     BCRYPT_USE_SYSTEM_PREFERRED_RNG)))
-        return STATUS_UNSUCCESSFUL;
+        return SAR_STAGE_FAILED;
 
     ctbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)ct_len, SAR_POOL_TAG_PRESBUF);
     if (ctbuf == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return SAR_STAGE_FAILED;
 
     KeQuerySystemTime(&now);
 
@@ -611,7 +795,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     if (sar_preserve_covered(Preserve->records, Preserve->record_count, Path, Offset, Length)) {
         FltReleasePushLock(&Preserve->lock);
         ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-        return STATUS_SUCCESS;
+        return SAR_STAGE_ALREADY_COVERED;
     }
 
     if (sar_preserve_evict_aged(Preserve->records, &Preserve->record_count,
@@ -623,7 +807,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
         if (prot + ct_len > Preserve->capacity_bytes) {
             FltReleasePushLock(&Preserve->lock);
             ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-            return STATUS_SUCCESS;
+            return SAR_STAGE_DROPPED;
         }
         if (sar_preserve_evict_probation_oldest(Preserve->records, &Preserve->record_count,
                                                 Preserve->capacity_bytes - prot - ct_len) > 0)
@@ -633,7 +817,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     if (Preserve->record_count >= Preserve->record_capacity) {
         FltReleasePushLock(&Preserve->lock);
         ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-        return STATUS_SUCCESS;
+        return SAR_STAGE_DROPPED;
     }
 
     {
@@ -642,7 +826,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
         if (padbuf == NULL) {
             FltReleasePushLock(&Preserve->lock);
             ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-            return STATUS_INSUFFICIENT_RESOURCES;
+            return SAR_STAGE_FAILED;
         }
         RtlZeroMemory(padbuf, (SIZE_T)ct_len);
         RtlCopyMemory(padbuf, Plaintext, PlaintextLen);
@@ -655,7 +839,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     if (!NT_SUCCESS(status)) {
         FltReleasePushLock(&Preserve->lock);
         ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-        return status;
+        return SAR_STAGE_FAILED;
     }
 
     off = SarPresAlloc(Preserve, ct_len);
@@ -667,7 +851,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     if (!NT_SUCCESS(status)) {
         Preserve->free_dirty = TRUE;
         FltReleasePushLock(&Preserve->lock);
-        return status;
+        return SAR_STAGE_FAILED;
     }
 
     sar_preserve_record_init(&rec, Path, Offset, Length, (uint64_t)now.QuadPart, off, ct_len,
@@ -677,7 +861,7 @@ NTSTATUS SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
         InterlockedExchange(&Preserve->dirty, 1);
 
     FltReleasePushLock(&Preserve->lock);
-    return STATUS_SUCCESS;
+    return SAR_STAGE_STORED;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -705,6 +889,8 @@ VOID SarPreserveReconcile(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     if (Preserve == NULL || Preserve->ready == 0)
         return;
 
+    SarPresReapNamespace(Preserve, FALSE, 0, 0, Path, KeyOffset, KeyLength);
+
     FltAcquirePushLockExclusive(&Preserve->lock);
     removed = sar_preserve_reconcile(Preserve->records, &Preserve->record_count, Path,
                                      KeyOffset, KeyLength);
@@ -713,6 +899,31 @@ VOID SarPreserveReconcile(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Pat
     FltReleasePushLock(&Preserve->lock);
 
     if (removed > 0)
+        InterlockedExchange(&Preserve->dirty, 1);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarPreserveRename(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *OldPath,
+                       _In_ const UINT16 *NewPath)
+{
+    ULONG64 i;
+    BOOLEAN changed = FALSE;
+
+    if (Preserve == NULL || Preserve->ready == 0)
+        return;
+
+    FltAcquirePushLockExclusive(&Preserve->lock);
+    for (i = 0; i < Preserve->record_count; i++) {
+        if (RtlEqualMemory(Preserve->records[i].provenance_path, OldPath,
+                           SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16))) {
+            RtlCopyMemory(Preserve->records[i].provenance_path, NewPath,
+                          SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16));
+            changed = TRUE;
+        }
+    }
+    FltReleasePushLock(&Preserve->lock);
+
+    if (changed)
         InterlockedExchange(&Preserve->dirty, 1);
 }
 
@@ -729,6 +940,41 @@ BOOLEAN SarPreserveWouldExceed(_In_opt_ PSAR_PRESERVE Preserve, _In_ UINT64 Inco
              IncomingBytes > Preserve->capacity_bytes;
     FltReleasePushLock(&Preserve->lock);
     return exceed;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarPresReadLink(_In_ const UINT16 *Path, _In_ UINT64 LinkId, _In_ UINT64 Offset,
+                                _In_ ULONG Length, _Out_writes_bytes_to_(Length, *OutLen) PUCHAR Out,
+                                _Out_ PULONG OutLen)
+{
+    WCHAR dirbuf[320];
+    WCHAR linkbuf[360];
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE h;
+    LARGE_INTEGER off;
+    NTSTATUS status;
+
+    *OutLen = 0;
+    if (!SarPreserveQuarantinePaths(Path, LinkId, dirbuf, RTL_NUMBER_OF(dirbuf),
+                                    linkbuf, RTL_NUMBER_OF(linkbuf)))
+        return STATUS_OBJECT_PATH_INVALID;
+
+    RtlInitUnicodeString(&name, linkbuf);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    status = ZwCreateFile(&h, FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL, FILE_ATTRIBUTE_NORMAL,
+                          FILE_SHARE_READ, FILE_OPEN,
+                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
+    if (!NT_SUCCESS(status))
+        return status;
+
+    off.QuadPart = (LONGLONG)Offset;
+    status = ZwReadFile(h, NULL, NULL, NULL, &iosb, Out, Length, &off, NULL);
+    if (NT_SUCCESS(status))
+        *OutLen = (ULONG)iosb.Information;
+    ZwClose(h);
+    return status;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -766,6 +1012,10 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
     if (!found) {
         FltReleasePushLock(&Preserve->lock);
         return STATUS_NOT_FOUND;
+    }
+    if (rec.kind == SAR_PRESERVE_KIND_NAMESPACE) {
+        FltReleasePushLock(&Preserve->lock);
+        return SarPresReadLink(Path, rec.payload_offset, Offset, (ULONG)Length, Out, OutLen);
     }
 
     ctbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)rec.payload_length,

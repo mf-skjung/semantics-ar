@@ -3,6 +3,7 @@
 #include "commport.h"
 #include "keystore_persist.h"
 #include "preserve.h"
+#include "store_io.h"
 #include "eventlog.h"
 #include "ntsystem.h"
 
@@ -825,6 +826,119 @@ static VOID SarCaptureStageRegion(_In_ PSAR_CAPTURE_CTX Ctx, _In_opt_ PFLT_INSTA
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static BOOLEAN SarCaptureStreamConfidentBlind(_In_ PFLT_INSTANCE Instance,
+                                              _In_ PFILE_OBJECT FileObject)
+{
+    PSAR_STREAM_CONTEXT sc = NULL;
+    BOOLEAN blind = FALSE;
+
+    if (NT_SUCCESS(FltGetStreamContext(Instance, FileObject, (PFLT_CONTEXT *)&sc))) {
+        LONG f = sc->flags;
+        blind = (f & SAR_STREAMCTX_FLAG_TRACKED_FROM_OPEN) != 0 &&
+                (f & SAR_STREAMCTX_FLAG_READ_OBSERVED) == 0 &&
+                (f & SAR_STREAMCTX_FLAG_SECTION_DIRTY) == 0;
+        FltReleaseContext(sc);
+    }
+    return blind;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarCaptureLinkPreserve(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_INSTANCE Instance,
+                                   _In_ PFILE_OBJECT FileObject, _In_ const UINT16 *Path,
+                                   _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
+{
+    FILE_STANDARD_INFORMATION fsi;
+    UINT64 size;
+    UINT64 linkid;
+    UINT64 actor;
+    HANDLE pid;
+    WCHAR dirbuf[96];
+    WCHAR linkbuf[128];
+    UCHAR linkInfoBuf[sizeof(FILE_LINK_INFORMATION) + sizeof(linkbuf)];
+    PFILE_LINK_INFORMATION li = (PFILE_LINK_INFORMATION)linkInfoBuf;
+    UNICODE_STRING linkName;
+    IO_STATUS_BLOCK iosb;
+    NTSTATUS status;
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    if (Path[0] == 0 || SarCaptureProvenanceIsOwn(Path))
+        return;
+    pid = PsGetProcessId(Originator);
+    if (SarStateIdentityLookup(g_sar_state, pid) == SAR_IDSTATE_EXEMPT)
+        return;
+    if (SarCaptureStreamConfidentBlind(Instance, FileObject))
+        return;
+
+    RtlZeroMemory(&fsi, sizeof(fsi));
+    if (!NT_SUCCESS(FltQueryInformationFile(Instance, FileObject, &fsi, sizeof(fsi),
+                                            FileStandardInformation, NULL)))
+        return;
+    size = (UINT64)fsi.EndOfFile.QuadPart;
+    if (size == 0)
+        return;
+
+    actor = (UINT64)(ULONG_PTR)pid;
+    linkid = SarPreserveAllocLinkId(g_sar.preserve);
+    if (!SarPreserveQuarantinePaths(Path, linkid, dirbuf, RTL_NUMBER_OF(dirbuf),
+                                    linkbuf, RTL_NUMBER_OF(linkbuf)))
+        return;
+
+    SarStoreEnsureDir(dirbuf, SAR_POOL_TAG_PRESBUF);
+
+    RtlInitUnicodeString(&linkName, linkbuf);
+    RtlZeroMemory(li, FIELD_OFFSET(FILE_LINK_INFORMATION, FileName));
+    li->ReplaceIfExists = FALSE;
+    li->RootDirectory = NULL;
+    li->FileNameLength = linkName.Length;
+    RtlCopyMemory(li->FileName, linkbuf, linkName.Length);
+
+    status = FltSetInformationFile(Instance, FileObject, li,
+                                   FIELD_OFFSET(FILE_LINK_INFORMATION, FileName) + linkName.Length,
+                                   FileLinkInformation);
+    if (NT_SUCCESS(status)) {
+        if (SarPreserveStageLink(g_sar.preserve, Path, size, actor, linkid) != STATUS_SUCCESS) {
+            OBJECT_ATTRIBUTES oa;
+            InitializeObjectAttributes(&oa, &linkName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                       NULL, NULL);
+            ZwDeleteFile(&oa);
+        }
+        return;
+    }
+
+    {
+        UINT64 pos;
+        for (pos = 0; pos < size; pos += SAR_PRESERVE_STAGE_MAX) {
+            UINT64 remaining = size - pos;
+            ULONG chunk = remaining > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX
+                                                            : (ULONG)remaining;
+            SarCaptureStageRegion(Ctx, Instance, FileObject, Path, Originator, Thread, pos, chunk,
+                                  FALSE);
+        }
+    }
+    UNREFERENCED_PARAMETER(iosb);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCaptureSubmitDelete(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                            _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PEPROCESS Originator,
+                            _In_ PETHREAD Thread)
+{
+    UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+
+    SarCaptureResolveProvenance(Data, path);
+    SarCaptureLinkPreserve(Ctx, FltObjects->Instance, FltObjects->FileObject, path, Originator,
+                           Thread);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
                                   _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                   _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
@@ -841,7 +955,6 @@ VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
     HANDLE h = NULL;
     PFILE_OBJECT fo = NULL;
     UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
-    UINT64 size = 0;
     ULONG i;
     ULONG chars;
 
@@ -887,38 +1000,14 @@ VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
         return;
     }
 
-    {
-        PSAR_STREAM_CONTEXT sc = NULL;
-        BOOLEAN wasread = FALSE;
-        if (NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, fo, (PFLT_CONTEXT *)&sc))) {
-            wasread = sc->read_length > 0;
-            FltReleaseContext(sc);
-        }
-        if (wasread) {
-            FILE_STANDARD_INFORMATION fsi;
-            if (NT_SUCCESS(FltQueryInformationFile(FltObjects->Instance, fo, &fsi, sizeof(fsi),
-                                                   FileStandardInformation, NULL)))
-                size = (UINT64)fsi.EndOfFile.QuadPart;
-        }
-    }
+    RtlZeroMemory(path, sizeof(path));
+    chars = destName->Name.Length / sizeof(WCHAR);
+    if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
+        chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
+    for (i = 0; i < chars; i++)
+        path[i] = (UINT16)destName->Name.Buffer[i];
 
-    if (size > 0) {
-        RtlZeroMemory(path, sizeof(path));
-        chars = destName->Name.Length / sizeof(WCHAR);
-        if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
-            chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
-        for (i = 0; i < chars; i++)
-            path[i] = (UINT16)destName->Name.Buffer[i];
-        {
-            UINT64 pos;
-            for (pos = 0; pos < size; pos += SAR_PRESERVE_STAGE_MAX) {
-                UINT64 remaining = size - pos;
-                ULONG chunk = remaining > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)remaining;
-                SarCaptureStageRegion(Ctx, FltObjects->Instance, fo, path, Originator, Thread,
-                                      pos, chunk, FALSE);
-            }
-        }
-    }
+    SarCaptureLinkPreserve(Ctx, FltObjects->Instance, fo, path, Originator, Thread);
 
     FltClose(h);
     ObDereferenceObject(fo);
@@ -926,11 +1015,65 @@ VOID SarCaptureSubmitRenameTarget(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
-VOID SarCaptureSubmitOpenBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
-                                  _In_ PCFLT_RELATED_OBJECTS FltObjects,
-                                  _In_ PEPROCESS Originator, _In_ PETHREAD Thread)
+VOID SarCaptureSubmitRenameRekey(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                                 _In_ PCFLT_RELATED_OBJECTS FltObjects)
 {
-    UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+    PFILE_RENAME_INFORMATION ri = (PFILE_RENAME_INFORMATION)
+        Data->Iopb->Parameters.SetFileInformation.InfoBuffer;
+    PFLT_FILE_NAME_INFORMATION srcName = NULL;
+    PFLT_FILE_NAME_INFORMATION destName = NULL;
+    UINT16 oldp[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+    UINT16 newp[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+    ULONG i, chars;
+
+    if (Ctx == NULL || ri == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || ri->FileNameLength == 0)
+        return;
+
+    if (!NT_SUCCESS(FltGetFileNameInformation(Data, FLT_FILE_NAME_NORMALIZED |
+                                              FLT_FILE_NAME_QUERY_DEFAULT, &srcName)))
+        return;
+    if (!NT_SUCCESS(FltParseFileNameInformation(srcName))) {
+        FltReleaseFileNameInformation(srcName);
+        return;
+    }
+    if (!NT_SUCCESS(FltGetDestinationFileNameInformation(FltObjects->Instance,
+                                                         FltObjects->FileObject, ri->RootDirectory,
+                                                         ri->FileName, ri->FileNameLength,
+                                                         FLT_FILE_NAME_NORMALIZED |
+                                                         FLT_FILE_NAME_QUERY_DEFAULT, &destName)) ||
+        !NT_SUCCESS(FltParseFileNameInformation(destName))) {
+        if (destName != NULL)
+            FltReleaseFileNameInformation(destName);
+        FltReleaseFileNameInformation(srcName);
+        return;
+    }
+
+    RtlZeroMemory(oldp, sizeof(oldp));
+    RtlZeroMemory(newp, sizeof(newp));
+    chars = srcName->Name.Length / sizeof(WCHAR);
+    if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
+        chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
+    for (i = 0; i < chars; i++)
+        oldp[i] = (UINT16)srcName->Name.Buffer[i];
+    chars = destName->Name.Length / sizeof(WCHAR);
+    if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
+        chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
+    for (i = 0; i < chars; i++)
+        newp[i] = (UINT16)destName->Name.Buffer[i];
+
+    SarPreserveRename(g_sar.preserve, oldp, newp);
+
+    FltReleaseFileNameInformation(destName);
+    FltReleaseFileNameInformation(srcName);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarCaptureWholeContent(_In_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_INSTANCE Instance,
+                                   _In_ PFILE_OBJECT FileObject, _In_ const UINT16 *Path,
+                                   _In_ PEPROCESS Originator)
+{
     PFLT_CONTEXT sectionCtx = NULL;
     HANDLE hSection = NULL;
     PVOID sectionObj = NULL;
@@ -941,26 +1084,14 @@ VOID SarCaptureSubmitOpenBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
     UINT64 size, offset;
     UINT64 actor;
 
-    UNREFERENCED_PARAMETER(Thread);
-
-    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
-        return;
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
-        return;
-
-    SarCaptureResolveProvenance(Data, path);
-    if (path[0] == 0 || SarCaptureProvenanceIsOwn(path))
-        return;
-
     if (!NT_SUCCESS(FltAllocateContext(Ctx->filter, FLT_SECTION_CONTEXT, sizeof(LONG),
                                        PagedPool, &sectionCtx)))
         return;
     InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
     sectionFileSize.QuadPart = 0;
-    if (!NT_SUCCESS(FltCreateSectionForDataScan(FltObjects->Instance, FltObjects->FileObject,
-                                                sectionCtx, FILE_READ_DATA, &oa, NULL,
-                                                PAGE_READONLY, SEC_COMMIT, 0,
-                                                &hSection, &sectionObj, &sectionFileSize))) {
+    if (!NT_SUCCESS(FltCreateSectionForDataScan(Instance, FileObject, sectionCtx, FILE_READ_DATA,
+                                                &oa, NULL, PAGE_READONLY, SEC_COMMIT, 0, &hSection,
+                                                &sectionObj, &sectionFileSize))) {
         FltReleaseContext(sectionCtx);
         return;
     }
@@ -974,7 +1105,7 @@ VOID SarCaptureSubmitOpenBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
             UINT64 rem = size - offset;
             ULONG chunk = rem > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)rem;
             __try {
-                SarPreserveStage(g_sar.preserve, path, offset, chunk, actor,
+                SarPreserveStage(g_sar.preserve, Path, offset, chunk, actor,
                                  (PUCHAR)base + offset, chunk);
             } __except (EXCEPTION_EXECUTE_HANDLER) {
                 break;
@@ -987,6 +1118,759 @@ VOID SarCaptureSubmitOpenBaseline(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLB
     ObDereferenceObject(sectionObj);
     FltCloseSectionForDataScan(sectionCtx);
     FltReleaseContext(sectionCtx);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarCaptureResolveProvenanceFo(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
+                                          _Out_writes_(SEMANTICS_AR_PROVENANCE_PATH_MAX) PUINT16 Out)
+{
+    PFLT_FILE_NAME_INFORMATION info = NULL;
+    ULONG i;
+
+    for (i = 0; i < SEMANTICS_AR_PROVENANCE_PATH_MAX; i++)
+        Out[i] = 0;
+
+    if (!NT_SUCCESS(FltGetFileNameInformationUnsafe(FileObject, Instance,
+                                                    FLT_FILE_NAME_NORMALIZED |
+                                                    FLT_FILE_NAME_QUERY_DEFAULT, &info)))
+        return;
+    if (NT_SUCCESS(FltParseFileNameInformation(info))) {
+        ULONG chars = info->Name.Length / sizeof(WCHAR);
+        if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
+            chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
+        for (i = 0; i < chars; i++)
+            Out[i] = (UINT16)info->Name.Buffer[i];
+        Out[chars] = 0;
+    }
+    FltReleaseFileNameInformation(info);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCaptureSubmitSupersede(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                               _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PEPROCESS Originator,
+                               _In_ PETHREAD Thread)
+{
+    PFLT_FILE_NAME_INFORMATION info = NULL;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE h = NULL;
+    PFILE_OBJECT fo = NULL;
+    UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+
+    UNREFERENCED_PARAMETER(Thread);
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL || IoGetTopLevelIrp() != NULL)
+        return;
+
+    if (!NT_SUCCESS(FltGetFileNameInformation(Data, FLT_FILE_NAME_OPENED |
+                                              FLT_FILE_NAME_QUERY_DEFAULT, &info)))
+        return;
+    if (!NT_SUCCESS(FltParseFileNameInformation(info))) {
+        FltReleaseFileNameInformation(info);
+        return;
+    }
+
+    InitializeObjectAttributes(&oa, &info->Name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL,
+                               NULL);
+    if (!NT_SUCCESS(FltCreateFileEx(Ctx->filter, FltObjects->Instance, &h, &fo,
+                                    FILE_READ_DATA | SYNCHRONIZE, &oa, &iosb, NULL,
+                                    FILE_ATTRIBUTE_NORMAL,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                    FILE_OPEN,
+                                    FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
+                                    NULL, 0, 0))) {
+        FltReleaseFileNameInformation(info);
+        return;
+    }
+
+    if (!SarCaptureStreamConfidentBlind(FltObjects->Instance, fo)) {
+        SarCaptureResolveProvenanceFo(FltObjects->Instance, fo, path);
+        if (path[0] != 0 && !SarCaptureProvenanceIsOwn(path))
+            SarCaptureWholeContent(Ctx, FltObjects->Instance, fo, path, Originator);
+    }
+
+    FltClose(h);
+    ObDereferenceObject(fo);
+    FltReleaseFileNameInformation(info);
+}
+
+#define SAR_MAP_GRANULARITY 0x10000ULL
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static BOOLEAN SarCapRangeInsert(_Inout_ PSAR_STREAM_CONTEXT Sc, _In_ UINT64 Start, _In_ UINT64 End)
+{
+    ULONG i, w;
+    PSAR_CAPTURED_RANGE arr;
+
+    if (Sc->cap_count + 1 > Sc->cap_capacity) {
+        ULONG ncap = Sc->cap_capacity ? Sc->cap_capacity * 2 : 8;
+        PSAR_CAPTURED_RANGE narr = (PSAR_CAPTURED_RANGE)ExAllocatePool2(
+            POOL_FLAG_NON_PAGED, (SIZE_T)ncap * sizeof(SAR_CAPTURED_RANGE), SAR_POOL_TAG_STREAMCTX);
+        if (narr == NULL)
+            return FALSE;
+        if (Sc->cap_ranges != NULL) {
+            RtlCopyMemory(narr, Sc->cap_ranges, (SIZE_T)Sc->cap_count * sizeof(SAR_CAPTURED_RANGE));
+            ExFreePoolWithTag(Sc->cap_ranges, SAR_POOL_TAG_STREAMCTX);
+        }
+        Sc->cap_ranges = narr;
+        Sc->cap_capacity = ncap;
+    }
+
+    arr = Sc->cap_ranges;
+    for (i = 0; i < Sc->cap_count && arr[i].start < Start; i++)
+        ;
+    for (w = Sc->cap_count; w > i; w--)
+        arr[w] = arr[w - 1];
+    arr[i].start = Start;
+    arr[i].end = End;
+    Sc->cap_count++;
+
+    w = 0;
+    for (i = 0; i < Sc->cap_count; i++) {
+        if (w > 0 && arr[i].start <= arr[w - 1].end) {
+            if (arr[i].end > arr[w - 1].end)
+                arr[w - 1].end = arr[i].end;
+        } else {
+            arr[w++] = arr[i];
+        }
+    }
+    Sc->cap_count = w;
+    return TRUE;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static SAR_STAGE_RESULT SarCaptureStageSpan(_In_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
+                                            _In_ UINT64 Actor, _In_ PVOID Base,
+                                            _In_ UINT64 AlignedStart, _In_ UINT64 SpanStart,
+                                            _In_ UINT64 SpanEnd)
+{
+    UINT64 off;
+    SAR_STAGE_RESULT worst = SAR_STAGE_STORED;
+    for (off = SpanStart; off < SpanEnd; off += SAR_PRESERVE_STAGE_MAX) {
+        UINT64 rem = SpanEnd - off;
+        ULONG chunk = rem > SAR_PRESERVE_STAGE_MAX ? SAR_PRESERVE_STAGE_MAX : (ULONG)rem;
+        SAR_STAGE_RESULT r;
+        __try {
+            r = SarPreserveStage(Preserve, Path, off, chunk, Actor,
+                                 (PUCHAR)Base + (off - AlignedStart), chunk);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return SAR_STAGE_FAILED;
+        }
+        if (r == SAR_STAGE_FAILED || r == SAR_STAGE_DROPPED)
+            worst = r;
+    }
+    return worst;
+}
+
+VOID SarCaptureInPlaceRegion(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PFLT_CALLBACK_DATA Data,
+                             _In_ PCFLT_RELATED_OBJECTS FltObjects, _In_ PEPROCESS Originator,
+                             _In_ UINT64 Offset, _In_ UINT64 Length)
+{
+    UINT16 path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
+    PSAR_STREAM_CONTEXT sc = NULL;
+    PFLT_CONTEXT sectionCtx = NULL;
+    HANDLE hSection = NULL;
+    PVOID sectionObj = NULL;
+    LARGE_INTEGER sectionFileSize;
+    OBJECT_ATTRIBUTES oa;
+    PVOID base = NULL;
+    SIZE_T viewSize;
+    LARGE_INTEGER viewOffset;
+    UINT64 end, fileSize, alignedStart, actor, cursor;
+    SAR_STAGE_RESULT worst;
+    ULONG i;
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    if (Length == 0)
+        return;
+
+    SarCaptureResolveProvenance(Data, path);
+    if (path[0] == 0 || SarCaptureProvenanceIsOwn(path))
+        return;
+
+    if (!NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                        (PFLT_CONTEXT *)&sc)))
+        return;
+
+    end = Offset + Length;
+
+    if (!NT_SUCCESS(FltAllocateContext(Ctx->filter, FLT_SECTION_CONTEXT, sizeof(LONG),
+                                       PagedPool, &sectionCtx))) {
+        FltReleaseContext(sc);
+        return;
+    }
+    InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    sectionFileSize.QuadPart = 0;
+    if (!NT_SUCCESS(FltCreateSectionForDataScan(FltObjects->Instance, FltObjects->FileObject,
+                                                sectionCtx, FILE_READ_DATA, &oa, NULL,
+                                                PAGE_READONLY, SEC_COMMIT, 0,
+                                                &hSection, &sectionObj, &sectionFileSize))) {
+        FltReleaseContext(sectionCtx);
+        FltReleaseContext(sc);
+        return;
+    }
+
+    fileSize = (UINT64)sectionFileSize.QuadPart;
+    if (end > fileSize)
+        end = fileSize;
+
+    if (end > Offset) {
+        alignedStart = Offset & ~(SAR_MAP_GRANULARITY - 1);
+        viewOffset.QuadPart = (LONGLONG)alignedStart;
+        viewSize = (SIZE_T)(end - alignedStart);
+        if (NT_SUCCESS(ZwMapViewOfSection(hSection, ZwCurrentProcess(), &base, 0, 0, &viewOffset,
+                                          &viewSize, ViewUnmap, 0, PAGE_READONLY))) {
+            actor = (UINT64)(ULONG_PTR)PsGetProcessId(Originator);
+
+            FltAcquirePushLockExclusive(&sc->cap_lock);
+            cursor = Offset;
+            worst = SAR_STAGE_STORED;
+            for (i = 0; i < sc->cap_count && cursor < end; i++) {
+                UINT64 rs = sc->cap_ranges[i].start;
+                UINT64 re = sc->cap_ranges[i].end;
+                if (re <= cursor)
+                    continue;
+                if (rs >= end)
+                    break;
+                if (rs > cursor) {
+                    SAR_STAGE_RESULT r = SarCaptureStageSpan(g_sar.preserve, path, actor, base,
+                                                             alignedStart, cursor, rs < end ? rs : end);
+                    if (r == SAR_STAGE_FAILED || r == SAR_STAGE_DROPPED)
+                        worst = r;
+                }
+                if (re > cursor)
+                    cursor = re;
+            }
+            if (cursor < end) {
+                SAR_STAGE_RESULT r = SarCaptureStageSpan(g_sar.preserve, path, actor, base,
+                                                         alignedStart, cursor, end);
+                if (r == SAR_STAGE_FAILED || r == SAR_STAGE_DROPPED)
+                    worst = r;
+            }
+            if (worst == SAR_STAGE_STORED)
+                (VOID)SarCapRangeInsert(sc, Offset, end);
+            FltReleasePushLock(&sc->cap_lock);
+
+            ZwUnmapViewOfSection(ZwCurrentProcess(), base);
+        }
+    }
+
+    ZwClose(hSection);
+    ObDereferenceObject(sectionObj);
+    FltCloseSectionForDataScan(sectionCtx);
+    FltReleaseContext(sectionCtx);
+    FltReleaseContext(sc);
+}
+
+typedef struct _SAR_MMAP_ASYNC {
+    KEVENT event;
+    IO_STATUS_BLOCK iosb;
+    PUCHAR buffer;
+    volatile LONG ref;
+} SAR_MMAP_ASYNC, *PSAR_MMAP_ASYNC;
+
+static volatile LONG64 g_sar_mmap_miss = 0;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapInstanceResolve(_In_ PFLT_FILTER Filter, _In_ PCFLT_RELATED_OBJECTS FltObjects)
+{
+    PDEVICE_OBJECT diskObj = NULL;
+    PDEVICE_OBJECT top = NULL;
+    HANDLE volHandle = NULL;
+    PFILE_OBJECT volFo = NULL;
+    NTFS_VOLUME_DATA_BUFFER volData;
+    IO_STATUS_BLOCK iosb;
+    ULONG bpc = 0;
+    ULONG bps = 0;
+    PSAR_MMAP_INSTCTX ic = NULL;
+
+    if (FltObjects->Volume == NULL)
+        return;
+    if (!NT_SUCCESS(FltGetDiskDeviceObject(FltObjects->Volume, &diskObj)) || diskObj == NULL)
+        return;
+    top = IoGetAttachedDeviceReference(diskObj);
+    ObDereferenceObject(diskObj);
+    if (top == NULL)
+        return;
+
+    if (NT_SUCCESS(FltOpenVolume(FltObjects->Instance, &volHandle, &volFo))) {
+        RtlZeroMemory(&volData, sizeof(volData));
+        if (NT_SUCCESS(ZwFsControlFile(volHandle, NULL, NULL, NULL, &iosb, FSCTL_GET_NTFS_VOLUME_DATA,
+                                       NULL, 0, &volData, sizeof(volData)))) {
+            bpc = volData.BytesPerCluster;
+            bps = volData.BytesPerSector;
+        }
+        FltClose(volHandle);
+        ObDereferenceObject(volFo);
+    }
+
+    if (bpc == 0) {
+        ObDereferenceObject(top);
+        return;
+    }
+    if (bps == 0)
+        bps = 512;
+
+    if (!NT_SUCCESS(FltAllocateContext(Filter, FLT_INSTANCE_CONTEXT, sizeof(*ic), NonPagedPoolNx,
+                                       (PFLT_CONTEXT *)&ic))) {
+        ObDereferenceObject(top);
+        return;
+    }
+    ic->disk_top = top;
+    ic->bytes_per_cluster = bpc;
+    ic->bytes_per_sector = bps;
+    if (!NT_SUCCESS(FltSetInstanceContext(FltObjects->Instance, FLT_SET_CONTEXT_KEEP_IF_EXISTS, ic,
+                                          NULL)))
+        ObDereferenceObject(top);
+    FltReleaseContext(ic);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapInstanceCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_TYPE ContextType)
+{
+    PSAR_MMAP_INSTCTX ic = (PSAR_MMAP_INSTCTX)Context;
+
+    UNREFERENCED_PARAMETER(ContextType);
+
+    if (ic->disk_top != NULL) {
+        ObDereferenceObject(ic->disk_top);
+        ic->disk_top = NULL;
+    }
+}
+
+static VOID SarMmapAsyncRelease(_In_ PSAR_MMAP_ASYNC C)
+{
+    if (InterlockedDecrement(&C->ref) == 0) {
+        if (C->buffer != NULL)
+            ExFreePoolWithTag(C->buffer, SAR_POOL_TAG_STREAMCTX);
+        ExFreePoolWithTag(C, SAR_POOL_TAG_STREAMCTX);
+    }
+}
+
+_Function_class_(IO_COMPLETION_ROUTINE)
+static NTSTATUS SarMmapAsyncDone(_In_ PDEVICE_OBJECT Dev, _In_ PIRP Irp, _In_ PVOID Context)
+{
+    PSAR_MMAP_ASYNC c = (PSAR_MMAP_ASYNC)Context;
+
+    UNREFERENCED_PARAMETER(Dev);
+
+    c->iosb = Irp->IoStatus;
+    if (Irp->MdlAddress != NULL) {
+        MmUnlockPages(Irp->MdlAddress);
+        IoFreeMdl(Irp->MdlAddress);
+        Irp->MdlAddress = NULL;
+    }
+    KeSetEvent(&c->event, IO_NO_INCREMENT, FALSE);
+    IoFreeIrp(Irp);
+    SarMmapAsyncRelease(c);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static BOOLEAN SarMmapDiskRead(_In_ PDEVICE_OBJECT Top, _In_ LONGLONG DiskOffset, _In_ ULONG Length,
+                               _In_ ULONG DeadmanMs, _Out_writes_bytes_(Length) PUCHAR Out)
+{
+    PSAR_MMAP_ASYNC c;
+    PIRP irp;
+    LARGE_INTEGER off, to;
+    NTSTATUS w;
+    BOOLEAN ok = FALSE;
+
+    if (Top == NULL)
+        return FALSE;
+
+    c = (PSAR_MMAP_ASYNC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*c), SAR_POOL_TAG_STREAMCTX);
+    if (c == NULL)
+        return FALSE;
+    c->buffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED, Length, SAR_POOL_TAG_STREAMCTX);
+    if (c->buffer == NULL) {
+        ExFreePoolWithTag(c, SAR_POOL_TAG_STREAMCTX);
+        return FALSE;
+    }
+    KeInitializeEvent(&c->event, NotificationEvent, FALSE);
+    RtlZeroMemory(&c->iosb, sizeof(c->iosb));
+    c->ref = 2;
+
+    off.QuadPart = DiskOffset;
+    irp = IoBuildAsynchronousFsdRequest(IRP_MJ_READ, Top, c->buffer, Length, &off, &c->iosb);
+    if (irp == NULL) {
+        SarMmapAsyncRelease(c);
+        SarMmapAsyncRelease(c);
+        return FALSE;
+    }
+    IoSetCompletionRoutine(irp, SarMmapAsyncDone, c, TRUE, TRUE, TRUE);
+    (VOID)IoCallDriver(Top, irp);
+
+    to.QuadPart = -((LONGLONG)DeadmanMs * 10 * 1000LL);
+    w = KeWaitForSingleObject(&c->event, Executive, KernelMode, FALSE, &to);
+    if (w == STATUS_SUCCESS && NT_SUCCESS(c->iosb.Status) && (ULONG)c->iosb.Information >= Length) {
+        RtlCopyMemory(Out, c->buffer, Length);
+        ok = TRUE;
+    }
+    SarMmapAsyncRelease(c);
+    return ok;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static PSAR_EXTENT_MAP SarBuildExtentMap(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
+                                         _In_ ULONG Bpc, _In_ ULONG Bps)
+{
+    STARTING_VCN_INPUT_BUFFER vcnIn;
+    ULONG retCap = sizeof(RETRIEVAL_POINTERS_BUFFER) + 64u * 2u * sizeof(LARGE_INTEGER);
+    PRETRIEVAL_POINTERS_BUFFER ret;
+    PSAR_EXTENT_MAP map;
+    ULONG mapCap = 16;
+    ULONG count = 0;
+    UINT64 coveredVcn = 0;
+    NTSTATUS status;
+
+    ret = (PRETRIEVAL_POINTERS_BUFFER)ExAllocatePool2(POOL_FLAG_PAGED, retCap, SAR_POOL_TAG_STREAMCTX);
+    if (ret == NULL)
+        return NULL;
+    map = (PSAR_EXTENT_MAP)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+              sizeof(SAR_EXTENT_MAP) + (mapCap - 1) * sizeof(SAR_EXTENT), SAR_POOL_TAG_STREAMCTX);
+    if (map == NULL) {
+        ExFreePoolWithTag(ret, SAR_POOL_TAG_STREAMCTX);
+        return NULL;
+    }
+
+    vcnIn.StartingVcn.QuadPart = 0;
+    for (;;) {
+        UINT64 prevVcn;
+        ULONG k;
+        status = FltFsControlFile(Instance, FileObject, FSCTL_GET_RETRIEVAL_POINTERS, &vcnIn,
+                                  sizeof(vcnIn), ret, retCap, NULL);
+        if (!NT_SUCCESS(status) && status != STATUS_BUFFER_OVERFLOW)
+            break;
+        prevVcn = (UINT64)ret->StartingVcn.QuadPart;
+        for (k = 0; k < ret->ExtentCount; k++) {
+            UINT64 nextVcn = (UINT64)ret->Extents[k].NextVcn.QuadPart;
+            INT64 lcn = ret->Extents[k].Lcn.QuadPart;
+            if (count >= mapCap) {
+                ULONG ncap = mapCap * 2;
+                PSAR_EXTENT_MAP nm = (PSAR_EXTENT_MAP)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                    sizeof(SAR_EXTENT_MAP) + (ncap - 1) * sizeof(SAR_EXTENT), SAR_POOL_TAG_STREAMCTX);
+                if (nm == NULL)
+                    goto done;
+                RtlCopyMemory(nm, map, sizeof(SAR_EXTENT_MAP) + (mapCap - 1) * sizeof(SAR_EXTENT));
+                ExFreePoolWithTag(map, SAR_POOL_TAG_STREAMCTX);
+                map = nm;
+                mapCap = ncap;
+            }
+            map->ext[count].vcn_byte = prevVcn * Bpc;
+            map->ext[count].len = (nextVcn - prevVcn) * Bpc;
+            map->ext[count].lcn_byte = (lcn < 0) ? -1 : lcn * (INT64)Bpc;
+            count++;
+            coveredVcn = nextVcn;
+            prevVcn = nextVcn;
+        }
+        if (status == STATUS_BUFFER_OVERFLOW && ret->ExtentCount > 0) {
+            vcnIn.StartingVcn.QuadPart = (LONGLONG)coveredVcn;
+            continue;
+        }
+        break;
+    }
+done:
+    ExFreePoolWithTag(ret, SAR_POOL_TAG_STREAMCTX);
+    if (count == 0) {
+        ExFreePoolWithTag(map, SAR_POOL_TAG_STREAMCTX);
+        return NULL;
+    }
+    map->count = count;
+    map->sector_size = Bps ? Bps : 512;
+    map->covered_len = coveredVcn * Bpc;
+    return map;
+}
+
+static const SAR_EXTENT *SarFindExtent(_In_ const SAR_EXTENT_MAP *Map, _In_ UINT64 Pos)
+{
+    ULONG i;
+    for (i = 0; i < Map->count; i++)
+        if (Pos >= Map->ext[i].vcn_byte && Pos < Map->ext[i].vcn_byte + Map->ext[i].len)
+            return &Map->ext[i];
+    return NULL;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarMmapResolvePath(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
+                               _Inout_ PSAR_STREAM_CONTEXT Sc)
+{
+    PFLT_FILE_NAME_INFORMATION info = NULL;
+
+    if (Sc->mmap_path != NULL)
+        return;
+    if (!NT_SUCCESS(FltGetFileNameInformationUnsafe(FileObject, Instance,
+                                                    FLT_FILE_NAME_NORMALIZED |
+                                                    FLT_FILE_NAME_QUERY_DEFAULT, &info)))
+        return;
+    if (NT_SUCCESS(FltParseFileNameInformation(info))) {
+        PUINT16 pathbuf = (PUINT16)ExAllocatePool2(
+            POOL_FLAG_NON_PAGED, SEMANTICS_AR_PROVENANCE_PATH_MAX * sizeof(UINT16),
+            SAR_POOL_TAG_STREAMCTX);
+        if (pathbuf != NULL) {
+            ULONG chars = info->Name.Length / sizeof(WCHAR);
+            ULONG i;
+            if (chars > SEMANTICS_AR_PROVENANCE_PATH_MAX - 1)
+                chars = SEMANTICS_AR_PROVENANCE_PATH_MAX - 1;
+            for (i = 0; i < chars; i++)
+                pathbuf[i] = (UINT16)info->Name.Buffer[i];
+            pathbuf[chars] = 0;
+            if (InterlockedCompareExchangePointer((PVOID *)&Sc->mmap_path, pathbuf, NULL) != NULL)
+                ExFreePoolWithTag(pathbuf, SAR_POOL_TAG_STREAMCTX);
+        }
+    }
+    FltReleaseFileNameInformation(info);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static VOID SarMmapResolveMap(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
+                              _Inout_ PSAR_STREAM_CONTEXT Sc)
+{
+    PSAR_MMAP_INSTCTX ic = NULL;
+    ULONG bpc, bps;
+    PSAR_EXTENT_MAP map;
+
+    if (Sc->mmap_map != NULL || Sc->mmap_path == NULL)
+        return;
+    if (!NT_SUCCESS(FltGetInstanceContext(Instance, (PFLT_CONTEXT *)&ic)))
+        return;
+    bpc = ic->bytes_per_cluster;
+    bps = ic->bytes_per_sector;
+    FltReleaseContext(ic);
+    if (bpc == 0)
+        return;
+    map = SarBuildExtentMap(Instance, FileObject, bpc, bps);
+    if (map == NULL)
+        return;
+    if (InterlockedCompareExchangePointer((PVOID *)&Sc->mmap_map, map, NULL) != NULL)
+        ExFreePoolWithTag(map, SAR_POOL_TAG_STREAMCTX);
+}
+
+static BOOLEAN SarWidePrefixI(_In_ const UINT16 *Str, _In_ PCWSTR Prefix)
+{
+    ULONG j;
+    for (j = 0; Prefix[j] != 0; j++) {
+        WCHAR a = (WCHAR)Str[j];
+        WCHAR b = Prefix[j];
+        if (a == 0)
+            return FALSE;
+        if (a >= L'a' && a <= L'z') a = (WCHAR)(a - 32);
+        if (b >= L'a' && b <= L'z') b = (WCHAR)(b - 32);
+        if (a != b)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOLEAN SarMmapPathExcluded(_In_ const UINT16 *Path)
+{
+    ULONG i, bs = 0, pos = 0;
+
+    if (Path == NULL)
+        return FALSE;
+    for (i = 0; Path[i] != 0; i++) {
+        if (Path[i] == L'\\') {
+            if (++bs == 3) { pos = i + 1; break; }
+        }
+    }
+    if (pos == 0)
+        return FALSE;
+    return SarWidePrefixI(&Path[pos], L"Windows\\") ||
+           SarWidePrefixI(&Path[pos], L"ProgramData\\Microsoft\\");
+}
+
+VOID SarMmapArm(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
+                _Inout_ PSAR_STREAM_CONTEXT Sc, _In_ HANDLE ArmPid)
+{
+    if (Sc->mmap_arm_pid == NULL)
+        InterlockedCompareExchangePointer((PVOID *)&Sc->mmap_arm_pid, ArmPid, NULL);
+    if (Sc->mmap_map != NULL)
+        return;
+    SarMmapResolvePath(Instance, FileObject, Sc);
+    if (Sc->mmap_path != NULL && SarMmapPathExcluded(Sc->mmap_path))
+        return;
+    SarMmapResolveMap(Instance, FileObject, Sc);
+}
+
+#define SAR_RAW_CHUNK (256u * 1024u)
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static SAR_STAGE_RESULT SarRawReadStageRange(_In_ PDEVICE_OBJECT Top, _In_ const SAR_EXTENT_MAP *Map,
+                                             _In_ const UINT16 *Path, _In_ UINT64 Actor,
+                                             _In_ UINT64 Offset, _In_ ULONG Length)
+{
+    UINT64 cursor = Offset;
+    UINT64 logEnd = Offset + Length;
+    ULONG sector = Map->sector_size ? Map->sector_size : 512;
+    SAR_STAGE_RESULT worst = SAR_STAGE_STORED;
+
+    while (cursor < logEnd) {
+        const SAR_EXTENT *ex = SarFindExtent(Map, cursor);
+        UINT64 extEnd, step;
+        SAR_STAGE_RESULT r;
+
+        if (ex == NULL) {
+            InterlockedIncrement64(&g_sar_mmap_miss);
+            return SAR_STAGE_FAILED;
+        }
+        extEnd = ex->vcn_byte + ex->len;
+        step = logEnd - cursor;
+        if (step > extEnd - cursor)
+            step = extEnd - cursor;
+        if (step > SAR_RAW_CHUNK)
+            step = SAR_RAW_CHUNK;
+
+        if (ex->lcn_byte < 0) {
+            PUCHAR z = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)step, SAR_POOL_TAG_PRESBUF);
+            if (z == NULL)
+                return SAR_STAGE_FAILED;
+            r = SarPreserveStage(g_sar.preserve, Path, cursor, step, Actor, z, (ULONG)step);
+            ExFreePoolWithTag(z, SAR_POOL_TAG_PRESBUF);
+        } else {
+            UINT64 diskOff = (UINT64)ex->lcn_byte + (cursor - ex->vcn_byte);
+            UINT64 aStart = diskOff & ~((UINT64)sector - 1);
+            UINT64 aEnd = (diskOff + step + sector - 1) & ~((UINT64)sector - 1);
+            ULONG readLen = (ULONG)(aEnd - aStart);
+            PUCHAR scratch = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, readLen, SAR_POOL_TAG_PRESBUF);
+            if (scratch == NULL)
+                return SAR_STAGE_FAILED;
+            if (!SarMmapDiskRead(Top, (LONGLONG)aStart, readLen, 500, scratch)) {
+                ExFreePoolWithTag(scratch, SAR_POOL_TAG_PRESBUF);
+                InterlockedIncrement64(&g_sar_mmap_miss);
+                return SAR_STAGE_FAILED;
+            }
+            r = SarPreserveStage(g_sar.preserve, Path, cursor, step, Actor,
+                                 scratch + (diskOff - aStart), (ULONG)step);
+            ExFreePoolWithTag(scratch, SAR_POOL_TAG_PRESBUF);
+        }
+        if (r == SAR_STAGE_FAILED || r == SAR_STAGE_DROPPED)
+            worst = r;
+        cursor += step;
+    }
+    return worst;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarMmapRangeCovered(_In_ PSAR_STREAM_CONTEXT Sc, _In_ UINT64 Offset, _In_ ULONG Length)
+{
+    ULONG i;
+    BOOLEAN covered = FALSE;
+
+    FltAcquirePushLockShared(&Sc->cap_lock);
+    for (i = 0; i < Sc->cap_count; i++) {
+        if (Sc->cap_ranges[i].start <= Offset && Offset + Length <= Sc->cap_ranges[i].end) {
+            covered = TRUE;
+            break;
+        }
+    }
+    FltReleasePushLock(&Sc->cap_lock);
+    return covered;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+static VOID SarMmapCaptureInline(_In_ PFLT_INSTANCE Instance, _In_ PSAR_STREAM_CONTEXT Sc,
+                                 _In_ UINT64 Actor, _In_ UINT64 Offset, _In_ ULONG Length)
+{
+    PSAR_MMAP_INSTCTX ic = NULL;
+    PDEVICE_OBJECT top;
+    SAR_STAGE_RESULT r = SAR_STAGE_FAILED;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    if (Sc->mmap_map == NULL || Sc->mmap_path == NULL)
+        return;
+    if (Offset + Length > Sc->mmap_map->covered_len)
+        return;
+    if (SarMmapRangeCovered(Sc, Offset, Length))
+        return;
+    if (!NT_SUCCESS(FltGetInstanceContext(Instance, (PFLT_CONTEXT *)&ic)))
+        return;
+    top = ic->disk_top;
+    FltReleaseContext(ic);
+    if (top == NULL)
+        return;
+
+    __try {
+        r = SarRawReadStageRange(top, Sc->mmap_map, Sc->mmap_path, Actor, Offset, Length);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        r = SAR_STAGE_FAILED;
+    }
+    if (r == SAR_STAGE_STORED || r == SAR_STAGE_ALREADY_COVERED) {
+        FltAcquirePushLockExclusive(&Sc->cap_lock);
+        (VOID)SarCapRangeInsert(Sc, Offset, Offset + Length);
+        FltReleasePushLock(&Sc->cap_lock);
+    }
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarMmapOnPagingWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                             _In_ PFLT_CALLBACK_DATA Data)
+{
+    PSAR_STREAM_CONTEXT sc = NULL;
+    UINT64 offset;
+    ULONG length;
+    BOOLEAN want;
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return FALSE;
+    if (Data->Iopb == NULL || FltObjects->FileObject == NULL)
+        return FALSE;
+    if ((Data->Iopb->IrpFlags & (IRP_PAGING_IO | IRP_SYNCHRONOUS_PAGING_IO)) == 0)
+        return FALSE;
+
+    offset = (UINT64)Data->Iopb->Parameters.Write.ByteOffset.QuadPart;
+    length = Data->Iopb->Parameters.Write.Length;
+    if (length == 0)
+        return FALSE;
+
+    if (!NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                        (PFLT_CONTEXT *)&sc)))
+        return FALSE;
+
+    want = (sc->flags & SAR_STREAMCTX_FLAG_SECTION_DIRTY) != 0 &&
+           (sc->flags & SAR_STREAMCTX_FLAG_OWN_STORE) == 0 &&
+           (sc->flags & SAR_STREAMCTX_FLAG_PHANTOM_BACKING) == 0 &&
+           sc->mmap_map != NULL;
+    if (want)
+        SarMmapCaptureInline(FltObjects->Instance, sc, (UINT64)(ULONG_PTR)sc->mmap_arm_pid,
+                             offset, length);
+    FltReleaseContext(sc);
+    return want;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarMmapCaptureNocache(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                           _In_ PFLT_CALLBACK_DATA Data, _In_ PEPROCESS Originator)
+{
+    PSAR_STREAM_CONTEXT sc = NULL;
+    UINT64 offset;
+    ULONG length;
+
+    if (Ctx == NULL || g_sar.preserve == NULL || !SarPreserveReady(g_sar.preserve))
+        return;
+    if (Data->Iopb == NULL || FltObjects->FileObject == NULL)
+        return;
+
+    offset = (UINT64)Data->Iopb->Parameters.Write.ByteOffset.QuadPart;
+    length = Data->Iopb->Parameters.Write.Length;
+    if (length == 0)
+        return;
+
+    if (!NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                        (PFLT_CONTEXT *)&sc)))
+        return;
+    if ((sc->flags & SAR_STREAMCTX_FLAG_SECTION_DIRTY) != 0 &&
+        (sc->flags & SAR_STREAMCTX_FLAG_OWN_STORE) == 0 &&
+        (sc->flags & SAR_STREAMCTX_FLAG_PHANTOM_BACKING) == 0 &&
+        sc->mmap_map != NULL)
+        SarMmapCaptureInline(FltObjects->Instance, sc,
+                             (UINT64)(ULONG_PTR)PsGetProcessId(Originator), offset, length);
+    FltReleaseContext(sc);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
