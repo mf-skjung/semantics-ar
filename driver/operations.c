@@ -939,6 +939,11 @@ SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
             return FLT_PREOP_SUCCESS_NO_CALLBACK;
         }
 
+        if (Data->RequestorMode != UserMode || ExGetPreviousMode() != UserMode) {
+            FltReleaseContext(context);
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
         InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_SECTION_DIRTY);
 
         if (KeGetCurrentIrql() == PASSIVE_LEVEL &&
@@ -970,7 +975,6 @@ SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
             if (rawSafe) {
                 FltFlushBuffers(FltObjects->Instance, FltObjects->FileObject);
                 SarMmapArm(FltObjects->Instance, FltObjects->FileObject, context, pid);
-                SarMmapCaptureEager(FltObjects->Instance, context, (UINT64)(ULONG_PTR)pid);
             }
         }
         SarSubmitMetadata(Data, FltObjects, SAR_DESTRUCT_SECTION_SYNC, 0);

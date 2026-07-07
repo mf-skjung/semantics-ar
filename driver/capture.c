@@ -1765,31 +1765,6 @@ static SAR_STAGE_RESULT SarMmapCaptureInline(_In_ PFLT_INSTANCE Instance, _In_ P
     return r;
 }
 
-#define SAR_MMAP_EAGER_CHUNK (16u * 1024u * 1024u)
-
-VOID SarMmapCaptureEager(_In_ PFLT_INSTANCE Instance, _In_ PSAR_STREAM_CONTEXT Sc, _In_ UINT64 Actor)
-{
-    UINT64 total, off;
-
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
-        return;
-    if (Sc->mmap_map == NULL || Sc->mmap_path == NULL)
-        return;
-    if ((InterlockedOr(&Sc->flags, (LONG)SAR_STREAMCTX_FLAG_MMAP_EAGER_TRIED)
-            & SAR_STREAMCTX_FLAG_MMAP_EAGER_TRIED) != 0)
-        return;
-
-    total = Sc->mmap_map->covered_len;
-    for (off = 0; off < total; ) {
-        UINT64 rem = total - off;
-        ULONG chunk = rem > SAR_MMAP_EAGER_CHUNK ? SAR_MMAP_EAGER_CHUNK : (ULONG)rem;
-        SAR_STAGE_RESULT r = SarMmapCaptureInline(Instance, Sc, Actor, off, chunk);
-        if (r == SAR_STAGE_FAILED || r == SAR_STAGE_DROPPED)
-            break;
-        off += chunk;
-    }
-}
-
 _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarMmapOnPagingWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                              _In_ PFLT_CALLBACK_DATA Data)

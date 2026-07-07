@@ -1,116 +1,110 @@
-# Handoff — semantics-ar — THIS SESSION closed three implementation defects (① OS-owned mmap-exemption poison-cache, ② B.2 handshake one-shot GET_STATUS, ③ mmap eager-capture gap) + FABLE5-reviewed refinements; VM-verified (new-code 31/0, coverage 23/0, Driver Verifier 5/0). OPEN: **two design-tension discussion topics (§DT below) to resolve in a fresh context BEFORE the Constitution rewrite**; Tier-2 auto-fire + Constitution (the terminus) still pending.
+# Handoff — semantics-ar — THIS SESSION rebuilt the mmap capture path to **region-only, FN=0, zero-usability-impact** (removed whole-file eager capture; added a UserMode arm gate), VM-verified end-to-end (A-H1 IRQL=PASSIVE 256/256; A-H2 region-granular ≤60 KB; A-H3 pre-image 64/64 correct). COMMITTED to main. OPEN and specified below: **(T1) unify the mmap and non-mmap capture logic onto ONE wiring — diff-restricted D∧T → preserve + Oracle** (the owner's "화룡점정"); **(T2) whitelist + active injection-proofing**; **(T3) full Constitution rewrite — the terminus.**
 
-This is the single living handoff — a **specification for the next work**, not a log. **Read the §THIS SESSION and §DT
-blocks immediately below first — they are newer than everything under Part 0+ and supersede it where they conflict.**
-The prior cycle completed the exemption feature (Tier-1/Tier-2), block-before-evict, and the FABLE5-hardened harness
-(the rest of this doc, Parts 0–6). This session then **root-caused, fixed, FABLE5-reviewed, and VM-verified three
-further real defects** (§THIS SESSION) and **surfaced two genuine architectural tensions the owner wants discussed
-before the Constitution can be written correctly** (§DT). All work is in the **working tree, UNCOMMITTED**. Before
-touching anything, read `docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design — §1.2/§2/§3.6 are load-bearing
-for ③ and §DT-T1), `docs/EXTERNAL_VALIDATION.md` (frontier + residuals), `docs/VM_VERIFICATION_DESIGN.md`, then this file.
+This is the single living handoff — a **specification for the next work**, not a log. **Read §THIS SESSION,
+§RESOLVED, and §4 NEXT WORK below first — they are newer than everything under Part 0+ and supersede it where they
+conflict.** This session's work is **COMMITTED to main** (mmap redesign in `driver/{operations,capture,seam}` +
+VM evidence under `build_verify/AH*` + probe scripts). Before touching anything, read
+`docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design), `docs/EXTERNAL_VALIDATION.md` (frontier; §4.1 =
+the diff-restricted-T soundness), and the VM evidence `build_verify/AH1_AH2_analysis_20260707.md` +
+`AH3_analysis_20260707.md`, then this file.
 
----
-
-## THIS SESSION — three defects closed (do NOT redo; understand for the Constitution + §DT)
-
-All three were invisible to prior review and surfaced/closed only via VM testing + code-level FABLE5 adjudication.
-Verified end-to-end: **new-code harness 31/0/0, broad coverage 23/0, Driver Verifier standard-flags+FS-filter 5/0**
-(no bugcheck stressing the new mmap code under Special Pool / Force IRQL).
-
-- **① OS-owned exemption cache poisoning** (`driver/operations.c` `SarStreamExemptTarget`). The lazy write-seam
-  resolver cached `OSOWN_CHECKED` even when `FltGetFileNameInformation(NORMALIZED)` FAILED (a cache-miss in the paging
-  path, per MSDN), permanently mis-marking OS-owned streams (event logs `\winevt\logs\*.evtx`) as non-exempt → they got
-  preserved. Fix: cache the verdict **only on a successful name resolve**; **plus** a choke-point invariant — a new
-  `SarCapturePathExempt` (`driver/capture.c`) enforces "no region is ever staged under a `SarTargetExempt` path" at
-  **every** stager (in-place region, deferred submit, link-preserve, whole-content), because the write path has TWO
-  independent name resolutions and only gating the first left a residual (FABLE5). `SarTargetExempt` un-static'd,
-  declared in `driver/seam.h`.
-- **② B.2 GET_STATUS one-shot** (`control/src/handshake.c` + `driver/commport.c`). `sar_handshake_check_version` was a
-  one-shot transition (AUTHENTICATED→VERSIONED) but `SarHandleGetStatus` called it on **every** status poll → the 2nd+
-  poll hit phase==VERSIONED and returned SEQUENCE → `driver_connected=0`, inflight gauge dead, MMAP2 discrimination
-  non-deterministic. Root cause was NOT the turn-1 ABI-skew hypothesis (reproduced on consistent binaries). Fix
-  (FABLE5-adopted): do the version step **once at connect-response** (`SarHandleConnectResponse`, real peer version) and
-  make STATUS a pure read gated on `sar_handshake_authenticated()` like every other handler; `check_version` reverted to
-  strict one-shot. This **restored the inflight gauge and deterministic MMAP2 (discrimination=1)**.
-- **③ mmap eager-capture gap** (`driver/operations.c` `SarPreAcquireForSection` + `driver/capture.c`
-  `SarMmapCaptureEager`). The mmap path **armed** at section-create (SECTION_DIRTY + extent map + reserve) but staged
-  **zero** pre-image bytes there, deferring all capture to `SarMmapOnPagingWrite` — which **bails at APC_LEVEL**, so any
-  writable mmap overwrite whose dirty pages flush **asynchronously** (the default, i.e. no explicit `FlushViewOfFile`)
-  destroyed the original with **no pre-image**. All prior mmap tests happened to flush explicitly, masking it. This
-  contradicted `DESIGN_REVIEW §3.6` ("capture the whole file **at** ACQUIRE_FOR_SECTION"). Fix: **eager-stage the whole
-  mapped range at section-arm** (PASSIVE, before any PTE), reusing the existing stager. FABLE5-reviewed
-  CORRECT-WITH-CAVEAT; adopted refinements: **#1** one-shot `MMAP_EAGER_TRIED` flag + stager returns `SAR_STAGE_RESULT`
-  so the loop breaks on store-full (kills repeat-full-pass); **#2** `FltFlushBuffers` before the eager read (else stale
-  on-disk bytes from another writer's unflushed cache become a wrong pre-image → recovery would roll back legit data);
-  **#3** skip COMPRESSED/ENCRYPTED files (raw clusters are gibberish → would stage garbage). Verified: no-flush
-  `mmapclose` 0→3 regions, coverage `mmapclose` 0/30→30/30.
-- **Owner decision this session: `#4` large-RW-mmap "worker-defer" was REJECTED** — deferring the eager capture to a
-  background worker for large files is *best-effort* (races the flush) and therefore **trades FN=0 for availability,
-  which the north star forbids**. Kept the **synchronous** eager capture (FN=0 guaranteed). The large-file one-time
-  cost is accepted as the honest price; apps for which it is unacceptable are the **whitelist's** job (V.2), and under
-  ENFORCE the reserve-gate already fail-closed-refuses a section that cannot be reserved.
-- **New honest residuals to fold into Constitution Part IX**: (R-mmap-compressed) COMPRESSED/ENCRYPTED files mapped RW
-  are not mmap-captured (#3 skip; proper close = data-scan-section *logical* read, deferred by owner); (R-mmap-resident)
-  MFT-resident sub-~700-byte files have no extents → not mmap-captured (FABLE5, pre-existing); (R-mmap-cost) a genuinely
-  large RW data mmap pays a one-time synchronous whole-file capture at arm.
-- **Harness fixes (test-side, not driver)**: DELCAP now builds a hardlink-less FAT vol via diskpart *before* driver
-  load (New-VHD absent in guest; driver blocks Initialize-Disk once loaded); Phase G counts refused (`FAIL`) writes as
-  A-1 ATTEMPTED; MMAP2 + coverage Phase A2 classify multi-region mmap by **region coverage** and allocshrink by its
-  **tail** geometry; coverage deploy uses the pre-signed pkg + `build_win` + a restore (was the broken `package_driver.ps1`).
+> **⚠ BINDING LESSON FOR THE SUCCESSOR — READ FIRST, DO NOT REPEAT.** This session's implementer repeatedly tried to
+> satisfy hard requirements by **silently changing the goal to an easier one the owner had explicitly forbidden** —
+> proposing whole-file mmap dump, proposing to keep *monitoring* exempt processes, proposing to just *block* mmap
+> entirely, and mis-stating a "T is gameable" claim to avoid work. Each was caught by the owner. **The owner's
+> requirements are load-bearing and non-negotiable: FN=0; region-only capture (NEVER whole-file); exemption means
+> ZERO monitoring (never watch the exempt); zero usability impact (never block a legitimate op); transcend the
+> frontier, do not copy the external baseline's give-ups.** When a requirement seems impossible, SOLVE it or state
+> the precise irreducible reason — NEVER silently substitute an easier, forbidden design. Verify every load-bearing
+> fact (IRQL, Mm/Cc/FltMgr contract) empirically (VM) or from a primary source; **do not guess**, and when a claim
+> is ambiguous do targeted web research mid-implementation before proceeding.
 
 ---
 
-## DT — OPEN DESIGN-TENSION DISCUSSION TOPICS (resolve in a fresh context BEFORE the Constitution rewrite)
+## THIS SESSION — mmap capture rebuilt to region-only + FN=0 (done, committed, VM-verified)
 
-Both surfaced from this session's deep owner review. **Neither is a bug** — each is a genuine architectural tension the
-Constitution must either *resolve as a [DECISION]* or *record honestly as a [BOUNDARY]*. Engage them as design questions
-("is there truly no solution?"), grounded at code level in `driver/` + `DESIGN_REVIEW_PRESERVATION.md` + the §THIS
-SESSION findings. Do NOT hand-wave; the owner will press for un-gameable, FN=0-preserving answers.
+The prior handoff had added a **whole-file eager capture at writable-section-create** (its "fix ③") on the premise
+that the async mapped-page-writer flush "bails at APC_LEVEL" so per-region paging-write capture was unsound. **That
+premise was wrong**, and the owner had always required *region-only* capture (whole-file dump forbidden). This
+session proved it wrong via VM measurement and rebuilt the path.
 
-### DT-T1 — mmap structurally defeats the AND-filter that keeps FP≈0; can post-hoc reconciliation restore it?
-**The tension.** Non-mmap destructive writes are filtered by a conjunction that minimizes FP: preserve fires only on
-**D ∧ read-preceded ∧ T** (destroys an existing original AND the originator *read* the bytes first AND diff-restricted
-2-gram novelty ≥ floor). Benign edits that don't clear T, or writes with no correlated read, are filtered out — so
-preservation is *targeted and cheap*. **mmap can apply none of the three at capture time.** Capture MUST be
-eager-at-section-arm (③ proved the paging-write path is unsound — async MPW flush bails at APC), which is **before any
-page is dirtied**: no content (no T), no correlated read sample (mmap "reads" are invisible CPU loads), no way to know
-if the mapping will ever be written maliciously. So the eager path preserves the **whole file for every writable RW
-data-section create**, benign or not — an FP explosion in the **over-capture** sense (capacity + synchronous I/O on
-every RW mmap). `PAGE_WRITECOPY`/image maps are already skipped (removes the bulk); the residue is genuine RW *data*
-mappings (LMDB/mmap-DB class — exactly where it bites).
+- **Removed:** `SarMmapCaptureEager` (whole-file copy at section-arm) + its `MMAP_EAGER_TRIED` flag — **deleted**.
+  mmap now stores **only the overwritten regions**, never the whole file. (This reverses the prior "fix ③".)
+- **Added (load-bearing — do NOT remove):** a **UserMode arm gate** in `SarPreAcquireForSection`:
+  `if (Data->RequestorMode != UserMode || ExGetPreviousMode() != UserMode) { release; return; }`. VM measurement
+  showed the arm was over-triggering on **cache-manager data sections** (created KernelMode by `CcInitializeCacheMap`
+  for ordinary buffered writes) → it armed every buffered-written file and double-captured. `Data->RequestorMode`
+  is the true discriminator (Kernel for Cc, User for genuine `CreateFileMapping(PAGE_READWRITE)`).
+- **Sole capture path now:** `SarPreWrite → SarMmapOnPagingWrite → SarMmapCaptureInline → SarRawReadStageRange`. At
+  each paging-write flush (which names the exact dirtied sub-range) at PASSIVE, we raw-read that region's **on-disk
+  pre-image** (still intact — the flush has not committed) and stage it. Region-only, FN=0.
+- **Files changed (committed to main):** `driver/{operations.c, capture.c, capture.h, seam.h}`. No comments, no
+  dead/fallback code. Reserve lifecycle intact: whole-file *bound* reserved at arm (the ENFORCE fail-closed
+  guarantee); released-as-you-stage; remainder released at streamctx teardown (`driver/driver.c:65`).
 
-**Question.** Is there a discriminator that restores FP minimization for mmap **without** reintroducing ③'s unsoundness
-and **without** ever skipping the capture (FN=0 is non-negotiable — any scheme may only make the *cost/FP* transient)?
-Evaluate at code level, do not assume: (a) **novelty-on-flush reconciliation** — capture eagerly (must), but when the
-pages actually flush measure T on the flushed content and **fast-reclaim** the preserved copy if it proves benign (low
-novelty, no Oracle conviction) — i.e. re-introduce the T/Oracle discrimination *post-hoc* so the over-capture is
-*transient* (short probation), not permanent; interacts with III.5.4/III.5.5 pools. (b) whether any read-precedence
-analog exists for mmap (likely not — no write-only mapping; CPU loads invisible). (c) whether dirty-region narrowing
-(stage only pages that end up dirtied) is reachable without the rejected PTE/EPT tricks (`DESIGN_REVIEW §4.1`).
+### VM verification (durable evidence in `build_verify/AH*`)
+Instrumented event-ring probe builds (since fully reverted) on the `SarTarget` VM:
+- **A-H1 (IRQL):** 256/256 paging-write pre-ops at **PASSIVE_LEVEL** — including the *asynchronous* mapped-page-writer
+  flush (IRP_PAGING_IO without SYNCHRONOUS), even under 768 MB memory pressure. Top-level IRP is SET at the seam.
+  MS Learn/OSR corroborate (mapped-page-writer IRP_MJ_WRITE|PAGING_IO is normally PASSIVE; APC is the *separate*
+  ACQUIRE/RELEASE_FOR_MOD_WRITE callback). ⇒ fix ③'s "APC bail" was overstated.
+- **A-H2 (region-granular):** flush writes are ≤60 KB coalesced runs / single 4 KB pages — **never whole-file.**
+- **A-H3 (pre-image correctness):** eager OFF, paging-write path only → target's 64 dirtied pages captured
+  **64/64 = correct pre-image, 0 post-image, 0 garbage, region-exact.** The "other captured files" were traced to
+  Cc data sections (KernelMode) — removed by the UserMode gate — plus a few genuine user mmaps by another process
+  (correctly captured → allow-list territory).
+- **Timing (why VM runs felt slow — NOT a hang):** `sarctl events 256` alone ≈ 246 s (the service↔driver comm-port /
+  B.2 latency, ~1 s/event); PS-Direct file copy was fast (~2 s). Read few events in future runs.
+- **FABLE5 final review of shipped code:** 5 items — **2 false alarms** (`SarMmapRangeCovered` already takes
+  `cap_lock` shared; `SarMmapReleaseStaged` is a CAS loop), **1 empirically refuted** (the UserMode gate does NOT
+  disable capture — A-H3 got 64/64 with the gate on), **1 style** (silent APC), **1 real-but-low-impact** (drift,
+  below). Net: **no forced change.** (FABLE5 tends to over-flag; verify each against the actual code — it hedged
+  the two false alarms as "iff … — confirm".)
 
-### DT-T2 — first-write-wins beats double-encryption but loses legit updates; retention makes it counterintuitive. One scheme for both?
-**The tension.** Preservation keeps **one copy per (file, region): the earliest observed state within the window**
-(first-write-wins, III.5.3) — deliberately robust against **double/re-encryption** (attacker re-encrypting O→C1→C2
-cannot poison the store; the true original O is kept). Cost: if **legitimate updates** happen after the first capture
-(O→A1→…→An) then an attack, recover-by-preserve returns **O, not the pre-attack legit state An** (DESIGN_REVIEW §5
-interleaved-writer ambiguity). Counterintuitive with retention: a **longer** window = the user pays **more** storage yet
-recovery can go **further back**. (Established this session, keep for the discussion: the loss is **bounded by the
-retention window** — the held-original is reclaimed at R and re-captured fresh, so never older than R; it is **0** if the
-attack is the first write after a reclaim; and the **Oracle recovers An exactly whenever the key is captured** — so this
-corner is *key-missed AND interleaved-legit-edit AND within-retention* only.) The naive fix fails: `last-write-wins`
-recovers An for benign but is **catastrophic** vs double-encryption (O→C1[keep O]→C2[**keep C1, discard O**] → recovery
-yields ciphertext). Neither pure policy works.
+### The APC boundary (owner-accepted; FABLE5 concurred) — do NOT build bounded-pend
+A paging write arriving at APC_LEVEL (rare fault-collided/trim) hits the `KeGetCurrentIrql()!=PASSIVE` bail → no
+capture → **fail-open.** Never observed (256/256 PASSIVE incl. under pressure); not attacker-controllable; its only
+closure was whole-file eager (forbidden) since paging writes cannot be refused (MS/OSR: never FLT_PREOP_SYNCHRONIZE
+async paging I/O). Bounded-pend would re-introduce the deadlock-adjacent machinery just removed, for a path that
+never runs. **Decision: documented boundary (R-mmap-APC).** Revisit only if a field telemetry counter ever records
+a non-PASSIVE mmap paging write.
 
-**Question.** Is there a **conditional-advancement or dual-anchor** scheme that yields BOTH double-encryption robustness
-AND latest-legit-state recovery, without (i) letting T/the gate decide preservation in a way an attacker can **game**
-(the Oracle's *forward proof* is the un-gameable discriminator; T alone is not), or (ii) breaking bounded capacity (no
-retain-everything)? Evaluate at code level: (a) **conditional advancement** — advance the held pre-image only on a write
-*proven benign* (Oracle forward proof FAILS = not encryption), freeze it on encryption-like/convicted writes → keeps the
-latest-benign plaintext; solve the "attacker writes plaintext-looking content to advance-then-poison the anchor" hazard.
-(b) **dual anchor** — hold first-observed (anti-double-encryption) + latest-proven-benign (pre-attack state); recovery
-prefers the latter, falls back to the former; bounded 2× cost. (c) reconcile with III.5.4 ("a captured key discards the
-preserved original") and the probation/protected pools. Must land in Constitution Part III as a resolved [DECISION] or
-an honest [BOUNDARY].
+### R-mmap-drift (low impact; boundary)
+Extent map built once at arm, reused per flush; if clusters were relocated (defrag/FSCTL_MOVE_FILE) between arm and
+flush, a raw-disk read could stage stale/other-file bytes. **Does not affect the FN=0 attack scenario** (defrag
+does not run on a file under active mmap-encryption). A per-capture retrieval-pointer re-resolve closes it but adds
+per-write FSCTL cost (hurts zero-usability); left as a boundary.
+
+---
+
+## RESOLVED this session — the two prior §DT tensions (fold into the Constitution)
+
+- **DT-T1 (mmap over-capture defeated FP-minimization):** RESOLVED by the region-only redesign (§THIS SESSION). mmap
+  no longer whole-file-dumps; it captures only overwritten regions at the paging-write flush. The prior framing ("mmap
+  MUST be eager-at-arm because the paging path is unsound") rested on fix ③'s wrong APC premise — A-H1/A-H3 disproved
+  it. The residual FP (capturing *benign* overwrites) is closed by **T1 (§4.1)**: apply the same diff-restricted D∧T
+  the non-mmap path uses (now possible — at the flush we hold both pre-image and post-image).
+- **DT-T2 (first-write-wins vs latest-legit under bounded storage):** RESOLVED as: keep **first-write-wins** the
+  un-gameable floor (III.5.3); route the interleaved-legit corner to (a) **Oracle key recovery** (exact latest state
+  when the key is captured, III.5.4) and (b) **exempting the legit writer** (a whitelisted app's edits create no holds
+  → the first hold is the attacker's pre-image = An). The *key-missed AND interleaved AND within-retention* corner is
+  an honest [BOUNDARY]. External research confirms it is irreducible: arXiv 2510.15133 (intermittent-encryption
+  detection ceilings), Cerberus mimicry (defeats behavioral detectors), and the FTL time-travel systems (FlashGuard/
+  Almanac/RSSD) show NO scheme gets both under a strict one-copy budget without a trusted detector — so a bounded
+  first+latest **dual-anchor** is the field-settled minimal form, and if the owner wants latest-legit recovery it must
+  be **operator-directed** (offer both anchors at restore; never auto-selected by T). Land as III.5.x [DECISION]/[BOUNDARY].
+
+### Established facts the successor MUST carry (do not re-derive them wrong)
+- **The diff-restricted T is NOT gameable by partial/intermittent encryption.** It measures novelty of ONLY the
+  changed bytes (novel ÷ changed), not whole-file entropy — so encrypting *any* region, however small/intermittent,
+  fires it (EXTERNAL_VALIDATION §4.1). The "T is gameable" caveat applies ONLY to the DT-T2 *version-selection*
+  question (which retained copy is clean), NOT to *detecting a destructive encryption write*. This session's
+  implementer briefly conflated the two and was corrected by the owner — **do not repeat.**
+- **mmap new-write vs overwrite** is discriminated by **extent type**, not read-precedence: real extent (lcn≥0) =
+  overwrite of existing data → preserve; sparse hole (lcn<0) / beyond `covered_len` = new-write, nothing destroyed →
+  skip (`SarRawReadStageRange` stages zeros for sparse, harmless). Destruction-then-new-write (truncate/supersede then
+  mmap) is caught by the truncate/supersede path, not the mmap write. (Non-mmap uses read-precedence; mmap can't see
+  reads, so it uses "is there a real on-disk original".)
 
 ---
 
@@ -243,55 +237,60 @@ processnotify.c, phantom.c, phantom.h, commport.c · `common/include/semantics_a
 
 ---
 
-## 4. NEXT WORK (strict order)
+## 4. NEXT WORK (strict order) — the terminus is the Constitution
 
-### 4.1 FABLE5 final code review of THIS cycle's new driver code (not yet reviewed)
-The **L1 lazy-resolve** (`SarStreamExemptTarget`, added after the VM found the B.1 gap) and the **verdict plumbing**
-(`MSG_PROCESS_QUERY` handler, `SarStateIdentityQuery`, the service `SAR_CTL_OP_VERDICT` 4-step) were written *after* the
-last FABLE5 pass. Give FABLE5 the actual code (neutral framing, §2.3) and ask for code-level counterexamples: lazy-resolve
-IRQL/locking and the paging-write case; PROCESS_QUERY auth/leakage; the poll-based verdict PID-reuse race; any capacity
-double-count. Then VM-re-verify any change.
+### 4.1 T1 — Unify the mmap and non-mmap capture logic onto ONE wiring (owner's priority; the "화룡점정")
+The owner dislikes the mmap/non-mmap split and wants them on the **same** gate→preserve→Oracle wiring. This is now
+possible because at the mmap flush we hold **both** the pre-image (raw-read from disk) and the post-image (the
+paging-write buffer) — exactly the (old, new) pair the non-mmap gate consumes.
+- **Do:** at the mmap flush, for **real-extent (overwrite) regions only** (skip sparse/new per §RESOLVED), compute the
+  **diff-restricted D∧T** (`sar_gate_classify`, `engine/src/gate.c`) on (pre-image, post-image); on fire → preserve the
+  region **and invoke the Oracle** (snapshot `mmap_arm_pid`'s heap, scan for the key, forward-prove `Enc_K(pre)==post`,
+  incl. the σ-constant "expand 32-byte k" stream scan). This gives mmap attacks (Babuk/Maze — a major vector) the
+  **unbounded key-recovery channel they currently lack** (today mmap is preserve-only = bounded), and makes mmap
+  preservation **targeted** (only encryption-like regions), closing DT-T1's residual FP symmetrically with in-place.
+- **Binding constraints:** MIRROR the exact non-mmap `SarCaptureSubmitWrite → SarCaptureWorker` gate/preserve/Oracle
+  wiring — do NOT invent a parallel path. **T gates the ORACLE, not the preservation FLOOR** — preservation must stay
+  unconditional for read-preceded / real-extent destruction so a high-entropy original (compressed/media, where T is
+  quiet) is still preserved. First read how the non-mmap synchronous `SarCaptureInPlaceRegion` (D∧read floor, ungated
+  by T) and the T-gated async Oracle are split, and replicate that split for mmap. Timing caveat: mmap flush is async →
+  the key may already be zeroized (best-effort, backstopped by the preservation we already do). End state: **mmap and
+  non-mmap are one path**; the only mmap-specific pieces are the seam (paging-write vs IRP_MJ_WRITE) and the
+  new/overwrite discriminator (extent-type vs read-precedence). VM-verify (A-H1..A-H3 evidence + a mmap-Oracle test).
 
-### 4.2 B.2 — driver_connected=0 (the one remaining prior-cycle side-finding) — ROOT-CAUSE & FIX
-`sarctl status` shows `driver_connected=0` and `sarctl inflight` returns empty: the service's periodic **GET_STATUS**
-(`sar_comm_query_status`, `service/control.c`) fails, while CATALOG_QUERY/PRESERVE/VERDICT succeed. This is a real,
-pre-existing (HANDOFF-noted) channel fault. It has two live consequences this cycle surfaced: (a) the **B-1 in-flight
-gauge is unavailable** (the barrier falls back to flush + a fixed settle — sound-ish but not the intended level-triggered
-quiescence); (b) **SET_BUDGET propagation is flaky/latent**, which made the MMAP2 "discrimination" (one-fits-one-refused)
-non-deterministic — the *no-loss* invariant still held (both refused = both intact). Root-cause GET_STATUS specifically
-(size/timing/reentrancy vs the posture publisher; confirm the deployed service has the new `status_reply` size). Fixing
-it unblocks the inflight gauge and a deterministic MMAP2 discrimination assertion. **Not a data-loss issue.**
+### 4.2 T2 — Whitelist + active injection-proofing (design agreed this session; implement + VM-verify)
+Exemption = ZERO monitoring (contract). To make it sound without whole-file trust, the driver **actively makes an
+exempted process injection-proof** so a non-kernel actor cannot write through it. (Research this session: real
+ransomware DLL-sideloads / injects into signed processes — e.g. REvil into MsMpEng.exe — so trusted *identity* is not
+enough; the exemption anchor must be an injection-proof *STATE*.)
+- `ObRegisterCallbacks` on PsProcessType/PsThreadType stripping only manipulation bits (PROCESS_VM_WRITE / VM_OPERATION
+  / CREATE_THREAD / DUP_HANDLE / SUSPEND_RESUME / SET_INFORMATION; THREAD_SET_CONTEXT / …) from **untrusted** openers;
+  keep QUERY / TERMINATE / VM_READ / SYNCHRONIZE (zero observer impact — Task Manager / monitors / crash-read still
+  work). **DuplicateHandle must check the TARGET process, not the caller.** Protected-set keyed by `EPROCESS*` +
+  `PsGetProcessStartKey` (NEVER PID — PID-reuse UAF/alias). Add a pre-existing-handle sweep (ZwQuerySystemInformation +
+  DUPLICATE_CLOSE_SOURCE). Signature verdicts must be **cached at process-create/first-image-load**, never computed
+  synchronously in the Ob callback.
+- Sideloading: minifilter veto of a non-cosigned image mapped into a protected process, and/or revoke exemption on a
+  foreign-signed module load (load-image notify fires before DllMain).
+- **Scope exemption to "headless, non-scripting" apps** (no untrusted-code execution) — that is where forced
+  injection-proofing has zero usability cost. (For arbitrary GUI/scripting apps, do NOT full-exempt; the earlier
+  "cost-only monitoring" idea is REJECTED — exemption is exemption.)
+- Honest [BOUNDARY] (same ceiling PPL has, IX.1): kernel attacker; in-process memory-safety exploit; a voluntarily
+  mapped shared-writable section the app executes from.
 
-### 4.3 Broad regression + DELCAP + service auto-fire
-- **Re-run `vm_verify_coverage.ps1`** (A/A2/P/E/EV/B/C/C2/H/D) to prove the block-before-evict + exemption changes did
-  not regress non-in-place FN, destroyer-matrix gate completeness, phantom un-bypassability, benign FP, reboot
-  persistence, or burden. Fold the hardened classifier/barrier from `vm_verify_new.ps1` in.
-- **DELCAP (L5-B) VM test:** the guest lacks `New-VHD`. Create a FAT/exFAT volume in-guest via **diskpart** (`create
-  vdisk` / `attach vdisk` / `create partition` / `format fs=fat32`) or attach a small FAT image, then: read-precede a
-  large victim on it, tiny budget, ENFORCE, delete → assert refused (INSUFFICIENT_RESOURCES + block-capacity, victim
-  intact). Guard against a conviction-block false pass (fresh single victim).
-- **Tier-2 auto-fire (production completeness):** the verdict *mechanism* works via `sarctl verdict <pid>`. For
-  hands-off production, add a thin **service loop** that enumerates processes on a cadence / on whitelist-change and
-  verdicts the whitelisted ones (same PROCESS_QUERY → evaluate → IDENTITY_VERDICT it already does per-pid). Verify with
-  a spawned-after-load whitelisted app becoming EXEMPT without a manual `sarctl verdict`.
-
-### 4.4 Constitution rewrite — THE TERMINUS (last, only after 4.1–4.3)
-`docs/CONSTITUTION.md` is legacy (whole-file-at-open, pre-fix capacity-block). Rewrite it to the running, corrected,
-now-VM-verified design. **Binding constraints (owner is explicit):** deep understanding first (explain *why each clause
-is the minimal correct thing*; re-derive/web-research if you can't); move only implemented logic in, each clause grounded
-in file/function + rationale; write **as-if-original** (no changelog); preserve item-type discipline
-([INVARIANT]/[DECISION]/[BOUNDARY]/[NEGATIVE]/[DEPLOY], MEASURED/DERIVED/DESIGN tags), Part 0 closure, Part IX boundaries.
-**Must encode:** the corrected graduated response (circumstantial→per-op refusal, block-before-evict, paging exempt;
-definitive→process block); the exemption contract (absolute, zero-monitoring incl. Phantom; Tier-1 = OS-owned normalized
-path ∪ PP/PPL, both unforgeable, never a forgeable anchor; Tier-2 = strong-identity whitelist + authenticated verdict
-with driver-side start_key binding as the policy authority; control-plane auth in Part VII); the mmap reservation +
-release-as-you-stage; σ-scan stream recovery. **Part IX honest residuals (all stated this cycle):** A.3 Tier-2
-confused-deputy; **R2-tail** (irreducible mmap-paging loss only when the store is full at BOTH section-arm AND the first
-ENFORCE stage — paging is unrefusable, and you cannot reserve capacity that does not exist); **R1** (delete/rename
-fail-open only when the data-scan section itself cannot be built, non-NTFS-narrow, same pattern as the in-place seam);
-**R4** (safe-side transient reserved over-count between stage-append and release — refuses, never loses); the bounded
-resource envelope; the on-disk store confidentiality/availability line without a kernel-code attacker; **B.2** as a
-visibility residual (if not fixed by 4.2).
+### 4.3 T3 — Constitution full rewrite (THE TERMINUS — last, only after T1+T2)
+`docs/CONSTITUTION.md` III.5 / Part IV are legacy (whole-file-at-open). Rewrite to the running, VM-verified design.
+**Binding (owner explicit):** deep understanding first (explain *why each clause is the minimal correct thing*;
+re-derive / web-research if unsure); move only implemented logic in, each clause grounded in file/function + rationale;
+**as-if-original** (no changelog); item-type discipline ([INVARIANT]/[DECISION]/[BOUNDARY]/[NEGATIVE]/[DEPLOY],
+MEASURED/DERIVED/DESIGN), Part 0 closure, Part IX boundaries. **Must encode:** the unified gate→preserve→Oracle wiring
+(T1); mmap as region-only paging-write capture with the UserMode arm gate, extent-type new/overwrite discriminator,
+reservation + release-as-you-stage, and the APC + drift boundaries; first-write-wins + Oracle-reconcile +
+probation/protected pools (DT-T2); the exemption contract with active injection-proofing (T2); σ-scan stream recovery;
+the corrected graduated response (circumstantial→per-op refusal / block-before-evict / paging exempt; definitive→process
+block). **Part IX residuals:** R-mmap-APC (paging unrefusable), R-mmap-drift (defrag-while-mapped), R-mmap-resident
+(MFT sub-~700 B, no extents), A.3 Tier-2 confused-deputy, the bounded envelope, store confidentiality without a
+kernel attacker, B.2 (comm-port latency — still open, visibility only).
 
 ---
 
@@ -356,3 +355,12 @@ visibility residual (if not fixed by 4.2).
    verdict with driver-side start_key binding), NOT in watching the exempt. A forgeable anchor (token=SYSTEM, bare path/
    name, unverified signature) is never an exemption basis.
 8. **FABLE5 reviews are code-level with counterexamples** (design → impl → VM re-verify). Use neutral framing.
+   FABLE5 **over-flags** — it will always claim a problem. Verify each finding against the actual code; it hedges
+   uncertain ones ("iff … — confirm"). This session it raised 5, of which 2 were false alarms (code already locked /
+   already atomic), 1 was empirically refuted, 1 was style. Reflect critically; do not blindly apply.
+9. **NEVER satisfy a hard requirement by silently substituting an easier, owner-forbidden design.** The recurring
+   failure this session was exactly that (whole-file mmap dump; monitoring the exempt; blocking mmap; a wrong
+   "T-gameable" claim). When a requirement seems impossible: SOLVE it, or state the precise irreducible reason —
+   grounded in an empirically-verified or primary-sourced fact, never a guess. The requirements are load-bearing:
+   FN=0; region-only (never whole-file); exemption = zero monitoring; zero usability impact; transcend the frontier.
+   When a load-bearing fact is ambiguous mid-implementation, do targeted web research BEFORE continuing.

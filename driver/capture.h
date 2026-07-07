@@ -59,9 +59,6 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarMmapArm(_In_ PFLT_INSTANCE Instance, _In_ PFILE_OBJECT FileObject,
                 _Inout_ PSAR_STREAM_CONTEXT Sc, _In_ HANDLE ArmPid);
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
-VOID SarMmapCaptureEager(_In_ PFLT_INSTANCE Instance, _In_ PSAR_STREAM_CONTEXT Sc, _In_ UINT64 Actor);
-
 _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarMmapOnPagingWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJECTS FltObjects,
                              _In_ PFLT_CALLBACK_DATA Data);
