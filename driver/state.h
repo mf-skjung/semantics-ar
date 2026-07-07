@@ -9,6 +9,7 @@ typedef struct _SAR_IDENTITY_ENTRY {
     LIST_ENTRY link;
     HANDLE process_id;
     PEPROCESS process;
+    UINT64 start_key;
     sar_id_state_t id_state;
     sar_identity_t identity;
     BOOLEAN identity_valid;
@@ -55,7 +56,8 @@ NTSTATUS SarStateIdentityInsert(_Inout_ PSAR_STATE State,
                                 _In_ PEPROCESS Process,
                                 _In_opt_ const sar_identity_t *Identity,
                                 _In_ BOOLEAN IdentityValid,
-                                _In_ BOOLEAN SubsystemProcess);
+                                _In_ BOOLEAN SubsystemProcess,
+                                _In_ BOOLEAN ProtectedTrusted);
 
 _IRQL_requires_max_(APC_LEVEL)
 VOID SarStateIdentityRemove(_Inout_ PSAR_STATE State, _In_ HANDLE ProcessId);
@@ -64,8 +66,13 @@ _IRQL_requires_max_(APC_LEVEL)
 sar_id_state_t SarStateIdentityLookup(_In_ PSAR_STATE State, _In_ HANDLE ProcessId);
 
 _IRQL_requires_max_(APC_LEVEL)
-VOID SarStateIdentityApplyVerdict(_Inout_ PSAR_STATE State,
+BOOLEAN SarStateIdentityQuery(_In_ PSAR_STATE State, _In_ HANDLE ProcessId,
+                             _Out_ UINT64 *StartKey, _Out_ sar_id_state_t *IdState);
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateIdentityApplyVerdict(_Inout_ PSAR_STATE State,
                                   _In_ HANDLE ProcessId,
+                                  _In_ UINT64 StartKey,
                                   _In_ const sar_identity_t *VerifiedIdentity);
 
 #endif

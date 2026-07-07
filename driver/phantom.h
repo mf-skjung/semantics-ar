@@ -105,10 +105,7 @@ _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarPhantomIsTrustedProcess(_In_ HANDLE ProcessId);
 
 _IRQL_requires_max_(APC_LEVEL)
-VOID SarPhantomRecordEvidence(_In_ HANDLE ProcessId);
-
-_IRQL_requires_max_(APC_LEVEL)
-BOOLEAN SarPhantomIsConvicted(_In_ HANDLE ProcessId);
+BOOLEAN SarPhantomEvidenceConvicts(_In_ HANDLE ProcessId);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarPhantomImageNotifyRegister(VOID);

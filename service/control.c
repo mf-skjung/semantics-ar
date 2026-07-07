@@ -171,6 +171,106 @@ int sar_control_apply(sar_comm_client_t *client,
         break;
     }
 
+    case SAR_CTL_OP_STATUS: {
+        semantics_ar_status_reply_t st;
+
+        memset(&st, 0, sizeof(st));
+        cs = sar_comm_query_status(client, &st);
+        if (cs != SAR_COMM_OK) {
+            reply->result = (int32_t)cs;
+            break;
+        }
+        reply->result = 0;
+        reply->capture_inflight = st.capture_inflight;
+        reply->preserve_used_bytes = st.preserve_used_bytes;
+        reply->id_state = st.mode;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        break;
+    }
+
+    case SAR_CTL_OP_PROCESS_QUERY: {
+        semantics_ar_process_query_t q;
+        semantics_ar_process_reply_t pr;
+
+        memset(&q, 0, sizeof(q));
+        q.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+        q.header.message_type = SEMANTICS_AR_MSG_PROCESS_QUERY;
+        q.header.message_length = (uint32_t)sizeof(q);
+        q.pid = cmd->arg0;
+
+        memset(&pr, 0, sizeof(pr));
+        cs = sar_comm_send_recv(client, &q, (uint32_t)sizeof(q), &pr, (uint32_t)sizeof(pr),
+                                SEMANTICS_AR_MSG_PROCESS_REPLY);
+        if (cs != SAR_COMM_OK) {
+            reply->result = (int32_t)cs;
+            break;
+        }
+        reply->result = pr.valid ? 0 : -1;
+        reply->id_state = pr.id_state;
+        reply->proc_start_key = pr.start_key;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        break;
+    }
+
+    case SAR_CTL_OP_VERDICT: {
+        DWORD pid = (DWORD)cmd->arg0;
+        wchar_t image[SEMANTICS_AR_PROTO_PATH_MAX];
+        DWORD nchars = SEMANTICS_AR_PROTO_PATH_MAX;
+        HANDLE hproc;
+        semantics_ar_process_query_t q;
+        semantics_ar_process_reply_t pr;
+        semantics_ar_identity_verdict_t v;
+        sar_identity_eval_t eval;
+
+        image[0] = 0;
+        hproc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (hproc != NULL) {
+            if (!QueryFullProcessImageNameW(hproc, 0, image, &nchars))
+                image[0] = 0;
+            CloseHandle(hproc);
+        }
+        if (image[0] == 0) {
+            reply->result = -1;
+            break;
+        }
+
+        memset(&q, 0, sizeof(q));
+        q.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+        q.header.message_type = SEMANTICS_AR_MSG_PROCESS_QUERY;
+        q.header.message_length = (uint32_t)sizeof(q);
+        q.pid = pid;
+        memset(&pr, 0, sizeof(pr));
+        cs = sar_comm_send_recv(client, &q, (uint32_t)sizeof(q), &pr, (uint32_t)sizeof(pr),
+                                SEMANTICS_AR_MSG_PROCESS_REPLY);
+        if (cs != SAR_COMM_OK || !pr.valid || pr.start_key == 0) {
+            reply->result = -1;
+            break;
+        }
+
+        memset(&eval, 0, sizeof(eval));
+        reply->verdict = sar_identity_evaluate(image, &eval);
+        if (reply->verdict != SAR_IDENTITY_VERDICT_VERIFIED) {
+            reply->result = -1;
+            reply->id_state = pr.id_state;
+            break;
+        }
+
+        memset(&v, 0, sizeof(v));
+        v.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+        v.header.message_type = SEMANTICS_AR_MSG_IDENTITY_VERDICT;
+        v.header.message_length = (uint32_t)sizeof(v);
+        v.pid = pid;
+        v.start_key = pr.start_key;
+        memcpy(v.image_path, eval.identity.image_path, sizeof(v.image_path));
+        memcpy(v.cert_subject, eval.identity.cert_subject, sizeof(v.cert_subject));
+        memcpy(v.content_hash, eval.identity.content_hash, sizeof(v.content_hash));
+        cs = sar_comm_send(client, &v, (uint32_t)sizeof(v));
+        reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
+        reply->id_state = pr.id_state;
+        reply->proc_start_key = pr.start_key;
+        break;
+    }
+
     case SAR_CTL_OP_RECOVER: {
         wchar_t  path[SEMANTICS_AR_PROTO_PATH_MAX];
         uint64_t bytes = 0;

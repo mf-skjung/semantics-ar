@@ -344,6 +344,69 @@ static int cmd_mode(const char *m)
     return reply.result == 0 ? 0 : 3;
 }
 
+static const wchar_t *idstate_str(uint32_t s)
+{
+    switch (s) {
+    case 0:  return L"observe-pending";
+    case 1:  return L"observe";
+    case 2:  return L"exempt";
+    default: return L"?";
+    }
+}
+
+static int cmd_procquery(const char *pidstr)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = SAR_CTL_OP_PROCESS_QUERY;
+    cmd.arg0 = (uint64_t)strtoull(pidstr, NULL, 10);
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    if (reply.result != 0) {
+        wprintf(L"procquery pid=%llu not-found\n", (unsigned long long)cmd.arg0);
+        return 2;
+    }
+    wprintf(L"procquery pid=%llu id_state=%u(%ls) start_key=%llu\n",
+            (unsigned long long)cmd.arg0, reply.id_state, idstate_str(reply.id_state),
+            (unsigned long long)reply.proc_start_key);
+    return 0;
+}
+
+static int cmd_verdict(const char *pidstr)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = SAR_CTL_OP_VERDICT;
+    cmd.arg0 = (uint64_t)strtoull(pidstr, NULL, 10);
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    wprintf(L"verdict pid=%llu result=%d verdict=%ls id_state_before=%u(%ls)\n",
+            (unsigned long long)cmd.arg0, reply.result, verdict_str(reply.verdict),
+            reply.id_state, idstate_str(reply.id_state));
+    return reply.result == 0 ? 0 : 3;
+}
+
+static int cmd_inflight(void)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t reply;
+
+    memset(&cmd, 0, sizeof cmd);
+    cmd.op = SAR_CTL_OP_STATUS;
+    if (send_command(&cmd, &reply) != 0)
+        return 1;
+    if (reply.result != 0)
+        return 1;
+    wprintf(L"inflight=%llu used=%llu\n",
+            (unsigned long long)reply.capture_inflight,
+            (unsigned long long)reply.preserve_used_bytes);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "list") == 0)
@@ -370,6 +433,12 @@ int main(int argc, char **argv)
         return cmd_events(1);
     if (argc == 3 && strcmp(argv[1], "events") == 0)
         return cmd_events(atoi(argv[2]));
+    if (argc == 3 && strcmp(argv[1], "verdict") == 0)
+        return cmd_verdict(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "procquery") == 0)
+        return cmd_procquery(argv[2]);
+    if (argc == 2 && strcmp(argv[1], "inflight") == 0)
+        return cmd_inflight();
 
     fwprintf(stderr,
              L"usage: sarctl status | list | recover <key_id-hex> <path> | mode <audit|enforce>\n"

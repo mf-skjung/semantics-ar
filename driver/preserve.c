@@ -1,10 +1,13 @@
 #include "preserve.h"
 #include "store_io.h"
+#include "state.h"
 
 #include <ntifs.h>
 #include <bcrypt.h>
 
 #include "sar_preserve.h"
+
+extern PSAR_STATE g_sar_state;
 
 #define SAR_PRES_DIR      L"\\SystemRoot\\System32\\drivers\\SemanticsAr"
 #define SAR_PRES_INDEX    L"\\SystemRoot\\System32\\drivers\\SemanticsAr\\preserve.idx"
@@ -60,6 +63,7 @@ struct _SAR_PRESERVE {
 
     UINT64 retention_100ns;
     UINT64 capacity_bytes;
+    UINT64 reserved_bytes;
 
     volatile LONG ready;
     volatile LONG dirty;
@@ -760,7 +764,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
                                   _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
                                   _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
-                                  _In_ ULONG PlaintextLen)
+                                  _In_ ULONG PlaintextLen, _In_ BOOLEAN AgainstReservation)
 {
     UINT64 ct_len;
     UINT64 off;
@@ -804,14 +808,23 @@ SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UIN
 
     {
         UINT64 prot = sar_preserve_protected_bytes(Preserve->records, Preserve->record_count);
+        UINT64 res = AgainstReservation ? 0 : Preserve->reserved_bytes;
         if (prot + ct_len > Preserve->capacity_bytes) {
             FltReleasePushLock(&Preserve->lock);
             ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
             return SAR_STAGE_DROPPED;
         }
-        if (sar_preserve_evict_probation_oldest(Preserve->records, &Preserve->record_count,
-                                                Preserve->capacity_bytes - prot - ct_len) > 0)
-            Preserve->free_dirty = TRUE;
+        if (sar_preserve_total_bytes(Preserve->records, Preserve->record_count) + res + ct_len >
+            Preserve->capacity_bytes) {
+            if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
+                FltReleasePushLock(&Preserve->lock);
+                ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
+                return SAR_STAGE_DROPPED;
+            }
+            if (sar_preserve_evict_probation_oldest(Preserve->records, &Preserve->record_count,
+                                                    Preserve->capacity_bytes - prot - ct_len) > 0)
+                Preserve->free_dirty = TRUE;
+        }
     }
 
     if (Preserve->record_count >= Preserve->record_capacity) {
@@ -937,9 +950,41 @@ BOOLEAN SarPreserveWouldExceed(_In_opt_ PSAR_PRESERVE Preserve, _In_ UINT64 Inco
 
     FltAcquirePushLockShared(&Preserve->lock);
     exceed = sar_preserve_total_bytes(Preserve->records, Preserve->record_count) +
-             IncomingBytes > Preserve->capacity_bytes;
+             Preserve->reserved_bytes + IncomingBytes > Preserve->capacity_bytes;
     FltReleasePushLock(&Preserve->lock);
     return exceed;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+BOOLEAN SarPreserveReserve(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 Bytes)
+{
+    BOOLEAN ok = FALSE;
+
+    if (Preserve == NULL || Preserve->ready == 0 || Bytes == 0)
+        return FALSE;
+
+    FltAcquirePushLockExclusive(&Preserve->lock);
+    if (sar_preserve_total_bytes(Preserve->records, Preserve->record_count) +
+        Preserve->reserved_bytes + Bytes <= Preserve->capacity_bytes) {
+        Preserve->reserved_bytes += Bytes;
+        ok = TRUE;
+    }
+    FltReleasePushLock(&Preserve->lock);
+    return ok;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarPreserveRelease(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 Bytes)
+{
+    if (Preserve == NULL || Preserve->ready == 0 || Bytes == 0)
+        return;
+
+    FltAcquirePushLockExclusive(&Preserve->lock);
+    if (Bytes >= Preserve->reserved_bytes)
+        Preserve->reserved_bytes = 0;
+    else
+        Preserve->reserved_bytes -= Bytes;
+    FltReleasePushLock(&Preserve->lock);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

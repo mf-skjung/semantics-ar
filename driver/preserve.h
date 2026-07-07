@@ -38,7 +38,13 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
                                   _In_ UINT64 Offset, _In_ UINT64 Length, _In_ UINT64 ActorId,
                                   _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
-                                  _In_ ULONG PlaintextLen);
+                                  _In_ ULONG PlaintextLen, _In_ BOOLEAN AgainstReservation);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+BOOLEAN SarPreserveReserve(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 Bytes);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarPreserveRelease(_Inout_ PSAR_PRESERVE Preserve, _In_ UINT64 Bytes);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarPreserveStageLink(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,

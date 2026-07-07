@@ -168,20 +168,20 @@ static void xts_roundtrip(void) {
 }
 
 static void enc_chacha(const uint8_t *key, const uint8_t *nonce12, int origin,
-                       const uint8_t *pt, uint8_t *ct, uint32_t len) {
+                       const uint8_t *pt, uint8_t *ct, uint32_t len, int rounds) {
     for (uint32_t o = 0; o < len; o += 64) {
         uint8_t ks[64];
-        chacha_block(key, nonce12, (uint32_t)(o / 64) + (uint32_t)origin, 20, ks);
+        chacha_block(key, nonce12, (uint32_t)(o / 64) + (uint32_t)origin, rounds, ks);
         uint32_t n = len - o; if (n > 64) n = 64;
         for (uint32_t i = 0; i < n; i++) ct[o + i] = (uint8_t)(pt[o + i] ^ ks[i]);
     }
 }
 
 static void enc_salsa(const uint8_t *key, const uint8_t *nonce8, int origin,
-                      const uint8_t *pt, uint8_t *ct, uint32_t len) {
+                      const uint8_t *pt, uint8_t *ct, uint32_t len, int rounds) {
     for (uint32_t o = 0; o < len; o += 64) {
         uint8_t ks[64];
-        salsa_block(key, nonce8, (uint64_t)(o / 64) + (uint64_t)origin, 20, ks);
+        salsa_block(key, nonce8, (uint64_t)(o / 64) + (uint64_t)origin, rounds, ks);
         uint32_t n = len - o; if (n > 64) n = 64;
         for (uint32_t i = 0; i < n; i++) ct[o + i] = (uint8_t)(pt[o + i] ^ ks[i]);
     }
@@ -196,7 +196,7 @@ static void stream_roundtrips(void) {
     fill_pattern(pt, L, 0x13);
 
     for (int origin = 0; origin <= 1; origin++) {
-        enc_chacha(key, nonce, origin, pt, ct, L);
+        enc_chacha(key, nonce, origin, pt, ct, L, 20);
         uint8_t cd[3][16];
         memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
         memcpy(cd[2], nonce, 12); memset(cd[2] + 12, 0, 4);
@@ -214,7 +214,7 @@ static void stream_roundtrips(void) {
               st == SAR_RECOVER_OK && memcmp(rec, pt, L) == 0, nm);
     }
 
-    enc_salsa(key, nonce, 0, pt, ct, L);
+    enc_salsa(key, nonce, 0, pt, ct, L, 20);
     {
         uint8_t cd[3][16];
         memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
@@ -233,7 +233,7 @@ static void stream_roundtrips(void) {
         uint8_t subkey[32], dn[12];
         hchacha20(key, nonce, subkey);
         memset(dn, 0, 4); memcpy(dn + 4, nonce + 16, 8);
-        enc_chacha(subkey, dn, 0, pt, ct, L);
+        enc_chacha(subkey, dn, 0, pt, ct, L, 20);
         uint8_t cd[4][16];
         memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
         memcpy(cd[2], nonce, 16); memcpy(cd[3], nonce + 16, 8); memset(cd[3] + 8, 0, 8);
@@ -251,7 +251,7 @@ static void stream_roundtrips(void) {
         uint8_t subkey[32], dn[8];
         hsalsa20(key, nonce, subkey);
         memcpy(dn, nonce + 16, 8);
-        enc_salsa(subkey, dn, 0, pt, ct, L);
+        enc_salsa(subkey, dn, 0, pt, ct, L, 20);
         uint8_t cd[4][16];
         memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
         memcpy(cd[2], nonce, 16); memcpy(cd[3], nonce + 16, 8); memset(cd[3] + 8, 0, 8);
@@ -264,6 +264,68 @@ static void stream_roundtrips(void) {
         sar_recover_status_t st = sar_recover_buffer(&rk, NULL, ct, rec, L);
         CHECK(r && v.algorithm == SAR_ALG_XSALSA20 && rk.iv_length == 24 &&
               st == SAR_RECOVER_OK && memcmp(rec, pt, L) == 0, "XSalsa20 round-trip");
+    }
+
+    static const int reduced[] = { 8, 12 };
+    for (size_t ridx = 0; ridx < sizeof reduced / sizeof reduced[0]; ridx++) {
+        int nr = reduced[ridx];
+        {
+            enc_salsa(key, nonce, 0, pt, ct, L, nr);
+            uint8_t cd[3][16];
+            memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
+            memcpy(cd[2], nonce, 8); memset(cd[2] + 8, 0, 8);
+            sar_engine_input_t in; memset(&in, 0, sizeof in);
+            in.candidates = cd; in.candidate_count = 3;
+            in.plaintext = pt; in.ciphertext = ct; in.sample_size = 64; in.file_offset = 0;
+            sar_verdict_t v; int r = sar_convict(&in, &v);
+            sar_recovery_key_t rk; sar_recovery_key_from_verdict(&v, &rk);
+            memset(rec, 0, L);
+            sar_recover_status_t st = sar_recover_buffer(&rk, NULL, ct, rec, L);
+            char nm[80];
+            snprintf(nm, sizeof nm, "Salsa20/%d reduced-round convict->recover round-trip", nr);
+            CHECK(r && v.algorithm == SAR_ALG_SALSA20 &&
+                  (int)((v.mode_params >> 8) & 0xff) == nr &&
+                  st == SAR_RECOVER_OK && memcmp(rec, pt, L) == 0, nm);
+        }
+        {
+            enc_chacha(key, nonce, 0, pt, ct, L, nr);
+            uint8_t cd[3][16];
+            memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
+            memcpy(cd[2], nonce, 12); memset(cd[2] + 12, 0, 4);
+            sar_engine_input_t in; memset(&in, 0, sizeof in);
+            in.candidates = cd; in.candidate_count = 3;
+            in.plaintext = pt; in.ciphertext = ct; in.sample_size = 64; in.file_offset = 0;
+            sar_verdict_t v; int r = sar_convict(&in, &v);
+            sar_recovery_key_t rk; sar_recovery_key_from_verdict(&v, &rk);
+            memset(rec, 0, L);
+            sar_recover_status_t st = sar_recover_buffer(&rk, NULL, ct, rec, L);
+            char nm[80];
+            snprintf(nm, sizeof nm, "ChaCha20/%d reduced-round convict->recover round-trip", nr);
+            CHECK(r && v.algorithm == SAR_ALG_CHACHA20 &&
+                  (int)((v.mode_params >> 8) & 0xff) == nr &&
+                  st == SAR_RECOVER_OK && memcmp(rec, pt, L) == 0, nm);
+        }
+        {
+            uint8_t subkey[32], dn[8];
+            hsalsa20(key, nonce, subkey);
+            memcpy(dn, nonce + 16, 8);
+            enc_salsa(subkey, dn, 0, pt, ct, L, nr);
+            uint8_t cd[4][16];
+            memcpy(cd[0], key, 16); memcpy(cd[1], key + 16, 16);
+            memcpy(cd[2], nonce, 16); memcpy(cd[3], nonce + 16, 8); memset(cd[3] + 8, 0, 8);
+            sar_engine_input_t in; memset(&in, 0, sizeof in);
+            in.candidates = cd; in.candidate_count = 4;
+            in.plaintext = pt; in.ciphertext = ct; in.sample_size = 64; in.file_offset = 0;
+            sar_verdict_t v; int r = sar_convict(&in, &v);
+            sar_recovery_key_t rk; sar_recovery_key_from_verdict(&v, &rk);
+            memset(rec, 0, L);
+            sar_recover_status_t st = sar_recover_buffer(&rk, NULL, ct, rec, L);
+            char nm[80];
+            snprintf(nm, sizeof nm, "XSalsa20/%d reduced-round convict->recover round-trip", nr);
+            CHECK(r && v.algorithm == SAR_ALG_XSALSA20 && rk.iv_length == 24 &&
+                  (int)((v.mode_params >> 8) & 0xff) == nr &&
+                  st == SAR_RECOVER_OK && memcmp(rec, pt, L) == 0, nm);
+        }
     }
 }
 

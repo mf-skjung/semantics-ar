@@ -261,6 +261,12 @@ static NTSTATUS SarHandleConnectResponse(_Inout_ PSAR_COMM Comm,
         return STATUS_REQUEST_NOT_ACCEPTED;
     }
 
+    hs = sar_handshake_check_version(&Comm->handshake, Response->header.protocol_version);
+    if (hs != SAR_HS_RESULT_OK) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_REVISION_MISMATCH;
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -272,13 +278,13 @@ static NTSTATUS SarHandleGetStatus(_Inout_ PSAR_COMM Comm,
                                    _Out_ PULONG ReturnLength)
 {
     semantics_ar_status_reply_t reply;
-    sar_hs_result_t hs;
 
     UNREFERENCED_PARAMETER(Request);
 
-    hs = sar_handshake_check_version(&Comm->handshake, SEMANTICS_AR_PROTOCOL_VERSION);
-    if (hs != SAR_HS_RESULT_OK)
-        return STATUS_REVISION_MISMATCH;
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
         return STATUS_BUFFER_TOO_SMALL;
@@ -302,6 +308,40 @@ static NTSTATUS SarHandleGetStatus(_Inout_ PSAR_COMM Comm,
         reply.preserve_protected_count = stats.protected_count;
         reply.preserve_probation_count = stats.probation_count;
     }
+
+    reply.capture_inflight = (uint64_t)SarCaptureInflight(g_sar.capture);
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandleProcessQuery(_Inout_ PSAR_COMM Comm,
+                                      _In_ const semantics_ar_process_query_t *Request,
+                                      _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                      _In_ ULONG OutputBufferLength,
+                                      _Out_ PULONG ReturnLength)
+{
+    semantics_ar_process_reply_t reply;
+    UINT64 sk = 0;
+    sar_id_state_t st = SAR_IDSTATE_OBSERVE_PENDING;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_PROCESS_REPLY;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.valid = SarStateIdentityQuery(g_sar_state, (HANDLE)(ULONG_PTR)Request->pid, &sk, &st)
+                      ? 1u : 0u;
+    reply.start_key = sk;
+    reply.id_state = (uint32_t)st;
 
     RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
     *ReturnLength = (ULONG)sizeof(reply);
@@ -579,6 +619,26 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
             else
                 status = (SarStateWhitelistRemove(g_sar_state, &id) == SAR_WL_OK) ?
                           STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+        }
+        break;
+    case SEMANTICS_AR_MSG_PROCESS_QUERY:
+        status = SarHandleProcessQuery(comm, (const semantics_ar_process_query_t *)InputBuffer,
+                                       OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_IDENTITY_VERDICT:
+        if (!sar_handshake_authenticated(&comm->handshake)) {
+            InterlockedIncrement64(&comm->tamper_counter);
+            status = STATUS_INVALID_DEVICE_STATE;
+        } else {
+            const semantics_ar_identity_verdict_t *v = (const semantics_ar_identity_verdict_t *)InputBuffer;
+            sar_identity_t id;
+            RtlZeroMemory(&id, sizeof(id));
+            RtlCopyMemory(id.image_path, v->image_path, sizeof(id.image_path));
+            RtlCopyMemory(id.cert_subject, v->cert_subject, sizeof(id.cert_subject));
+            RtlCopyMemory(id.content_hash, v->content_hash, sizeof(id.content_hash));
+            status = SarStateIdentityApplyVerdict(g_sar_state, (HANDLE)(ULONG_PTR)v->pid,
+                                                  v->start_key, &id) ?
+                      STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
         }
         break;
     default:

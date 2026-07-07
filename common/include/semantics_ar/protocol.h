@@ -27,6 +27,9 @@
 #define SEMANTICS_AR_MSG_SET_BUDGET       17
 #define SEMANTICS_AR_MSG_EVENTS_QUERY     18
 #define SEMANTICS_AR_MSG_EVENTS_REPLY     19
+#define SEMANTICS_AR_MSG_IDENTITY_VERDICT 20
+#define SEMANTICS_AR_MSG_PROCESS_QUERY    21
+#define SEMANTICS_AR_MSG_PROCESS_REPLY    22
 
 #define SEMANTICS_AR_MODE_AUDIT   0
 #define SEMANTICS_AR_MODE_ENFORCE 1
@@ -90,6 +93,27 @@ typedef struct {
 
 typedef struct {
     semantics_ar_msg_header_t header;
+    uint64_t pid;
+    uint64_t start_key;
+    uint16_t image_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint16_t cert_subject[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+    uint8_t  content_hash[SEMANTICS_AR_CONTENT_HASH_SIZE];
+} semantics_ar_identity_verdict_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint64_t pid;
+} semantics_ar_process_query_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint32_t valid;
+    uint32_t id_state;
+    uint64_t start_key;
+} semantics_ar_process_reply_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
 } semantics_ar_get_status_t;
 
 typedef struct {
@@ -104,6 +128,7 @@ typedef struct {
     uint64_t preserve_oldest_protected_time;
     uint32_t preserve_protected_count;
     uint32_t preserve_probation_count;
+    uint64_t capture_inflight;
 } semantics_ar_status_reply_t;
 
 typedef struct {

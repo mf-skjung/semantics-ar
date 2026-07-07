@@ -2,7 +2,8 @@
 #include "ctl_mem.h"
 
 static int identity_equal(const sar_identity_t *a, const sar_identity_t *b) {
-    return ctl_memcmp(a, b, sizeof(*a)) == 0;
+    return ctl_memcmp(a->content_hash, b->content_hash, sizeof(a->content_hash)) == 0 &&
+           ctl_memcmp(a->cert_subject, b->cert_subject, sizeof(a->cert_subject)) == 0;
 }
 
 void sar_whitelist_init(sar_whitelist_t *wl, sar_identity_t *storage,

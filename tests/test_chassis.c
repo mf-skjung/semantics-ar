@@ -232,6 +232,9 @@ static void test_handshake(void) {
     CHECK(sar_handshake_check_version(&hs, SEMANTICS_AR_PROTOCOL_VERSION)
               == SAR_HS_RESULT_OK, "matching version ok");
     CHECK(sar_handshake_authenticated(&hs) == 1, "fully authenticated");
+    CHECK(sar_handshake_check_version(&hs, SEMANTICS_AR_PROTOCOL_VERSION)
+              == SAR_HS_RESULT_SEQUENCE, "version step is one-shot after versioned");
+    CHECK(sar_handshake_authenticated(&hs) == 1, "still authenticated after repeat call");
     sar_handshake_timeout(&hs);
     CHECK(sar_handshake_authenticated(&hs) == 1, "timeout after complete is no-op");
 

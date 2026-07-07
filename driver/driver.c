@@ -38,6 +38,8 @@ FLT_POSTOP_CALLBACK_STATUS SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
                                          _In_opt_ PVOID CompletionContext,
                                          _In_ FLT_POST_OPERATION_FLAGS Flags);
 
+VOID SarOsAnchorInit(VOID);
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarBypassIoResolve(_Inout_ PSAR_POSTURE Posture);
 
@@ -59,6 +61,10 @@ static VOID SarStreamContextCleanup(_In_ PFLT_CONTEXT Context, _In_ FLT_CONTEXT_
     if (sc->mmap_path != NULL) {
         ExFreePoolWithTag(sc->mmap_path, SAR_POOL_TAG_STREAMCTX);
         sc->mmap_path = NULL;
+    }
+    if (sc->mmap_reserved != 0) {
+        SarPreserveRelease(g_sar.preserve, (UINT64)sc->mmap_reserved);
+        sc->mmap_reserved = 0;
     }
     FltDeletePushLock(&sc->cap_lock);
 }
@@ -381,6 +387,8 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         g_sar_state = NULL;
         return status;
     }
+
+    SarOsAnchorInit();
 
     if (SarDriverIsPostBootStart(RegistryPath)) {
         SarKeystoreLoad(g_sar.keystore);

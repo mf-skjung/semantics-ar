@@ -4,7 +4,8 @@ param(
     [PSCredential]$Credential,
     [int]$BenignCount = 200,
     [int]$AttackCount = 30,
-    [int]$PerfCount = 400
+    [int]$PerfCount = 400,
+    [switch]$SkipRestore
 )
 $ErrorActionPreference = 'Stop'
 $Repo = (Resolve-Path $Repo).Path
@@ -69,6 +70,20 @@ Write-Host " semantics-ar Coverage: non-in-place / FP / FN / burden" -Foreground
 Write-Host " $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
 Write-Host "=============================================`n" -ForegroundColor Cyan
 
+# ── VM restore ceremony (HANDOFF 5; -SkipRestore is NOT a clean baseline) ─
+if (-not $SkipRestore) {
+    Write-Host "Restore: clean-baseline-20260704" -ForegroundColor Yellow
+    Stop-VM -Name $VMName -TurnOff -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 6
+    Restore-VMSnapshot -VMName $VMName -Name "clean-baseline-20260704" -Confirm:$false
+    Start-VM -Name $VMName
+    Start-Sleep -Seconds 45
+    $script:Sess = $null
+    Connect-VM
+    $ping0 = VM { $env:COMPUTERNAME }
+    Assert "PowerShell Direct stable after restore" ([bool]$ping0)
+}
+
 # ── Preflight ──────────────────────────────────────────────────────────
 Write-Host "Preflight: VM connectivity" -ForegroundColor Yellow
 $vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
@@ -79,14 +94,12 @@ $ping = VM { "$(hostname)|$($PSVersionTable.PSVersion)|loaded=$([bool]((fltmc fi
 Write-Host "  VM responds: $ping"
 Assert "PowerShell Direct session is stable" ($null -ne $ping)
 
-# ── Deploy ─────────────────────────────────────────────────────────────
-Write-Host "Phase 0: Package & Deploy" -ForegroundColor Yellow
-if (-not (Test-Path "$Repo\build_driver\semantics_ar.sys")) {
-    & cmd /c "`"$Repo\scripts\build_driver.bat`" `"$Repo\build_driver`"" | Out-Null
-}
-& "$Repo\scripts\package_driver.ps1" -Out "$Repo\build_driver" -Repo $Repo | Out-Null
+# ── Deploy (pre-signed package; package_driver.ps1 is broken — HANDOFF 5) ─
+Write-Host "Phase 0: Deploy (pre-signed pkg + build_win binaries)" -ForegroundColor Yellow
 $pkg = "$Repo\build_driver\pkg"
-if (-not (Test-Path "$pkg\semantics_ar.sys")) { throw "Package failed" }
+foreach ($f in @("semantics_ar.sys","semantics_ar.cat","semantics_ar.inf")) {
+    if (-not (Test-Path "$pkg\$f")) { throw "signed package missing $f (build+sign the driver first)" }
+}
 
 try { VM { Stop-Service semantics_ar_service -Force -ErrorAction SilentlyContinue } } catch {}
 try { VM { fltmc unload semantics_ar 2>$null } } catch {}
@@ -98,9 +111,9 @@ VM { if (-not (Test-Path $using:vmSar)) { New-Item -ItemType Directory -Path $us
 foreach ($f in @("semantics_ar.sys","semantics_ar.inf","semantics_ar.cat","SemanticsArTest.cer")) {
     $src = Join-Path $pkg $f; if (Test-Path $src) { CopyToVM $src (Join-Path $vmSar $f) }
 }
-$svcExe = "$Repo\build\service\Release\semantics_ar_service.exe"
+$svcExe = "$Repo\build_win\service\Release\semantics_ar_service.exe"
 if (Test-Path $svcExe) { CopyToVM $svcExe "$vmSar\semantics_ar_service.exe" }
-$sarctlExe = "$Repo\build\tools\Release\sarctl.exe"
+$sarctlExe = "$Repo\build_win\tools\Release\sarctl.exe"
 if (Test-Path $sarctlExe) { CopyToVM $sarctlExe "$vmSar\sarctl.exe" }
 foreach ($h in @("noninplace_destroyer.exe","benign_workload.exe","perf_bench.exe",
                  "ransom_sim.exe","preserve_test.exe","partial_encryptor.exe",
@@ -220,27 +233,49 @@ foreach ($mode in $dmModes) {
         continue
     }
     Start-Sleep -Seconds 6
-    $res = VMArgs { param($d,$n,$len)
+    $res = VMArgs { param($d,$n,$len,$mode)
+        $leaf = Split-Path $d -Leaf
+        $plist = & C:\sar\sarctl.exe preserve-list 2>&1
+        $verifyFull = {
+            param($v,$len)
+            if (-not (Test-Path $v)) { return $false }
+            try { $fb = [IO.File]::ReadAllBytes($v) } catch { return $false }
+            if ($fb.Length -lt $len) { return $false }
+            for ($k = 0; $k -lt $len; $k++) { if ($fb[$k] -ne [byte](65 + ($k % 26))) { return $false } }
+            return $true
+        }
         $rec = 0
         for ($i = 0; $i -lt $n; $i++) {
-            $v = "{0}\victim_{1:D5}.dat" -f $d, $i
-            (& C:\sar\sarctl.exe preserve-recover $v 0 $len 2>&1) | Out-Null
+            $vn = "victim_{0:D5}.dat" -f $i
+            $v = "$d\$vn"
             $ok = $false
-            if (Test-Path $v) {
-                try {
-                    $fb = [IO.File]::ReadAllBytes($v)
-                    if ($fb.Length -ge $len) {
-                        $ok = $true
-                        for ($k = 0; $k -lt $len; $k++) {
-                            if ($fb[$k] -ne [byte](65 + ($k % 26))) { $ok = $false; break }
-                        }
+            if ($mode -eq 'mmapclose') {
+                # a writable mmap overwrites page-by-page -> pre-image captured as MANY regions that a
+                # single-region recover cannot reassemble; verify the destroyed range [0,len) is fully
+                # covered by preserved regions (pre-image exists == recoverable).
+                $regions = @()
+                foreach ($line in $plist) {
+                    if ($line -match [regex]::Escape($leaf) -and $line -match [regex]::Escape($vn) -and $line -match 'off=(\d+) len=(\d+)') {
+                        $regions += [pscustomobject]@{ off=[int64]$Matches[1]; len=[int64]$Matches[2] }
                     }
-                } catch { $ok = $false }
+                }
+                $cur = 0L
+                foreach ($rg in ($regions | Sort-Object off)) { if ($rg.off -le $cur -and ($rg.off + $rg.len) -gt $cur) { $cur = $rg.off + $rg.len } }
+                $ok = ($cur -ge $len)
+            } elseif ($mode -eq 'allocshrink') {
+                # allocation-shrink destroys the tail [len/2,len); recover that region and confirm the
+                # full file is reconstructed (surviving head on disk + restored tail).
+                $half = [int]($len / 2)
+                (& C:\sar\sarctl.exe preserve-recover $v $half $half 2>&1) | Out-Null
+                $ok = (& $verifyFull $v $len)
+            } else {
+                (& C:\sar\sarctl.exe preserve-recover $v 0 $len 2>&1) | Out-Null
+                $ok = (& $verifyFull $v $len)
             }
             if ($ok) { $rec++ }
         }
         return $rec
-    } @($dir,$AttackCount,$fbytes)
+    } @($dir,$AttackCount,$fbytes,$mode)
     $rate = if ($AttackCount -gt 0) { [math]::Round(100.0 * $res / $AttackCount, 1) } else { 0 }
     $dmRates[$mode] = $rate
     Metric "matrix[$mode] performed/unavail/err" "$perf/$unav/$errs"

@@ -308,6 +308,8 @@ static SAR_PHANTOM_TRUST SarPhantomProcessTrust(_In_ HANDLE ProcessId)
 
 static BOOLEAN SarPhantomIsTrusted(_In_ HANDLE ProcessId)
 {
+    if (SarStateIdentityLookup(g_sar_state, ProcessId) == SAR_IDSTATE_EXEMPT)
+        return TRUE;
     return SarPhantomProcessTrust(ProcessId) == SAR_PHANTOM_TRUSTED;
 }
 
@@ -1715,34 +1717,15 @@ SarPhantomPostFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
 }
 
 _IRQL_requires_max_(APC_LEVEL)
-VOID SarPhantomRecordEvidence(_In_ HANDLE ProcessId)
+BOOLEAN SarPhantomEvidenceConvicts(_In_ HANDLE ProcessId)
 {
-    if (g_sar_state == NULL)
-        return;
+    LONG evidence = 0;
+    BOOLEAN exempt = FALSE;
+    BOOLEAN found = FALSE;
 
-    FltAcquirePushLockShared(&g_sar_state->identity_lock);
-    {
-        ULONG bucket = ((ULONG_PTR)ProcessId ^ ((ULONG_PTR)ProcessId >> 13)) * 0x9E3779B1u;
-        bucket = bucket % g_sar_state->identity_bucket_count;
-        PLIST_ENTRY head = &g_sar_state->identity_buckets[bucket];
-        for (PLIST_ENTRY cur = head->Flink; cur != head; cur = cur->Flink) {
-            PSAR_IDENTITY_ENTRY entry = CONTAINING_RECORD(cur, SAR_IDENTITY_ENTRY, link);
-            if (entry->process_id == ProcessId) {
-                InterlockedIncrement(&entry->phantom_evidence);
-                break;
-            }
-        }
-    }
-    FltReleasePushLock(&g_sar_state->identity_lock);
-}
-
-_IRQL_requires_max_(APC_LEVEL)
-BOOLEAN SarPhantomIsConvicted(_In_ HANDLE ProcessId)
-{
     if (g_sar_state == NULL)
         return FALSE;
 
-    LONG evidence = 0;
     FltAcquirePushLockShared(&g_sar_state->identity_lock);
     {
         ULONG bucket = ((ULONG_PTR)ProcessId ^ ((ULONG_PTR)ProcessId >> 13)) * 0x9E3779B1u;
@@ -1751,12 +1734,19 @@ BOOLEAN SarPhantomIsConvicted(_In_ HANDLE ProcessId)
         for (PLIST_ENTRY cur = head->Flink; cur != head; cur = cur->Flink) {
             PSAR_IDENTITY_ENTRY entry = CONTAINING_RECORD(cur, SAR_IDENTITY_ENTRY, link);
             if (entry->process_id == ProcessId) {
-                evidence = entry->phantom_evidence;
+                found = TRUE;
+                if (entry->id_state == SAR_IDSTATE_EXEMPT)
+                    exempt = TRUE;
+                else
+                    evidence = InterlockedIncrement(&entry->phantom_evidence);
                 break;
             }
         }
     }
     FltReleasePushLock(&g_sar_state->identity_lock);
+
+    if (exempt || !found)
+        return FALSE;
     return evidence >= SAR_PHANTOM_K_THRESHOLD;
 }
 

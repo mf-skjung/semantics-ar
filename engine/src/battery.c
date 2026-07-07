@@ -269,15 +269,18 @@ static int try_salsa(const uint8_t *gen_key, const uint8_t *report_key,
         uint64_t ctr = file_offset / 64 + (uint64_t)origin;
         uint32_t boff = (uint32_t)(file_offset % 64);
         uint8_t ks[64];
-        salsa_block(gen_key, gen_nonce8, ctr, 20, ks);
         uint32_t clen = 64 - boff;
         if (clen > sample_size) clen = sample_size;
         if (clen < 16) continue;
-        int match = 1;
-        for (uint32_t m = 0; m < clen; m++)
-            if ((pt[m] ^ ks[boff + m]) != ct[m]) { match = 0; break; }
-        if (match)
-            return fill_stream(v, report_key, alg, persist_nonce, persist_len, 20, origin);
+        for (int ri = 0; ri < STREAM_ROUNDS_COUNT; ri++) {
+            salsa_block(gen_key, gen_nonce8, ctr, STREAM_ROUNDS[ri], ks);
+            int match = 1;
+            for (uint32_t m = 0; m < clen; m++)
+                if ((pt[m] ^ ks[boff + m]) != ct[m]) { match = 0; break; }
+            if (match)
+                return fill_stream(v, report_key, alg, persist_nonce, persist_len,
+                                   STREAM_ROUNDS[ri], origin);
+        }
     }
     return 0;
 }
@@ -349,6 +352,40 @@ static int aes_schedule_scan(const uint8_t *buf, size_t buf_len, const uint8_t *
     return 0;
 }
 
+static const uint8_t SAR_STREAM_SIGMA[16] = {
+    0x65, 0x78, 0x70, 0x61, 0x6e, 0x64, 0x20, 0x33,
+    0x32, 0x2d, 0x62, 0x79, 0x74, 0x65, 0x20, 0x6b
+};
+
+static int stream_sigma_scan(const uint8_t *buf, size_t buf_len, const uint8_t *pt,
+                             const uint8_t *ct, uint32_t sample_size, uint64_t file_offset,
+                             sar_verdict_t *v) {
+    for (size_t off = 0; off + 64 <= buf_len; off++) {
+        if (buf[off] != SAR_STREAM_SIGMA[0])
+            continue;
+        if (sar_memcmp(buf + off, SAR_STREAM_SIGMA, 16) == 0) {
+            const uint8_t *key = buf + off + 16;
+            const uint8_t *nonce12 = buf + off + 52;
+            if (try_chacha(key, key, nonce12, nonce12, 12, pt, ct, sample_size,
+                           file_offset, SAR_ALG_CHACHA20, v))
+                return 1;
+        }
+        if (sar_memcmp(buf + off, SAR_STREAM_SIGMA, 4) == 0 &&
+            sar_memcmp(buf + off + 20, SAR_STREAM_SIGMA + 4, 4) == 0 &&
+            sar_memcmp(buf + off + 40, SAR_STREAM_SIGMA + 8, 4) == 0 &&
+            sar_memcmp(buf + off + 60, SAR_STREAM_SIGMA + 12, 4) == 0) {
+            uint8_t key32[32];
+            const uint8_t *nonce8 = buf + off + 24;
+            sar_memcpy(key32, buf + off + 4, 16);
+            sar_memcpy(key32 + 16, buf + off + 44, 16);
+            if (try_salsa(key32, key32, nonce8, nonce8, 8, pt, ct, sample_size,
+                          file_offset, SAR_ALG_SALSA20, v))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 #define SAR_SCAN_BRUTE_CAP 65536u
 
 static int scan_battery(const uint8_t *buf, size_t buf_len, const uint8_t *pt,
@@ -356,6 +393,8 @@ static int scan_battery(const uint8_t *buf, size_t buf_len, const uint8_t *pt,
                         sar_verdict_t *v) {
     size_t brute = buf_len < SAR_SCAN_BRUTE_CAP ? buf_len : SAR_SCAN_BRUTE_CAP;
     if (aes_schedule_scan(buf, buf_len, pt, ct, sample_size, file_offset, v))
+        return 1;
+    if (stream_sigma_scan(buf, buf_len, pt, ct, sample_size, file_offset, v))
         return 1;
     for (size_t off = 0; off + 256 <= brute; off++) {
         if (is_rc4_sbox(buf + off)) {

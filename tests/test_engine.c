@@ -260,6 +260,16 @@ static void stream_suite(void) {
         CHECK(convict_check(&in, SAR_ALG_SALSA20, SAR_MODE_STREAM, key, 32, &v),
               "Salsa20 forward conviction");
     }
+    salsa_block(key, nonce, 0, 12, ks);
+    for (int i = 0; i < 64; i++) ct[i] = (uint8_t)(pt[i] ^ ks[i]);
+    {
+        uint8_t cands[3][16];
+        memcpy(cands[0], key, 16); memcpy(cands[1], key + 16, 16);
+        memcpy(cands[2], nonce, 8); memset(cands[2] + 8, 0, 8);
+        in.candidates = cands; in.candidate_count = 3;
+        CHECK(convict_check(&in, SAR_ALG_SALSA20, SAR_MODE_STREAM, key, 32, &v),
+              "Salsa20/12 reduced-round forward conviction");
+    }
     {
         uint8_t subkey[32];
         hchacha20(key, nonce, subkey);
@@ -287,6 +297,56 @@ static void stream_suite(void) {
         in.candidates = cands; in.candidate_count = 4;
         CHECK(convict_check(&in, SAR_ALG_XSALSA20, SAR_MODE_STREAM, key, 32, &v),
               "XSalsa20 forward conviction");
+    }
+    {
+        static const uint8_t sigma[16] = {
+            0x65,0x78,0x70,0x61,0x6e,0x64,0x20,0x33,
+            0x32,0x2d,0x62,0x79,0x74,0x65,0x20,0x6b
+        };
+        uint8_t nonce12[12]; fill_pattern(nonce12, 12, 0x37);
+        uint8_t nonce8[8]; fill_pattern(nonce8, 8, 0x2b);
+        uint8_t scan[512];
+
+        chacha_block(key, nonce12, 0, 20, ks);
+        for (int i = 0; i < 64; i++) ct[i] = (uint8_t)(pt[i] ^ ks[i]);
+        memset(scan, 0xa7, sizeof scan);
+        memcpy(scan + 128, sigma, 16);
+        memcpy(scan + 128 + 16, key, 32);
+        memset(scan + 128 + 48, 0, 4);
+        memcpy(scan + 128 + 52, nonce12, 12);
+        in.candidates = NULL; in.candidate_count = 0;
+        in.scan_buffer = scan; in.scan_length = sizeof scan;
+        CHECK(convict_check(&in, SAR_ALG_CHACHA20, SAR_MODE_STREAM, key, 32, &v),
+              "ChaCha20 located via sigma-scan (candidates=NULL)");
+
+        salsa_block(key, nonce8, 0, 20, ks);
+        for (int i = 0; i < 64; i++) ct[i] = (uint8_t)(pt[i] ^ ks[i]);
+        memset(scan, 0xa7, sizeof scan);
+        memcpy(scan + 200, sigma, 4);
+        memcpy(scan + 200 + 4, key, 16);
+        memcpy(scan + 200 + 20, sigma + 4, 4);
+        memcpy(scan + 200 + 24, nonce8, 8);
+        memset(scan + 200 + 32, 0, 8);
+        memcpy(scan + 200 + 40, sigma + 8, 4);
+        memcpy(scan + 200 + 44, key + 16, 16);
+        memcpy(scan + 200 + 60, sigma + 12, 4);
+        in.scan_buffer = scan; in.scan_length = sizeof scan;
+        CHECK(convict_check(&in, SAR_ALG_SALSA20, SAR_MODE_STREAM, key, 32, &v),
+              "Salsa20 located via sigma-scan (candidates=NULL)");
+
+        uint8_t subkey[32];
+        hchacha20(key, nonce, subkey);
+        uint8_t dn[12]; memset(dn, 0, 4); memcpy(dn + 4, nonce + 16, 8);
+        chacha_block(subkey, dn, 0, 20, ks);
+        for (int i = 0; i < 64; i++) ct[i] = (uint8_t)(pt[i] ^ ks[i]);
+        memset(scan, 0xa7, sizeof scan);
+        memcpy(scan + 64, sigma, 16);
+        memcpy(scan + 64 + 16, subkey, 32);
+        memset(scan + 64 + 48, 0, 4);
+        memcpy(scan + 64 + 52, dn, 12);
+        in.scan_buffer = scan; in.scan_length = sizeof scan;
+        CHECK(convict_check(&in, SAR_ALG_CHACHA20, SAR_MODE_STREAM, subkey, 32, &v),
+              "XChaCha20 subkey-state located via sigma-scan as CHACHA20");
     }
 }
 

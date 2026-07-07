@@ -19,6 +19,9 @@
 #define SAR_CTL_OP_PRESERVE_RECOVER  7u
 #define SAR_CTL_OP_SET_BUDGET        8u
 #define SAR_CTL_OP_RESOLVE_IDENTITY  9u
+#define SAR_CTL_OP_VERDICT           10u
+#define SAR_CTL_OP_PROCESS_QUERY     11u
+#define SAR_CTL_OP_STATUS            12u
 
 #define SAR_CTL_LIST_PAGE            8u
 
@@ -58,6 +61,10 @@ typedef struct {
     sar_catalog_entry_t entries[SAR_CTL_LIST_PAGE];
     sar_preserve_list_entry_t preserve_entries[SAR_CTL_LIST_PAGE];
     sar_identity_t     resolved;
+    uint32_t           id_state;
+    uint64_t           proc_start_key;
+    uint64_t           capture_inflight;
+    uint64_t           preserve_used_bytes;
 } sar_control_reply_t;
 
 #pragma pack(pop)

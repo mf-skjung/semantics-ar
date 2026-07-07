@@ -160,7 +160,8 @@ NTSTATUS SarStateIdentityInsert(_Inout_ PSAR_STATE State,
                                 _In_ PEPROCESS Process,
                                 _In_opt_ const sar_identity_t *Identity,
                                 _In_ BOOLEAN IdentityValid,
-                                _In_ BOOLEAN SubsystemProcess)
+                                _In_ BOOLEAN SubsystemProcess,
+                                _In_ BOOLEAN ProtectedTrusted)
 {
     PSAR_IDENTITY_ENTRY entry;
     ULONG bucket;
@@ -173,6 +174,7 @@ NTSTATUS SarStateIdentityInsert(_Inout_ PSAR_STATE State,
 
     entry->process_id = ProcessId;
     entry->process = Process;
+    entry->start_key = PsGetProcessStartKey(Process);
     entry->identity_valid = IdentityValid;
     entry->subsystem_process = SubsystemProcess;
     RtlZeroMemory(&entry->identity, sizeof(entry->identity));
@@ -184,7 +186,8 @@ NTSTATUS SarStateIdentityInsert(_Inout_ PSAR_STATE State,
 
     if (IdentityValid && Identity != NULL)
         whitelist_hit = SarStateWhitelistMatch(State, Identity) ? 1 : 0;
-    entry->id_state = sar_identity_resolve(IdentityValid ? 1 : 0, whitelist_hit);
+    entry->id_state = ProtectedTrusted ? SAR_IDSTATE_EXEMPT
+                                       : sar_identity_resolve(IdentityValid ? 1 : 0, whitelist_hit);
 
     FltAcquirePushLockExclusive(&State->identity_lock);
     if (SarIdentityFindLocked(State, ProcessId) != NULL) {
@@ -217,6 +220,27 @@ VOID SarStateIdentityRemove(_Inout_ PSAR_STATE State, _In_ HANDLE ProcessId)
 }
 
 _IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateIdentityQuery(_In_ PSAR_STATE State, _In_ HANDLE ProcessId,
+                             _Out_ UINT64 *StartKey, _Out_ sar_id_state_t *IdState)
+{
+    PSAR_IDENTITY_ENTRY entry;
+    BOOLEAN found = FALSE;
+
+    *StartKey = 0;
+    *IdState = SAR_IDSTATE_OBSERVE_PENDING;
+
+    FltAcquirePushLockShared(&State->identity_lock);
+    entry = SarIdentityFindLocked(State, ProcessId);
+    if (entry != NULL) {
+        *StartKey = entry->start_key;
+        *IdState = entry->id_state;
+        found = TRUE;
+    }
+    FltReleasePushLock(&State->identity_lock);
+    return found;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
 sar_id_state_t SarStateIdentityLookup(_In_ PSAR_STATE State, _In_ HANDLE ProcessId)
 {
     PSAR_IDENTITY_ENTRY entry;
@@ -231,21 +255,25 @@ sar_id_state_t SarStateIdentityLookup(_In_ PSAR_STATE State, _In_ HANDLE Process
 }
 
 _IRQL_requires_max_(APC_LEVEL)
-VOID SarStateIdentityApplyVerdict(_Inout_ PSAR_STATE State,
+BOOLEAN SarStateIdentityApplyVerdict(_Inout_ PSAR_STATE State,
                                   _In_ HANDLE ProcessId,
+                                  _In_ UINT64 StartKey,
                                   _In_ const sar_identity_t *VerifiedIdentity)
 {
     PSAR_IDENTITY_ENTRY entry;
-    int whitelist_hit;
+    BOOLEAN applied = FALSE;
 
-    whitelist_hit = SarStateWhitelistMatch(State, VerifiedIdentity) ? 1 : 0;
+    if (StartKey == 0 || !SarStateWhitelistMatch(State, VerifiedIdentity))
+        return FALSE;
 
     FltAcquirePushLockExclusive(&State->identity_lock);
     entry = SarIdentityFindLocked(State, ProcessId);
-    if (entry != NULL) {
+    if (entry != NULL && entry->start_key == StartKey) {
         RtlCopyMemory(&entry->identity, VerifiedIdentity, sizeof(entry->identity));
         entry->identity_valid = TRUE;
-        entry->id_state = sar_identity_resolve(1, whitelist_hit);
+        entry->id_state = SAR_IDSTATE_EXEMPT;
+        applied = TRUE;
     }
     FltReleasePushLock(&State->identity_lock);
+    return applied;
 }

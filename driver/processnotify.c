@@ -1,7 +1,48 @@
 #include "driver.h"
 #include "state.h"
+#include "ntsystem.h"
+
+#include <ntifs.h>
 
 extern PSAR_STATE g_sar_state;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static BOOLEAN SarProcessProtectedTrusted(_In_ HANDLE ProcessId)
+{
+    HANDLE h = NULL;
+    OBJECT_ATTRIBUTES oa;
+    CLIENT_ID cid;
+    PS_PROTECTION prot;
+    ULONG ret = 0;
+    NTSTATUS st;
+    BOOLEAN trusted = FALSE;
+
+    cid.UniqueProcess = ProcessId;
+    cid.UniqueThread = NULL;
+    InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (!NT_SUCCESS(ZwOpenProcess(&h, PROCESS_QUERY_LIMITED_INFORMATION, &oa, &cid)))
+        return FALSE;
+
+    RtlZeroMemory(&prot, sizeof(prot));
+    st = ZwQueryInformationProcess(h, ProcessProtectionInformation, &prot, sizeof(prot), &ret);
+    ZwClose(h);
+
+    if (!NT_SUCCESS(st) || ret < sizeof(prot) || prot.Type == PsProtectedTypeNone)
+        return FALSE;
+
+    switch (prot.Signer) {
+    case PsProtectedSignerWinSystem:
+    case PsProtectedSignerWinTcb:
+    case PsProtectedSignerWindows:
+    case PsProtectedSignerAntimalware:
+        trusted = TRUE;
+        break;
+    default:
+        trusted = FALSE;
+        break;
+    }
+    return trusted;
+}
 
 typedef NTSTATUS (NTAPI *SAR_PSSET_CREATE_EX2)(PSCREATEPROCESSNOTIFYTYPE, PVOID, BOOLEAN);
 
@@ -78,7 +119,8 @@ static VOID SarCreateProcessNotifyEx(_Inout_ PEPROCESS Process,
 
     ObReferenceObject(Process);
     status = SarStateIdentityInsert(g_sar_state, ProcessId, Process,
-                                    valid ? &identity : NULL, valid, subsystem);
+                                    valid ? &identity : NULL, valid, subsystem,
+                                    SarProcessProtectedTrusted(ProcessId));
     if (!NT_SUCCESS(status))
         ObDereferenceObject(Process);
 }

@@ -99,9 +99,9 @@ static void stream_block(const sar_recovery_key_t *rk, uint64_t block_index,
             uint8_t subkey[32], nonce8[8];
             hsalsa20(rk->key, rk->iv, subkey);
             sar_memcpy(nonce8, rk->iv + 16, 8);
-            salsa_block(subkey, nonce8, counter, 20, out);
+            salsa_block(subkey, nonce8, counter, (int)rounds, out);
         } else {
-            salsa_block(rk->key, rk->iv, counter, 20, out);
+            salsa_block(rk->key, rk->iv, counter, (int)rounds, out);
         }
     }
 }

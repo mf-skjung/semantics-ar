@@ -5,7 +5,148 @@
 #include "phantom.h"
 #include "preserve.h"
 
+#include <ntifs.h>
+
 extern PSAR_STATE g_sar_state;
+
+static WCHAR g_sar_sysroot_buf[280];
+static UNICODE_STRING g_sar_sysroot;
+static BOOLEAN g_sar_sysroot_valid;
+
+VOID SarOsAnchorInit(VOID)
+{
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES oa;
+    IO_STATUS_BLOCK iosb;
+    HANDLE h = NULL;
+    PFILE_OBJECT fo = NULL;
+    NTSTATUS st;
+
+    RtlInitUnicodeString(&name, L"\\SystemRoot");
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    st = ZwOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(st))
+        return;
+
+    if (NT_SUCCESS(ObReferenceObjectByHandle(h, FILE_READ_ATTRIBUTES, *IoFileObjectType, KernelMode,
+                                             (PVOID *)&fo, NULL))) {
+        __declspec(align(16)) UCHAR nbuf[sizeof(OBJECT_NAME_INFORMATION) + sizeof(g_sar_sysroot_buf)];
+        POBJECT_NAME_INFORMATION oni = (POBJECT_NAME_INFORMATION)nbuf;
+        ULONG ret = 0;
+        if (NT_SUCCESS(ObQueryNameString(fo, oni, sizeof(nbuf), &ret)) &&
+            oni->Name.Length > 0 && oni->Name.Length <= sizeof(g_sar_sysroot_buf)) {
+            RtlCopyMemory(g_sar_sysroot_buf, oni->Name.Buffer, oni->Name.Length);
+            g_sar_sysroot.Buffer = g_sar_sysroot_buf;
+            g_sar_sysroot.Length = oni->Name.Length;
+            g_sar_sysroot.MaximumLength = oni->Name.Length;
+            g_sar_sysroot_valid = TRUE;
+        }
+        ObDereferenceObject(fo);
+    }
+    ZwClose(h);
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarWideCaselessPrefix(_In_reads_(SChars) const WCHAR *S, _In_ USHORT SChars,
+                                     _In_ PCWSTR P)
+{
+    USHORT i;
+    for (i = 0; P[i] != 0; i++) {
+        WCHAR a, b;
+        if (i >= SChars)
+            return FALSE;
+        a = S[i];
+        b = P[i];
+        if (a >= L'A' && a <= L'Z') a = (WCHAR)(a + 32);
+        if (b >= L'A' && b <= L'Z') b = (WCHAR)(b + 32);
+        if (a != b)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarTargetExempt(_In_ PCUNICODE_STRING Normalized)
+{
+    static const WCHAR *const subs[] = {
+        L"\\system32\\config\\",
+        L"\\system32\\wbem\\repository\\",
+        L"\\system32\\winevt\\logs\\",
+        L"\\system32\\logfiles\\",
+        L"\\system32\\catroot2\\",
+        L"\\serviceprofiles\\",
+        L"\\softwaredistribution\\datastore\\",
+        L"\\inf\\",
+    };
+    USHORT nchars, rootchars, remchars;
+    const WCHAR *rem;
+    ULONG k;
+
+    if (!g_sar_sysroot_valid || Normalized == NULL || Normalized->Buffer == NULL)
+        return FALSE;
+    if (!RtlPrefixUnicodeString(&g_sar_sysroot, (PUNICODE_STRING)Normalized, TRUE))
+        return FALSE;
+
+    nchars = (USHORT)(Normalized->Length / sizeof(WCHAR));
+    rootchars = (USHORT)(g_sar_sysroot.Length / sizeof(WCHAR));
+    if (nchars <= rootchars)
+        return FALSE;
+    if (Normalized->Buffer[rootchars] != L'\\')
+        return FALSE;
+
+    rem = Normalized->Buffer + rootchars;
+    remchars = (USHORT)(nchars - rootchars);
+    for (k = 0; k < RTL_NUMBER_OF(subs); k++) {
+        if (SarWideCaselessPrefix(rem, remchars, subs[k]))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarStreamExemptTarget(_In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                     _In_opt_ PFLT_CALLBACK_DATA Data)
+{
+    PSAR_STREAM_CONTEXT context = NULL;
+    BOOLEAN owned = FALSE;
+    LONG flags;
+
+    if (!NT_SUCCESS(FltGetStreamContext(FltObjects->Instance, FltObjects->FileObject,
+                                        (PFLT_CONTEXT *)&context)))
+        return FALSE;
+
+    flags = context->flags;
+    if (flags & SAR_STREAMCTX_FLAG_OS_OWNED) { FltReleaseContext(context); return TRUE; }
+    if (flags & SAR_STREAMCTX_FLAG_OSOWN_CHECKED) { FltReleaseContext(context); return FALSE; }
+
+    if (Data != NULL && KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        PFLT_FILE_NAME_INFORMATION info = NULL;
+        if (NT_SUCCESS(FltGetFileNameInformation(Data,
+                FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT, &info))) {
+            if (NT_SUCCESS(FltParseFileNameInformation(info))) {
+                owned = SarTargetExempt(&info->Name);
+                InterlockedOr(&context->flags,
+                              owned ? (LONG)(SAR_STREAMCTX_FLAG_OS_OWNED | SAR_STREAMCTX_FLAG_OSOWN_CHECKED)
+                                    : (LONG)SAR_STREAMCTX_FLAG_OSOWN_CHECKED);
+            }
+            FltReleaseFileNameInformation(info);
+        }
+    }
+
+    FltReleaseContext(context);
+    return owned;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarOperationExempt(_In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                  _In_opt_ PFLT_CALLBACK_DATA Data, _In_ PEPROCESS Process)
+{
+    if (SarStateIdentityLookup(g_sar_state, PsGetProcessId(Process)) == SAR_IDSTATE_EXEMPT)
+        return TRUE;
+    return SarStreamExemptTarget(FltObjects, Data);
+}
 
 _IRQL_requires_max_(APC_LEVEL)
 FLT_PREOP_CALLBACK_STATUS SarPreManageBypassIo(_Inout_ PFLT_CALLBACK_DATA Data,
@@ -134,6 +275,7 @@ static PSAR_STREAM_CONTEXT SarGetStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObj
     context->mmap_map = NULL;
     context->mmap_path = NULL;
     context->mmap_arm_pid = NULL;
+    context->mmap_reserved = 0;
     FltInitializePushLock(&context->cap_lock);
 
     status = FltSetStreamContext(FltObjects->Instance, FltObjects->FileObject,
@@ -320,8 +462,17 @@ SarPreCreate(_Inout_ PFLT_CALLBACK_DATA Data,
             process = IoThreadToProcess(thread);
             if (process == NULL)
                 process = PsGetCurrentProcess();
-            if (SarStateIdentityLookup(g_sar_state, PsGetProcessId(process)) != SAR_IDSTATE_EXEMPT)
-                SarCaptureSubmitSupersede(g_sar.capture, Data, FltObjects, process, thread);
+            if (SarStateIdentityLookup(g_sar_state, PsGetProcessId(process)) != SAR_IDSTATE_EXEMPT) {
+                SAR_STAGE_RESULT sr = SarCaptureSubmitSupersede(g_sar.capture, Data, FltObjects,
+                                                               process, thread);
+                if ((sr == SAR_STAGE_DROPPED || sr == SAR_STAGE_FAILED) &&
+                    SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
+                    SarCaptureNoteCapacityRefusal(process);
+                    Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+                    Data->IoStatus.Information = 0;
+                    return FLT_PREOP_COMPLETE;
+                }
+            }
         }
     }
 
@@ -360,6 +511,13 @@ SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
                     InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_PHANTOM_BACKING);
                 FltReleaseContext(context);
             }
+        } else if (SarTargetExempt(&info->Name)) {
+            context = SarGetStreamContext(FltObjects);
+            if (context != NULL) {
+                InterlockedOr(&context->flags,
+                              (LONG)(SAR_STREAMCTX_FLAG_OS_OWNED | SAR_STREAMCTX_FLAG_OSOWN_CHECKED));
+                FltReleaseContext(context);
+            }
         } else if (Data->RequestorMode == UserMode &&
                    Data->IoStatus.Information == FILE_OPENED &&
                    Data->Iopb->Parameters.Create.SecurityContext != NULL &&
@@ -376,7 +534,9 @@ SarPostCreate(_Inout_ PFLT_CALLBACK_DATA Data,
             if (SarStateIdentityLookup(g_sar_state, PsGetProcessId(process)) != SAR_IDSTATE_EXEMPT) {
                 context = SarGetStreamContext(FltObjects);
                 if (context != NULL) {
-                    InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_TRACKED_FROM_OPEN);
+                    InterlockedOr(&context->flags,
+                                  (LONG)(SAR_STREAMCTX_FLAG_TRACKED_FROM_OPEN |
+                                         SAR_STREAMCTX_FLAG_OSOWN_CHECKED));
                     FltReleaseContext(context);
                 }
             }
@@ -405,6 +565,24 @@ static BOOLEAN SarTargetIsProtectedStore(_In_ PCFLT_RELATED_OBJECTS FltObjects,
     return own;
 }
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static FLT_PREOP_CALLBACK_STATUS
+SarEnforceInPlaceCapture(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                         _In_ PEPROCESS Process, _In_ UINT64 Offset, _In_ UINT64 Length)
+{
+    SAR_STAGE_RESULT r = SarCaptureInPlaceRegion(g_sar.capture, Data, FltObjects, Process,
+                                                 Offset, Length);
+    if ((r == SAR_STAGE_DROPPED || r == SAR_STAGE_FAILED) &&
+        SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
+        SarStateIdentityLookup(g_sar_state, PsGetProcessId(Process)) != SAR_IDSTATE_EXEMPT) {
+        SarCaptureNoteCapacityRefusal(Process);
+        Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
+    }
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
 FLT_PREOP_CALLBACK_STATUS
 SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
             _In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -431,7 +609,8 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
     if (process == NULL)
         process = PsGetCurrentProcess();
 
-    if (SarCaptureOriginatorBlocked(g_sar.capture, process)) {
+    if (SarCaptureOriginatorBlocked(g_sar.capture, process) &&
+        !FlagOn(Data->Iopb->IrpFlags, IRP_PAGING_IO | IRP_SYNCHRONOUS_PAGING_IO)) {
         Data->IoStatus.Status = STATUS_ACCESS_DENIED;
         Data->IoStatus.Information = 0;
         return FLT_PREOP_COMPLETE;
@@ -448,9 +627,8 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
         if (phantomBacking) {
             if (Data->RequestorMode == UserMode) {
                 HANDLE ppid = PsGetProcessId(process);
-                SarPhantomRecordEvidence(ppid);
-                if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
-                    SarPhantomIsConvicted(ppid)) {
+                if (SarPhantomEvidenceConvicts(ppid) &&
+                    SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
                     SarCaptureBlockOriginator(g_sar.capture, process, SAR_EVENT_CLASS_BLOCK_PHANTOM);
                     Data->IoStatus.Status = STATUS_ACCESS_DENIED;
                     Data->IoStatus.Information = 0;
@@ -467,6 +645,9 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_PREOP_COMPLETE;
     }
 
+    if (SarOperationExempt(FltObjects, Data, process))
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
     member = SarClassifyWrite(Data->Iopb->IrpFlags);
 
     offset = Data->Iopb->Parameters.Write.ByteOffset;
@@ -479,8 +660,9 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
             if (member == SAR_DESTRUCT_WRITE_NONCACHED)
                 SarMmapCaptureNocache(g_sar.capture, FltObjects, Data, process);
         } else if (!SarStreamConfidentBlind(FltObjects)) {
-            SarCaptureInPlaceRegion(g_sar.capture, Data, FltObjects, process,
-                                    (UINT64)offset.QuadPart, length);
+            if (SarEnforceInPlaceCapture(Data, FltObjects, process,
+                                         (UINT64)offset.QuadPart, length) == FLT_PREOP_COMPLETE)
+                return FLT_PREOP_COMPLETE;
         }
     }
 
@@ -526,9 +708,7 @@ SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_PREOP_COMPLETE;
     }
 
-    if ((member == SAR_DESTRUCT_RENAME || member == SAR_DESTRUCT_RENAME_EX ||
-         member == SAR_DESTRUCT_LINK || member == SAR_DESTRUCT_LINK_EX) &&
-        KeGetCurrentIrql() == PASSIVE_LEVEL) {
+    {
         PETHREAD thread = Data->Thread;
         PEPROCESS process;
         if (thread == NULL)
@@ -536,7 +716,29 @@ SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
         process = IoThreadToProcess(thread);
         if (process == NULL)
             process = PsGetCurrentProcess();
-        SarCaptureSubmitRenameTarget(g_sar.capture, Data, FltObjects, process, thread);
+        if (SarOperationExempt(FltObjects, Data, process))
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    if ((member == SAR_DESTRUCT_RENAME || member == SAR_DESTRUCT_RENAME_EX ||
+         member == SAR_DESTRUCT_LINK || member == SAR_DESTRUCT_LINK_EX) &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        PETHREAD thread = Data->Thread;
+        PEPROCESS process;
+        SAR_STAGE_RESULT sr;
+        if (thread == NULL)
+            thread = PsGetCurrentThread();
+        process = IoThreadToProcess(thread);
+        if (process == NULL)
+            process = PsGetCurrentProcess();
+        sr = SarCaptureSubmitRenameTarget(g_sar.capture, Data, FltObjects, process, thread);
+        if ((sr == SAR_STAGE_DROPPED || sr == SAR_STAGE_FAILED) &&
+            SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
+            SarCaptureNoteCapacityRefusal(process);
+            Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+            Data->IoStatus.Information = 0;
+            return FLT_PREOP_COMPLETE;
+        }
         if (member == SAR_DESTRUCT_RENAME || member == SAR_DESTRUCT_RENAME_EX)
             SarCaptureSubmitRenameRekey(g_sar.capture, Data, FltObjects);
     }
@@ -553,12 +755,20 @@ SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
         if (deleting) {
             PETHREAD thread = Data->Thread;
             PEPROCESS process;
+            SAR_STAGE_RESULT sr;
             if (thread == NULL)
                 thread = PsGetCurrentThread();
             process = IoThreadToProcess(thread);
             if (process == NULL)
                 process = PsGetCurrentProcess();
-            SarCaptureSubmitDelete(g_sar.capture, Data, FltObjects, process, thread);
+            sr = SarCaptureSubmitDelete(g_sar.capture, Data, FltObjects, process, thread);
+            if ((sr == SAR_STAGE_DROPPED || sr == SAR_STAGE_FAILED) &&
+                SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
+                SarCaptureNoteCapacityRefusal(process);
+                Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
+                Data->IoStatus.Information = 0;
+                return FLT_PREOP_COMPLETE;
+            }
         }
     }
 
@@ -586,9 +796,11 @@ SarPreSetInformation(_Inout_ PFLT_CALLBACK_DATA Data,
             process = IoThreadToProcess(thread);
             if (process == NULL)
                 process = PsGetCurrentProcess();
-            SarCaptureInPlaceRegion(g_sar.capture, Data, FltObjects, process,
-                                    (UINT64)newEof.QuadPart,
-                                    (UINT64)fsi.EndOfFile.QuadPart - (UINT64)newEof.QuadPart);
+            if (SarEnforceInPlaceCapture(Data, FltObjects, process,
+                                         (UINT64)newEof.QuadPart,
+                                         (UINT64)fsi.EndOfFile.QuadPart - (UINT64)newEof.QuadPart)
+                    == FLT_PREOP_COMPLETE)
+                return FLT_PREOP_COMPLETE;
         }
     }
 
@@ -639,6 +851,18 @@ SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_PREOP_COMPLETE;
     }
 
+    {
+        PETHREAD thread = Data->Thread;
+        PEPROCESS process;
+        if (thread == NULL)
+            thread = PsGetCurrentThread();
+        process = IoThreadToProcess(thread);
+        if (process == NULL)
+            process = PsGetCurrentProcess();
+        if (SarOperationExempt(FltObjects, Data, process))
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     if (control_code == FSCTL_SET_ZERO_DATA && KeGetCurrentIrql() == PASSIVE_LEVEL &&
         !SarStreamConfidentBlind(FltObjects)) {
         PFILE_ZERO_DATA_INFORMATION z =
@@ -653,9 +877,11 @@ SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
             process = IoThreadToProcess(thread);
             if (process == NULL)
                 process = PsGetCurrentProcess();
-            SarCaptureInPlaceRegion(g_sar.capture, Data, FltObjects, process,
-                                    (UINT64)z->FileOffset.QuadPart,
-                                    (UINT64)(z->BeyondFinalZero.QuadPart - z->FileOffset.QuadPart));
+            if (SarEnforceInPlaceCapture(Data, FltObjects, process,
+                                         (UINT64)z->FileOffset.QuadPart,
+                                         (UINT64)(z->BeyondFinalZero.QuadPart - z->FileOffset.QuadPart))
+                    == FLT_PREOP_COMPLETE)
+                return FLT_PREOP_COMPLETE;
         }
     }
 
@@ -707,18 +933,27 @@ SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
             process = PsGetCurrentProcess();
         pid = PsGetProcessId(process);
 
+        if ((context->flags & SAR_STREAMCTX_FLAG_OS_OWNED) != 0 ||
+            SarStateIdentityLookup(g_sar_state, pid) == SAR_IDSTATE_EXEMPT) {
+            FltReleaseContext(context);
+            return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        }
+
         InterlockedOr(&context->flags, (LONG)SAR_STREAMCTX_FLAG_SECTION_DIRTY);
 
         if (KeGetCurrentIrql() == PASSIVE_LEVEL &&
-            SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE &&
-            SarStateIdentityLookup(g_sar_state, pid) != SAR_IDSTATE_EXEMPT) {
+            InterlockedCompareExchange64(&context->mmap_reserved, 0, 0) == 0) {
             UINT64 est = SAR_CAPTURE_BUFFER_BYTES;
             PFSRTL_ADVANCED_FCB_HEADER hdr =
                 (PFSRTL_ADVANCED_FCB_HEADER)FltObjects->FileObject->FsContext;
             if (hdr != NULL && (UINT64)hdr->FileSize.QuadPart > est)
                 est = (UINT64)hdr->FileSize.QuadPart;
-            if (SarPreserveWouldExceed(g_sar.preserve, est)) {
-                SarCaptureBlockOriginator(g_sar.capture, process, SAR_EVENT_CLASS_BLOCK_CAPACITY);
+            est += est / 16;
+            if (SarPreserveReserve(g_sar.preserve, est)) {
+                if (InterlockedCompareExchange64(&context->mmap_reserved, (LONG64)est, 0) != 0)
+                    SarPreserveRelease(g_sar.preserve, est);
+            } else if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
+                SarCaptureNoteCapacityRefusal(process);
                 FltReleaseContext(context);
                 Data->IoStatus.Status = STATUS_INSUFFICIENT_RESOURCES;
                 Data->IoStatus.Information = 0;
@@ -726,8 +961,18 @@ SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
             }
         }
 
-        if (KeGetCurrentIrql() == PASSIVE_LEVEL)
-            SarMmapArm(FltObjects->Instance, FltObjects->FileObject, context, pid);
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+            FILE_BASIC_INFORMATION fbi;
+            BOOLEAN rawSafe =
+                !NT_SUCCESS(FltQueryInformationFile(FltObjects->Instance, FltObjects->FileObject,
+                                                    &fbi, sizeof(fbi), FileBasicInformation, NULL)) ||
+                (fbi.FileAttributes & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_ENCRYPTED)) == 0;
+            if (rawSafe) {
+                FltFlushBuffers(FltObjects->Instance, FltObjects->FileObject);
+                SarMmapArm(FltObjects->Instance, FltObjects->FileObject, context, pid);
+                SarMmapCaptureEager(FltObjects->Instance, context, (UINT64)(ULONG_PTR)pid);
+            }
+        }
         SarSubmitMetadata(Data, FltObjects, SAR_DESTRUCT_SECTION_SYNC, 0);
     }
 
