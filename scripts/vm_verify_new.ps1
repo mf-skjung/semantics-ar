@@ -76,7 +76,7 @@ if (-not $SkipDeploy) {
     }
     CopyToVM "$Repo\build_win\service\Release\semantics_ar_service.exe" "C:\sar\semantics_ar_service.exe"
     CopyToVM "$Repo\build_win\tools\Release\sarctl.exe" "C:\sar\sarctl.exe"
-    foreach ($h in @("stream_transform.exe","noninplace_destroyer.exe","destroyer_matrix.exe","mmap_over.exe")) {
+    foreach ($h in @("stream_transform.exe","noninplace_destroyer.exe","destroyer_matrix.exe","mmap_over.exe","mmap_stream.exe")) {
         $src = "$Repo\build_harness\$h"; if (Test-Path $src) { CopyToVM $src "C:\sar\$h" }
     }
     VM {
@@ -235,6 +235,31 @@ function RunStreamCapture { param([string]$Algo,[string]$Rounds,[string]$ResMode
     return $att
 }
 
+function RunMmapStreamCapture { param([string]$Algo,[string]$Rounds,[string]$Dir,[int]$N,[int]$Hold)
+    $out = VMArgs { param($a,$r,$d,$n,$h)
+        $o = & C:\sar\mmap_stream.exe $a $r $d "$n" "$h" 2>&1
+        $o -join "`n"
+    } @($Algo,$Rounds,$Dir,$N,$Hold)
+    $att = @()
+    foreach ($m in ([regex]::Matches($out,'(?:OK|FAIL \d+) .*\\(sv_\d{5}\.dat)'))) { $att += $m.Groups[1].Value }
+    return @{ Out=$out; Attempted=$att }
+}
+
+function MmapRegionsExist { param([string]$Dir,[int]$N,[string]$Prefix="sv")
+    VMArgs { param($d,$n,$pfx)
+        $leaf = Split-Path $d -Leaf
+        $plist = & C:\sar\sarctl.exe preserve-list 2>&1
+        $count = 0
+        for ($i=0;$i -lt $n;$i++){
+            $vn = "{0}_{1:D5}.dat" -f $pfx,$i
+            $hit = $false
+            foreach ($line in $plist) { if ($line -match [regex]::Escape($leaf) -and $line -match [regex]::Escape($vn) -and $line -match 'off=(\d+) len=(\d+)') { $hit = $true; break } }
+            if ($hit) { $count++ }
+        }
+        $count
+    } @($Dir,$N,$Prefix)
+}
+
 Write-Host "`n=== semantics-ar new-code verification ($(Get-Date -Format 'HH:mm:ss')) ===" -ForegroundColor Cyan
 VM { & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null; & C:\sar\sarctl.exe budget 604800 10240 2>&1 | Out-Null } | Out-Null
 
@@ -349,6 +374,48 @@ DrainBarrier $rd
 $plr = (VMArgs { param($l) (& C:\sar\sarctl.exe preserve-list 2>&1 | Select-String ([regex]::Escape($l))).Count } @("mmap_release"))
 Metric "MMAP2 release single-mmap out / captured-regions" "$rout / $plr"
 Assert "MMAP2 single mmap succeeds + pre-image captured (reservation released, not blanket-refused)" (($rout -notmatch 'REFUSED') -and $plr -ge 1) "out=$rout regions=$plr"
+
+Write-Host "`nPhase MMAP-ORACLE: mmap resident-key cipher -> Oracle convicts+blocks; benign overwrite -> floor only" -ForegroundColor Yellow
+VM { & C:\sar\sarctl.exe mode enforce 2>&1 | Out-Null } | Out-Null
+1..3 | ForEach-Object { VM { & C:\sar\sarctl.exe budget 604800 10240 2>&1 | Out-Null } | Out-Null; Start-Sleep -Seconds 2 }
+$moN = 3; $moLen = 8192
+$moPos = "C:\sar\mmap_oracle_pos"
+MakeCorpus $moPos $moN $moLen
+$pr = RunMmapStreamCapture "chacha" "20" $moPos $moN 10
+Metric "MMAP-ORACLE positive tool output" (($pr.Out -replace '\s+',' ').Trim())
+$posFloorPre = MmapRegionsExist $moPos $moN
+DrainBarrier $moPos
+$posCls = ClassifyCorpus $moPos $moN $moLen -Attempted $pr.Attempted
+$fwdAfterPos = EventClassCount "block-forward"
+Metric "MMAP-ORACLE positive floor-regions(pre-reconcile) / by-key / by-preserve / lost" "$posFloorPre/$moN / $($posCls.byKey) / $($posCls.byPre) / $($posCls.lost)"
+Metric "MMAP-ORACLE block-forward after-positive" "$fwdAfterPos"
+Assert "MMAP-ORACLE positive: floor+Oracle together lose ZERO files (FN=0)" ($posCls.lost -eq 0) "lost=$($posCls.lost) samples=$($posCls.samples -join ',')"
+Assert "MMAP-ORACLE positive: Oracle forward-convicts BY KEY (Enc_K(pre)==post proven)" ($posCls.byKey -ge 1) "byKey=$($posCls.byKey)"
+Assert "MMAP-ORACLE positive: arm process blocked in ENFORCE (block-forward fired)" ($fwdAfterPos -ge 1) "after=$fwdAfterPos"
+
+$moNeg = "C:\sar\mmap_oracle_neg"
+MakeCorpus $moNeg $moN $moLen
+$negOut = VMArgs { param($d,$n)
+    $procs = @()
+    for ($i=0;$i -lt $n;$i++) {
+        $f = "{0}\sv_{1:D5}.dat" -f $d,$i
+        $outFile = "C:\sar\mmneg_$i.txt"
+        $procs += Start-Process C:\sar\mmap_over.exe -ArgumentList $f,"10" -NoNewWindow -PassThru -RedirectStandardOutput $outFile
+    }
+    $procs | ForEach-Object { $_.WaitForExit(60000) | Out-Null }
+    $lines=@()
+    for ($i=0;$i -lt $n;$i++) { $lines += (Get-Content "C:\sar\mmneg_$i.txt" -Raw -ErrorAction SilentlyContinue) }
+    $lines -join "`n"
+} @($moNeg,$moN)
+Metric "MMAP-ORACLE negative tool output" (($negOut -replace '\s+',' ').Trim())
+DrainBarrier $moNeg
+$negFloor = MmapRegionsExist $moNeg $moN
+$negAtt = @()
+foreach ($m in ([regex]::Matches($negOut,'OK .*\\(sv_\d{5}\.dat)'))) { $negAtt += $m.Groups[1].Value }
+$negCls = ClassifyCorpus $moNeg $moN $moLen -Attempted $negAtt
+Metric "MMAP-ORACLE negative floor-regions / by-key" "$negFloor/$moN / $($negCls.byKey)"
+Assert "MMAP-ORACLE negative: floor STILL preserves every region (unconditional)" ($negFloor -eq $moN) "floor=$negFloor/$moN"
+Assert "MMAP-ORACLE negative: Oracle does NOT convict a non-keyed overwrite (FP~=0, no new block)" ($negCls.byKey -eq 0) "byKey=$($negCls.byKey)"
 
 # ── Phase DELCAP (L5-B): non-hardlink volume delete refusal ──────────────
 # New-VHD (Hyper-V PS module) is absent in the guest; create+attach a VHD via diskpart (vhdmp),

@@ -400,6 +400,7 @@ typedef struct {
 #define SAR_CONTROL_SEND_TIMEOUT 5000u
 #define SAR_EVENTS_SEND_TIMEOUT  2000u
 #define SAR_EVENTS_POLL_MS        500u
+#define SAR_EVENTS_GRACE_POLLS      4u
 
 static sar_pipe_server_t g_control_server;
 static sar_pipe_server_t g_posture_server;
@@ -541,6 +542,7 @@ static void sar_events_serve(sar_pipe_conn_t *conn, void *vctx)
     sar_comm_client_t *client = (sar_comm_client_t *)vctx;
     uint64_t cursor_generation = 0;
     uint64_t cursor_sequence = 0;
+    uint32_t empty_polls = 0;
 
     for (;;) {
         semantics_ar_events_reply_t reply;
@@ -559,6 +561,7 @@ static void sar_events_serve(sar_pipe_conn_t *conn, void *vctx)
         if (reply.valid) {
             sar_events_frame_t frame;
 
+            empty_polls = 0;
             memset(&frame, 0, sizeof(frame));
             frame.frame_type = SAR_EVENTS_FRAME_EVENT;
             frame.frame_length = (uint32_t)sizeof(frame);
@@ -577,6 +580,19 @@ static void sar_events_serve(sar_pipe_conn_t *conn, void *vctx)
             cursor_generation = reply.generation;
             cursor_sequence = reply.sequence;
             continue;
+        }
+
+        if (++empty_polls >= SAR_EVENTS_GRACE_POLLS) {
+            sar_events_frame_t frame;
+
+            empty_polls = 0;
+            memset(&frame, 0, sizeof(frame));
+            frame.frame_type = SAR_EVENTS_FRAME_EVENT;
+            frame.frame_length = (uint32_t)sizeof(frame);
+            frame.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+            frame.valid = 0u;
+            if (!sar_pipe_send(conn, &frame, (DWORD)sizeof(frame), SAR_EVENTS_SEND_TIMEOUT))
+                return;
         }
 
         if (WaitForSingleObject(conn->stop, SAR_EVENTS_POLL_MS) == WAIT_OBJECT_0)

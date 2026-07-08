@@ -258,6 +258,8 @@ static int cmd_events(int count)
             CloseHandle(pipe);
             return 1;
         }
+        if (!frame.valid)
+            break;
         wprintf(L"event %d: class=%ls gap=%d generation=%llu sequence=%llu timestamp=%llu actor=%016llx\n",
                 i, event_class_str(frame.event_class), frame.gap,
                 (unsigned long long)frame.generation, (unsigned long long)frame.sequence,

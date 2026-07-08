@@ -322,14 +322,16 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 static VOID SarCaptureCommit(_In_ PSAR_CAPTURE_CTX Ctx, _In_ sar_capture_result_t *Result,
                              _In_ PEPROCESS Originator)
 {
-    if (SarKeystoreAppend(g_sar.keystore, &Result->record) == 1) {
+    int appended = SarKeystoreAppend(g_sar.keystore, &Result->record);
+    if (appended == 1) {
         SarCaptureSendNotify(Ctx, &Result->notify);
         SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_KEY_CAPTURED,
                           Result->record.actor_start_key);
     }
 
-    SarPreserveReconcile(g_sar.preserve, Result->record.provenance_path,
-                         Result->record.provenance_offset, Result->record.provenance_length);
+    if (appended == 1 || appended == 0)
+        SarPreserveReconcile(g_sar.preserve, Result->record.provenance_path,
+                             Result->record.provenance_offset, Result->record.provenance_length);
 
     SarPreservePromote(g_sar.preserve, (UINT64)(ULONG_PTR)PsGetProcessId(Originator));
 
@@ -697,7 +699,15 @@ VOID SarCaptureSubmitWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _Inout_ PSAR_WRITE_SEA
     work->write_length = Request->write_length;
     work->provenance_offset = work->file_offset;
 
-    SarCaptureResolveProvenance(Request->data, work->provenance_path);
+    if (Request->provenance_override != NULL) {
+        ULONG pi;
+        for (pi = 0; pi < SEMANTICS_AR_PROVENANCE_PATH_MAX - 1 &&
+                     Request->provenance_override[pi] != 0; pi++)
+            work->provenance_path[pi] = Request->provenance_override[pi];
+        work->provenance_path[pi] = 0;
+    } else {
+        SarCaptureResolveProvenance(Request->data, work->provenance_path);
+    }
     if (SarCapturePathExempt(work->provenance_path)) {
         FltFreeGenericWorkItem(item);
         ExFreeToLookasideListEx(&Ctx->work_pool, work);
@@ -1644,7 +1654,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 static SAR_STAGE_RESULT SarRawReadStageRange(_In_ PDEVICE_OBJECT Top, _In_ const SAR_EXTENT_MAP *Map,
                                              _In_ const UINT16 *Path, _In_ UINT64 Actor,
                                              _In_ UINT64 Offset, _In_ ULONG Length, _In_ BOOLEAN Backed,
-                                             _In_opt_ volatile LONG64 *StreamReserved)
+                                             _In_opt_ volatile LONG64 *StreamReserved,
+                                             _Out_writes_bytes_opt_(PreHeadCap) PUCHAR PreHead,
+                                             _In_ ULONG PreHeadCap, _Inout_opt_ PULONG PreHeadLen)
 {
     UINT64 cursor = Offset;
     UINT64 logEnd = Offset + Length;
@@ -1672,6 +1684,13 @@ static SAR_STAGE_RESULT SarRawReadStageRange(_In_ PDEVICE_OBJECT Top, _In_ const
             if (z == NULL)
                 return SAR_STAGE_FAILED;
             r = SarPreserveStage(g_sar.preserve, Path, cursor, step, Actor, z, (ULONG)step, Backed);
+            if (PreHead != NULL && PreHeadLen != NULL && *PreHeadLen < PreHeadCap) {
+                ULONG want = (ULONG)step;
+                if (want > PreHeadCap - *PreHeadLen)
+                    want = PreHeadCap - *PreHeadLen;
+                RtlCopyMemory(PreHead + *PreHeadLen, z, want);
+                *PreHeadLen += want;
+            }
             ExFreePoolWithTag(z, SAR_POOL_TAG_PRESBUF);
         } else {
             UINT64 diskOff = (UINT64)ex->lcn_byte + (cursor - ex->vcn_byte);
@@ -1681,13 +1700,20 @@ static SAR_STAGE_RESULT SarRawReadStageRange(_In_ PDEVICE_OBJECT Top, _In_ const
             PUCHAR scratch = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, readLen, SAR_POOL_TAG_PRESBUF);
             if (scratch == NULL)
                 return SAR_STAGE_FAILED;
-            if (!SarMmapDiskRead(Top, (LONGLONG)aStart, readLen, 500, scratch)) {
+            if (!SarMmapDiskRead(Top, (LONGLONG)aStart, readLen, 20000, scratch)) {
                 ExFreePoolWithTag(scratch, SAR_POOL_TAG_PRESBUF);
                 InterlockedIncrement64(&g_sar_mmap_miss);
                 return SAR_STAGE_FAILED;
             }
             r = SarPreserveStage(g_sar.preserve, Path, cursor, step, Actor,
                                  scratch + (diskOff - aStart), (ULONG)step, Backed);
+            if (PreHead != NULL && PreHeadLen != NULL && *PreHeadLen < PreHeadCap) {
+                ULONG want = (ULONG)step;
+                if (want > PreHeadCap - *PreHeadLen)
+                    want = PreHeadCap - *PreHeadLen;
+                RtlCopyMemory(PreHead + *PreHeadLen, scratch + (diskOff - aStart), want);
+                *PreHeadLen += want;
+            }
             ExFreePoolWithTag(scratch, SAR_POOL_TAG_PRESBUF);
         }
         if (r == SAR_STAGE_STORED && Backed && StreamReserved != NULL)
@@ -1717,12 +1743,19 @@ static BOOLEAN SarMmapRangeCovered(_In_ PSAR_STREAM_CONTEXT Sc, _In_ UINT64 Offs
 }
 
 _IRQL_requires_max_(APC_LEVEL)
-static SAR_STAGE_RESULT SarMmapCaptureInline(_In_ PFLT_INSTANCE Instance, _In_ PSAR_STREAM_CONTEXT Sc,
+static SAR_STAGE_RESULT SarMmapCaptureInline(_In_ PFLT_CALLBACK_DATA Data,
+                                             _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                             _In_ PSAR_STREAM_CONTEXT Sc,
                                              _In_ UINT64 Actor, _In_ UINT64 Offset, _In_ ULONG Length)
 {
     PSAR_MMAP_INSTCTX ic = NULL;
     PDEVICE_OBJECT top;
     SAR_STAGE_RESULT r = SAR_STAGE_FAILED;
+    const SAR_EXTENT *startExt;
+    BOOLEAN oracleEligible;
+    PUCHAR preHead = NULL;
+    ULONG preHeadLen = 0;
+    SAR_WRITE_SEAM_REQUEST req;
 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL)
         return SAR_STAGE_FAILED;
@@ -1732,7 +1765,7 @@ static SAR_STAGE_RESULT SarMmapCaptureInline(_In_ PFLT_INSTANCE Instance, _In_ P
         return SAR_STAGE_STORED;
     if (SarMmapRangeCovered(Sc, Offset, Length))
         return SAR_STAGE_ALREADY_COVERED;
-    if (!NT_SUCCESS(FltGetInstanceContext(Instance, (PFLT_CONTEXT *)&ic)))
+    if (!NT_SUCCESS(FltGetInstanceContext(FltObjects->Instance, (PFLT_CONTEXT *)&ic)))
         return SAR_STAGE_FAILED;
     top = ic->disk_top;
     FltReleaseContext(ic);
@@ -1750,10 +1783,16 @@ static SAR_STAGE_RESULT SarMmapCaptureInline(_In_ PFLT_INSTANCE Instance, _In_ P
         }
     }
 
+    RtlZeroMemory(&req, sizeof(req));
+    startExt = SarFindExtent(Sc->mmap_map, Offset);
+    oracleEligible = startExt != NULL && startExt->lcn_byte >= 0 && Length >= SAR_CANDIDATE_SIZE;
+    if (oracleEligible)
+        preHead = req.pre_image;
+
     __try {
         BOOLEAN backed = InterlockedCompareExchange64(&Sc->mmap_reserved, 0, 0) != 0;
         r = SarRawReadStageRange(top, Sc->mmap_map, Sc->mmap_path, Actor, Offset, Length, backed,
-                                 &Sc->mmap_reserved);
+                                 &Sc->mmap_reserved, preHead, SAR_CAPTURE_BUFFER_BYTES, &preHeadLen);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         r = SAR_STAGE_FAILED;
     }
@@ -1761,6 +1800,25 @@ static SAR_STAGE_RESULT SarMmapCaptureInline(_In_ PFLT_INSTANCE Instance, _In_ P
         FltAcquirePushLockExclusive(&Sc->cap_lock);
         (VOID)SarCapRangeInsert(Sc, Offset, Offset + Length);
         FltReleasePushLock(&Sc->cap_lock);
+    }
+
+    if (oracleEligible && r == SAR_STAGE_STORED && preHeadLen >= SAR_CANDIDATE_SIZE) {
+        PEPROCESS proc = NULL;
+        if (NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)Actor, &proc))) {
+            PETHREAD thr = PsGetCurrentThread();
+            ObReferenceObject(thr);
+            req.data = Data;
+            req.related = FltObjects;
+            req.originator_process = proc;
+            req.originator_thread = thr;
+            req.member = SAR_DESTRUCT_WRITE_NONCACHED;
+            req.irp_flags = Data->Iopb->IrpFlags;
+            req.write_offset.QuadPart = (LONGLONG)Offset;
+            req.write_length = Length;
+            req.pre_image_len = preHeadLen;
+            req.provenance_override = Sc->mmap_path;
+            SarCaptureSubmitWrite(g_sar.capture, &req);
+        }
     }
     return r;
 }
@@ -1795,7 +1853,7 @@ BOOLEAN SarMmapOnPagingWrite(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_O
            (sc->flags & SAR_STREAMCTX_FLAG_PHANTOM_BACKING) == 0 &&
            sc->mmap_map != NULL;
     if (want)
-        SarMmapCaptureInline(FltObjects->Instance, sc, (UINT64)(ULONG_PTR)sc->mmap_arm_pid,
+        SarMmapCaptureInline(Data, FltObjects, sc, (UINT64)(ULONG_PTR)sc->mmap_arm_pid,
                              offset, length);
     FltReleaseContext(sc);
     return want;
@@ -1826,7 +1884,7 @@ VOID SarMmapCaptureNocache(_In_opt_ PSAR_CAPTURE_CTX Ctx, _In_ PCFLT_RELATED_OBJ
         (sc->flags & SAR_STREAMCTX_FLAG_OWN_STORE) == 0 &&
         (sc->flags & SAR_STREAMCTX_FLAG_PHANTOM_BACKING) == 0 &&
         sc->mmap_map != NULL)
-        SarMmapCaptureInline(FltObjects->Instance, sc,
+        SarMmapCaptureInline(Data, FltObjects, sc,
                              (UINT64)(ULONG_PTR)PsGetProcessId(Originator), offset, length);
     FltReleaseContext(sc);
 }

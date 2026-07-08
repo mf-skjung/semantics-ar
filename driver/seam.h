@@ -72,6 +72,7 @@ typedef struct _SAR_WRITE_SEAM_REQUEST {
     ULONG write_length;
     ULONG pre_image_len;
     UCHAR pre_image[SAR_CAPTURE_BUFFER_BYTES];
+    const UINT16 *provenance_override;
     SAR_CONTINUATION continuation;
     PSAR_CAPTURE_BUFFER capture_buffer;
 } SAR_WRITE_SEAM_REQUEST, *PSAR_WRITE_SEAM_REQUEST;

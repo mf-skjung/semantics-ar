@@ -610,6 +610,7 @@ SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
         process = PsGetCurrentProcess();
 
     if (SarCaptureOriginatorBlocked(g_sar.capture, process) &&
+        Data->RequestorMode == UserMode &&
         !FlagOn(Data->Iopb->IrpFlags, IRP_PAGING_IO | IRP_SYNCHRONOUS_PAGING_IO)) {
         Data->IoStatus.Status = STATUS_ACCESS_DENIED;
         Data->IoStatus.Information = 0;

@@ -1,9 +1,10 @@
-# Handoff — semantics-ar — THIS SESSION rebuilt the mmap capture path to **region-only, FN=0, zero-usability-impact** (removed whole-file eager capture; added a UserMode arm gate), VM-verified end-to-end (A-H1 IRQL=PASSIVE 256/256; A-H2 region-granular ≤60 KB; A-H3 pre-image 64/64 correct). COMMITTED to main. OPEN and specified below: **(T1) unify the mmap and non-mmap capture logic onto ONE wiring — diff-restricted D∧T → preserve + Oracle** (the owner's "화룡점정"); **(T2) whitelist + active injection-proofing**; **(T3) full Constitution rewrite — the terminus.**
+# Handoff — semantics-ar — THIS SESSION **verified T1's Oracle/block mechanism works** (VM-proven: a resident-key mmap overwrite is convicted by key and blocked in ENFORCE; a benign non-keyed mmap overwrite is not), **found and fully fixed an unrelated event-query defect** (`service/control.c` + `tools/sarctl.c`, safe and complete — see §THIS SESSION), and **found a real, still-open gap**: in a single process that maps and encrypts several files in one batch, the preservation floor does not always cover every file — a repeatable but not-yet-root-caused shortfall, worst observed as 1 of 3 files ending up with neither the floor nor the Oracle protecting it. Two in-driver mitigation attempts were tried this session and **both reverted** (§THIS SESSION explains why) — **`driver/capture.c` + `driver/seam.h` are back to byte-identical with the prior session's T1 state, UNCOMMITTED, UNVERIFIED for this gap.** The new VM phase and harness that exposed it (`tests/harness/mmap_stream.c`, Phase MMAP-ORACLE in `scripts/vm_verify_new.ps1`) are kept and working. **UPDATE (LATEST SESSION): the mmap multi-file "gap" is ROOT-CAUSED, CLOSED, and VM-verified (`vm_verify_new.ps1`: 29 passed / 0 failed / 1 env-skip; MMAP-ORACLE positive lost=0). It was three distinct FN=0 defects, all fixed and each causally proven — see §LATEST SESSION at the very top, which supersedes this header and §THIS SESSION. COMMITTED. Next major work = T2.** Still OPEN, unchanged and specified below: **(T2) whitelist + active injection-proofing**; **(T3) full Constitution rewrite — the terminus.** Read **§THIS SESSION**, §RESOLVED, and §4 below first.
 
 This is the single living handoff — a **specification for the next work**, not a log. **Read §THIS SESSION,
 §RESOLVED, and §4 NEXT WORK below first — they are newer than everything under Part 0+ and supersede it where they
-conflict.** This session's work is **COMMITTED to main** (mmap redesign in `driver/{operations,capture,seam}` +
-VM evidence under `build_verify/AH*` + probe scripts). Before touching anything, read
+conflict.** The **prior cycle's** work is **COMMITTED to main** (mmap redesign in `driver/{operations,capture,seam}` +
+VM evidence under `build_verify/AH*` + probe scripts); **T1 is still UNCOMMITTED, with one open gap** — see the
+header and §THIS SESSION. Before touching anything, read
 `docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design), `docs/EXTERNAL_VALIDATION.md` (frontier; §4.1 =
 the diff-restricted-T soundness), and the VM evidence `build_verify/AH1_AH2_analysis_20260707.md` +
 `AH3_analysis_20260707.md`, then this file.
@@ -21,7 +22,181 @@ the diff-restricted-T soundness), and the VM evidence `build_verify/AH1_AH2_anal
 
 ---
 
-## THIS SESSION — mmap capture rebuilt to region-only + FN=0 (done, committed, VM-verified)
+## LATEST SESSION — mmap multi-file FN=0 gap ROOT-CAUSED and CLOSED; three FN=0 defects fixed; VM-verified; committed
+
+The prior session's "mmap multi-file floor gap" was **not one bug in the floor**. VM instrumentation (per-branch event tags in `SarMmapCaptureInline`/`SarRawReadStageRange`/`SarPreserveStage`, distinct file sizes to disambiguate per file) decomposed the observed "0–2 of 3 files lost" into **three distinct FN=0 defects**, each fixed and each proven by a controlled experiment. The floor logic itself is sound.
+
+**Fix 1 — concurrent-process floor miss (non-keyed, `mmap_over` ×N).** The inline raw-disk pre-image read `SarMmapDiskRead` (`capture.c`) used a **500 ms** deadman, far below the OS disk-class `TimeOutValue` (10 s default). Under concurrent flush the read exceeded 500 ms → `SAR_STAGE_FAILED` → fail-open. **Fix:** deadman `500 → 20000` (above the OS disk timeout, so it fires only on a genuinely dead disk — on which the destructive write can't commit either, so no loss). VM: 3-concurrent floor **6/6** (was 4/8 at 500 ms).
+
+**Fix 2 — ENFORCE single-process multi-file loss (keyed, `mmap_stream`).** After conviction the arm process is on the block list; `SarMmapCaptureInline` performs the preservation store write (`ZwWriteFile → preserve.dat`) **synchronously in that blocked process's context**. `SarPreWrite`'s block-deny (`operations.c`) ran **before** the protected-store exemption and did **not** check `RequestorMode`, so it denied the driver's own KernelMode store write with `STATUS_ACCESS_DENIED` (0xC0000022) → `SarPreserveStage` FAILED → fail-open. Confirmed by instrumentation (store-write branch, that exact status). **Fix:** the block-deny now also requires `Data->RequestorMode == UserMode` — the identical rule `SarTargetIsProtectedStore` already uses to pass the driver's own writes. Attacker UserMode destructive writes still denied; driver KernelMode preservation writes pass. VM: MMAP-ORACLE positive **lost=0**.
+
+**Fix 3 — keystore-full reconcile (BUG A, found via FABLE5 code review).** `SarCaptureCommit` (`capture.c`) ran `SarPreserveReconcile` (drops the floor pre-image for the convicted region) **unconditionally**, even when `SarKeystoreAppend` returned `SAR_KS_FULL` (keystore at `SAR_KEYSTORE_CAPACITY`=16384). Then the floor is dropped **and** no key is stored → the convicted file is unrecoverable (FN>0) once the keystore fills. **Fix:** reconcile only when a usable key record exists (`appended == 1 || appended == 0`); on `SAR_KS_FULL` keep the floor. VM (controlled: capacity=2, audit, 3 convictions): **without fix run-3 lost=1, with fix run-3 lost=0** — direct causal proof.
+
+**Verification.** `scripts\vm_verify_new.ps1` full suite: **29 passed / 0 failed / 1 skipped**. The skip is Phase TIER2 — the test harness is not trust-signed on the VM (environmental, unrelated to these fixes). MMAP-ORACLE positive recovers all 3 (1 by-key + 2 by-preserve, lost=0); negative floor 3/3; Phase G capacity fail-closed, MMAP2 reservation-refuse, DELCAP delete-refuse all PASS. Two earlier wrong hypotheses (block denies the *attacker's* noncached mmap write; a size threshold) were empirically **refuted** before landing Fix 2 — the writes are paging and the denied write was the driver's own store write; FABLE5's "verify the IRP path first" caveat was correct.
+
+**Corrections to the old header/§THIS SESSION (they were wrong):** `driver/capture.c` + `driver/seam.h` were **NOT** byte-identical to the prior T1 state — they carried the **uncommitted T1 Oracle-feed** (C1/C2 below). The two reverted "mitigation attempts" reverted to *that* uncommitted state. There was no separate floor bug to root-cause; the three defects above are the whole story. **DELCAP is now VM-verified** (Phase DELCAP passes on a FAT test volume), clearing that debt. The "multi-file preserve-list shortfall" metric was partly a **measurement artifact** — key-recoverable files are (correctly) reconciled out of `preserve-list`, so `preserve-list` coverage understates recoverability; the real invariant is `lost==0` (by-key + by-preserve), which the suite already gates on.
+
+**Committed to main this session:** uncommitted T1 Oracle-feed (`capture.c`/`seam.h`) + Fix 1/2/3 + the events-query fix (`service/control.c`, `tools/sarctl.c`) + the MMAP-ORACLE phase & harness (`vm_verify_new.ps1`, `tests/harness/mmap_stream.c`). **This is the first state that actually satisfies FN=0 on the mmap path.**
+
+**REMAINING BACKLOG (priority order):**
+1. **(T2) whitelist + active injection-proofing** — design agreed, NOT implemented; the next major work. `ObRegisterCallbacks` to strip VM_WRITE/VM_OPERATION/CREATE_THREAD/DUP_HANDLE/SUSPEND_RESUME/SET_CONTEXT from untrusted openers of exempt processes, pre-existing-handle sweep, foreign-signed image-load veto, keyed by `EPROCESS*`/`PsGetProcessStartKey` (never PID), scoped to headless/non-scripting apps.
+2. **Broad coverage sweep** — `scripts\vm_verify_coverage.ps1` (phases A/A2/P/E/EV/B/C/C2/H/D) not re-run since these changes; run to fully re-validate the cycle.
+3. **TIER2 phase** — trust-sign the harness on the VM so Phase TIER2 runs (currently SKIP: `verdict=unsigned`).
+4. **(minor) scan-dedup race** — `SarCaptureWorker` already-scanned test (shared-lock then exclusive re-check) can let two work items for one process both scan+convict; harmless for FN=0 (block list dedups; extra key record), but defeats single-scan intent. Backlog.
+5. **(B.2) comm-port latency** — `budget`/`inflight` propagation flaky; visibility-only.
+6. **(T3) full `docs/CONSTITUTION.md` rewrite** — the terminus; last.
+
+---
+
+## THIS SESSION (PRIOR — superseded by §LATEST SESSION above) — T1 verified working, one real gap found (open), driver back to prior-session T1 state
+
+**Summary of this session's outcome, most important first:**
+1. **T1's Oracle/block mechanism is proven correct on real VM runs.** A new positive/negative VM phase
+   (`Phase MMAP-ORACLE` in `scripts\vm_verify_new.ps1`, harness `tests\harness\mmap_stream.c`) shows: a
+   resident-key mmap overwrite (ChaCha20, mirrors Babuk/Maze) is recovered **BY KEY** and the arm process is
+   **blocked in ENFORCE**; a benign non-keyed mmap overwrite is preserved by the floor but never convicted or
+   blocked. This is the core T1 claim, and it holds.
+2. **A real, unrelated defect was found and fully fixed:** the event-log query path (`sarctl events N` /
+   `sar_events_serve` in `service\control.c`) had no bound — if fewer than N events existed and no more were
+   coming, the reader blocked indefinitely. Not flaky, fully deterministic, and the actual cause of most of the
+   slow/stuck verification runs this project has seen. Fixed (§ "Events-query fix" below) — **safe, complete,
+   already folded into the code, keep it.**
+3. **A real, still-open gap:** when one process maps and encrypts several files in a batch (one resident key,
+   several `CreateFileMapping`/`FlushViewOfFile` calls in a row — a very ordinary multi-file destructive-write
+   pattern), the region-only preserve floor does not reliably cover every file in the batch. Repeated runs on
+   freshly-restored VMs showed anywhere from 0 to 2 of 3 files' regions missing from `preserve-list` — the
+   Oracle/floor combination still reached FN=0 in the *original* clean-VM reproduction only because the test
+   harness happened to reuse one key/keystream across all files in the batch (an accident of the test, not a
+   real safety net — see "mmap multi-file gap" below for the full account and why this is NOT resolved).
+4. **Both in-driver fix attempts made this session were reverted.** `driver/capture.c` and `driver/seam.h` are
+   now byte-identical to the state the prior session left T1 in (diff-verified against the original patch).
+   Nothing about T1 itself changed this session; only the understanding of it did.
+
+T1 (§4.1) itself, as written by the prior session and unchanged since: the mmap paging-write flush, after its
+unconditional region-only preserve floor, builds a `SAR_WRITE_SEAM_REQUEST` and calls the **same**
+`SarCaptureSubmitWrite` the non-mmap seam uses → the existing `SarCaptureWorker` runs gate D∧T → Oracle
+(σ-scan incl.) → convict/commit/block, identically. **No parallel path.** mmap gains the key-recovery/Oracle
+channel (Babuk/Maze ChaCha, REvil Salsa) it lacked; `stream_sigma_scan` (`engine/src/battery.c:360`, invoked at
+`:397`) makes this real for stream families.
+
+**Trigger-condition correspondence (non-mmap = model → mmap):** read-precedence (`READ_OBSERVED` / `!confident-blind` /
+`read_sample`) → **RW section arm** (`SECTION_DIRTY`; arm sets READ_OBSERVED at `operations.c:922`); "original present to
+destroy" (data-scan read within fileSize) → **extent-type** (`Offset < covered_len` ∧ extent at `Offset` `lcn≥0`);
+pre-image for the gate (observed read buffer) → **raw-disk read of the same region** (still the original — the flush has
+not committed; A-H3 proved 64/64 correct). Everything downstream (gate → Oracle → commit → block) is byte-identical.
+
+**Code changes (working tree, UNCOMMITTED) — `driver/capture.c` + `driver/seam.h`:**
+- **C1 provenance override.** `SAR_WRITE_SEAM_REQUEST` gains `const UINT16 *provenance_override` (`seam.h`).
+  `SarCaptureSubmitWrite` (`capture.c` ~700) uses it instead of `SarCaptureResolveProvenance(data)` when set — REQUIRED
+  because `FltGetFileNameInformation` fails on paging I/O → `Path[0]==0` → falsely "exempt" → silent drop. mmap passes
+  `sc->mmap_path`.
+- **C2 mmap Oracle submit.** `SarMmapCaptureInline` signature is now `(Data, FltObjects, Sc, Actor, Offset, Length)`.
+  After the floor + `cap_ranges` insert, iff **fresh STORED** ∧ **extent at `Offset` is real (`lcn≥0`)** ∧
+  `Length ≥ SAR_CANDIDATE_SIZE` ∧ `preHeadLen ≥ SAR_CANDIDATE_SIZE`: `PsLookupProcessByProcessId(Actor)` (references the
+  arm process; NULL/exited → skip Oracle, floor already preserved), `ObReferenceObject(PsGetCurrentThread())` (the worker
+  cleanup derefs BOTH process+thread — `capture.c:586-587`, released on every early-return by `SarSeamWriteRelease`
+  `seam.c:39-46`; `SarSeamWriteSubmit` NT_ASSERTs non-NULL thread `seam.c:18`), `member = SAR_DESTRUCT_WRITE_NONCACHED`
+  (**explicit — paging→`WRITE_PAGING` is deliberately non-capturable `capture.c:63`; without the override the submit
+  early-returns**), `data = Data` (worker's `SarCaptureCopyWritten` maps the flush MDL = post-image, `capture.c:108`),
+  `provenance_override = sc->mmap_path`, then `SarCaptureSubmitWrite`. Request is stack-local (`SAR_CAPTURE_BUFFER_BYTES`
+  = 256 B). After the call the refs are owned by the worker (success) or `SarSeamWriteRelease` (early-return) — **do NOT
+  deref process/thread afterward.**
+- **C3 pre-image head capture (alignment-correct — a real defect self-review caught).** `SarRawReadStageRange` gains
+  `(PUCHAR PreHead, ULONG PreHeadCap, PULONG PreHeadLen)` and captures the head from the **same alignment-correct pointer
+  it stages** (`scratch + (diskOff - aStart)` for real extents, the zero buffer for sparse) — NOT the raw sector buffer.
+  Naive `scratch[0]` would misalign `pre_image` vs the flush MDL (which begins at file `Offset`) by `(diskOff - aStart)`,
+  making the gate compare the wrong byte pairs → false novelty or missed detection.
+
+**Invariants preserved (self-reviewed at code level):** the floor stays unconditional and runs BEFORE the submit (FN=0
+intact if the submit ever drops); **T gates the Oracle only** — the worker's `SarCapturePreserveFromWork` is inert for the
+write path (`preserve_buf==NULL`), so the worker = Oracle and the floor = the sole preserver; region-only (256 B head
+window, never whole-file); one shared path (no parallel wiring); submit only at PASSIVE (`SarMmapCaptureInline` bails
+otherwise); submit only on the FIRST capture of a region (`SarMmapRangeCovered` early-returns `ALREADY_COVERED` before the
+read → flush-storm bounded by distinct-region count, same as non-mmap).
+
+**Boundary (carry into T3):** **R-mmap-Oracle-timing** — the flush is async; the arm process may have zeroized its key
+material or exited before the worker snapshots → Oracle is **best-effort**, the unconditional floor is the guarantee.
+[BOUNDARY], not a defect. (Also inherits R-mmap-APC / R-mmap-drift / R-mmap-resident.)
+
+**Still UNVERIFIED for the mmap multi-file gap below.** Build and the regression VM phases (S/F2/G-strong/MMAP2/
+TIER2/FORGE/OSOWN) are all green this session (§3), and the new MMAP-ORACLE phase proves the core Oracle/block
+claim. What is not yet proven is that the floor covers every file in a same-process multi-file mmap batch — see
+"mmap multi-file gap" below.
+
+### Events-query fix (unrelated to T1, safe, complete — keep)
+`sarctl events N` (and the underlying `sar_events_serve` loop in `service\control.c`) previously polled the
+driver forever whenever fewer than N events existed and none more arrived — a deterministic, not flaky, hang.
+Fixed by adding a bounded grace period (`SAR_EVENTS_GRACE_POLLS`, 4 × the existing 500 ms poll = 2 s): once that
+elapses with nothing new, the service now sends one `valid=0` frame down the same connection instead of going
+silent. `sarctl events` (`tools\sarctl.c` `cmd_events`) stops reading as soon as it sees `valid=0` instead of
+insisting on N frames. The live reader (`frontend\SemanticsAr.Core\Services\JournalService.cs` → `ReadNext`)
+already tolerates a `valid=0` frame as a no-op and asks again, so its connection is never affected. This made
+every subsequent VM run in this session dramatically faster and consistent — keep it, and prefer the default
+event count (256) over larger values in future scripts; a larger N just extends the same bound proportionally.
+
+### mmap multi-file gap (open, unresolved, root cause not confirmed)
+**Repro:** one process opens N golden files in a directory, maps each `PAGE_READWRITE`, keystream-XORs each in
+place with one resident key (mirrors a real multi-file destructive-write batch), flushes each, holds, then
+tears down (`tests\harness\mmap_stream.c chacha 20 <dir> <N> <holdSec>`; `Phase MMAP-ORACLE` in
+`scripts\vm_verify_new.ps1` drives this with N=3). **Symptom:** `sarctl preserve-list` afterward does not always
+show a region for every one of the N files — observed between 0 and 2 of 3 present across repeated runs on
+freshly-restored VMs, not a fixed file or a fixed count. The one VM run that showed FN=0 end-to-end did so only
+because the harness (as first written) reused the same key/nonce/counter sequence across all N files, so the one
+successfully Oracle-convicted file's key happened to also decrypt the others — `ClassifyCorpus`'s byKey path
+never actually exercised this (it only tries `recover` for a file whose own name appears next to a `key_id` in
+`sarctl list`, and only one file's name ever does), so this was a passing test hiding a real floor miss, not a
+genuine second line of defense. Treat the harness's shared-keystream behavior as a known quirk of the test, not
+a mitigation — a real multi-file batch with per-file nonces would not get this rescue.
+
+**What this session ruled out** (each confirmed by direct measurement, not inference): harness API differences
+between the working single-file `mmap_over.c` (fixed `0xFF` xor) and the new multi-file `mmap_stream.c` (keystream
+xor) — share mode, a read-before-map, and mapping/handle teardown order were all matched to `mmap_over.c` with
+no change in outcome. Write-loop duration/shape — a modified copy of `mmap_over.c` that reproduced the same
+chunked-and-paced write pattern as `mmap_stream.c` while still writing the fixed `0xFF` pattern captured
+correctly; a `mmap_stream.c` run at a lighter cipher setting (8 rounds instead of 20) still missed. This leaves
+the *value* of the bytes written, or something correlated with it, as the only remaining candidate the session
+found — but no branch in `driver\capture.c` was found (or should exist) that inspects the new/written bytes
+before the floor decision, so this correlation is not yet explained.
+
+**Diagnostic instrumentation** (added this session, then fully reverted per the owner's direction to keep
+`driver\capture.c`/`seam.h` byte-identical to the prior session's T1 — re-add if resuming this investigation)
+counted, per stage of the mmap capture path: arm attempts and arm-produced-no-map count (always 0 — the extent
+map reliably builds), the "write is beyond the map's covered length" branch (never taken), the raw-disk-read
+extent-lookup miss counter (never incremented). What the counters did show: of a 3-file batch, only 1 write
+reached `SarMmapCaptureInline` with all of `SECTION_DIRTY`/not-`OWN_STORE`/not-`PHANTOM_BACKING`/non-null-map
+true and returned `SAR_STAGE_STORED`; the harness's `OK` markers confirm the writes visited the mapped files
+before that. The remaining calls into the routine came back with an explicit `SAR_STAGE_FAILED`, but the session
+ran out of time to instrument the exact branch inside `SarMmapCaptureInline` responsible before reverting. That
+is the concrete next step: re-add per-branch counters (or attach a kernel debugger to the VM and set a
+breakpoint on `SarMmapCaptureInline`'s `SAR_STAGE_FAILED` returns) and step through one of the failing calls,
+rather than continuing to guess-and-reload.
+
+**Two fix attempts were tried and reverted; do not repeat blindly:**
+1. Re-querying the extent map (`SarBuildExtentMap`) once, at flush time, when the cached map's `covered_len`
+   looked insufficient, or was still unset. Safe (no blocking wait), but measured to leave the gap open — the
+   counters above show the map and its `covered_len` were never the actual problem in the reproduced runs, so
+   this fix was addressing a hypothesis the instrumentation later disproved.
+2. The same idea but retried a few times with a short blocking wait between attempts, done once at section-arm
+   time instead of at flush time (arm is a one-shot, ordinary file-open-adjacent event, not the hot paging-write
+   path, so a bounded wait there is not the same risk as one on the flush path). This measurably made the
+   reproduction rate *worse* (mostly 0 of 3 instead of 0–1 of 3) across five repeated trials. Reverted. Take this
+   as a signal that the gap is timing-sensitive in a way not yet understood, and that guessing at delays without
+   a confirmed mechanism can move the outcome in either direction.
+
+Separately, once during this investigation the VM stopped responding while a driver reload was in progress and
+needed a power-cycle to come back; no crash dump was produced, so the cause was not established (the reload
+sequence itself, unrelated VM/host state, or the diagnostic build in flight at the time are all still possible).
+Treat repeated live driver reloads on the same running VM as inherently less safe than a full snapshot restore
+between attempts, and prefer that — or a debugger-attached session — for the next round of this investigation.
+
+**Uncommitted files this session:** `driver/capture.c`, `driver/seam.h` — unchanged from the prior session (all
+of this session's attempted changes to them were reverted; diff-verified identical to the T1 patch). New and
+kept: `tests/harness/mmap_stream.c`, the `Phase MMAP-ORACLE` addition to `scripts\vm_verify_new.ps1`, and the
+events-query fix in `service\control.c` / `tools\sarctl.c`.
+
+---
+
+## PRIOR CYCLE (committed to main) — mmap capture rebuilt to region-only + FN=0 (VM-verified)
 
 The prior handoff had added a **whole-file eager capture at writable-section-create** (its "fix ③") on the premise
 that the async mapped-page-writer flush "bails at APC_LEVEL" so per-region paging-write capture was unsound. **That
@@ -228,18 +403,28 @@ processnotify.c, phantom.c, phantom.h, commport.c · `common/include/semantics_a
 - **Usermode:** `cmake --build build_win --config Release` → clean (exit 0). Deploy exes from `build_win\...\Release`.
 - **Harness:** `scripts\build_harness.bat` → clean. **stream_transform.exe MUST be re-signed after every harness rebuild
   (the rebuild strips the Authenticode signature; TIER2/FORGE need it signed with the test cert).**
-- **VM (`scripts\vm_verify_new.ps1`): 27 passed / 0 failed / 1 skipped** on a clean `clean-baseline-20260704` restore.
-  Green: S/F2 (σ-scan capture, FN=0, A-1), **G-strong** (ENFORCE capacity → refused 20 / lost 0 / block-capacity),
-  **MMAP2** (concurrent oversized sections refused, lost 0; single mmap captured, reservation released), **TIER2**
-  (verdict → exempt, 0 keys/preserve/blocks; control monitored), **FORGE** (hash-mismatch → not exempt), **OSOWN**
-  (B.1 closed, 0 OS-owned entries). SKIP: DELCAP (§5). **The broad `vm_verify_coverage.ps1` (A/A2/P/E/EV/B/C/C2/H/D) was
-  NOT re-run this cycle — do it (§4.3).**
+- **VM (`scripts\vm_verify_new.ps1`), this session, clean `clean-baseline-20260704` restores:** the regression set
+  (S/F2/G-strong/MMAP2/TIER2/FORGE/OSOWN, 27 asserts) stayed green across every run. The new **Phase MMAP-ORACLE**
+  passed its Oracle/block asserts every run (byKey recovery, ENFORCE block-forward, negative control not
+  convicted) but its floor-completeness assert (`lost -eq 0`) failed consistently — this is the mmap multi-file
+  gap above, an honest FAIL, not a flaky one. Best full-suite result this session: **35 passed / 1 failed / 0
+  skipped.** SKIP for DELCAP did not occur this session (FAT volume prep succeeded each run). **The broad
+  `vm_verify_coverage.ps1` (A/A2/P/E/EV/B/C/C2/H/D) was still NOT re-run — do it (§4.3).**
+- **Events-query fix verified:** `sarctl inflight`/`sarctl events` no longer block indefinitely; full-suite VM
+  runs went from routinely stalling to completing in normal time once this landed. See "Events-query fix" above.
 
 ---
 
 ## 4. NEXT WORK (strict order) — the terminus is the Constitution
 
 ### 4.1 T1 — Unify the mmap and non-mmap capture logic onto ONE wiring (owner's priority; the "화룡점정")
+**STATUS: code complete (prior session), UNCOMMITTED. The Oracle/block half is now VM-proven correct (this
+session). The floor half has a confirmed, reproducible gap for same-process multi-file mmap batches — see
+"mmap multi-file gap" in §THIS SESSION for the full repro, what was ruled out, and the concrete next
+instrumentation step. Root-cause and close that gap, re-run `scripts\vm_verify_new.ps1` clean (including Phase
+MMAP-ORACLE), only then commit `driver/capture.c` + `driver/seam.h` and move to T2. Do NOT re-implement T1 from
+scratch — the design below is what is already built; verify/fix the existing code against it.**
+
 The owner dislikes the mmap/non-mmap split and wants them on the **same** gate→preserve→Oracle wiring. This is now
 possible because at the mmap flush we hold **both** the pre-image (raw-read from disk) and the post-image (the
 paging-write buffer) — exactly the (old, new) pair the non-mmap gate consumes.
@@ -364,3 +549,13 @@ kernel attacker, B.2 (comm-port latency — still open, visibility only).
    grounded in an empirically-verified or primary-sourced fact, never a guess. The requirements are load-bearing:
    FN=0; region-only (never whole-file); exemption = zero monitoring; zero usability impact; transcend the frontier.
    When a load-bearing fact is ambiguous mid-implementation, do targeted web research BEFORE continuing.
+10. **A passing test can hide a real defect if the test setup has its own accidental rescue path.** This session's
+    mmap multi-file batch test showed FN=0 on one run purely because the harness reused one key/keystream across
+    every file in the batch, letting the one Oracle-recovered key silently substitute for a missing floor on the
+    others; the automated classifier never even attempted `recover` on the other files. Passing is not evidence
+    until the reason it passed is understood. When instrumenting an unexplained result on the actual driver, add
+    counters at each decision point and read them **before** attempting a fix — two fix attempts made against an
+    unconfirmed guess this session both failed to close the gap, and the bolder one (a retry loop with a blocking
+    wait added to a paging-write-adjacent path) made the reproduction rate measurably worse. Prefer a full VM
+    snapshot restore over repeatedly hot-swapping a live driver while a root cause is still unconfirmed — the
+    live VM stopped responding once during exactly that kind of iteration this session, cause undetermined.
