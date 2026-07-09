@@ -15,7 +15,6 @@ typedef struct _SAR_IDENTITY_ENTRY {
     BOOLEAN identity_valid;
     BOOLEAN subsystem_process;
     BOOLEAN protected_trusted;
-    LONG phantom_trust;
     volatile LONG phantom_evidence;
 } SAR_IDENTITY_ENTRY, *PSAR_IDENTITY_ENTRY;
 

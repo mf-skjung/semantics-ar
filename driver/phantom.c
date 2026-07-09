@@ -282,36 +282,9 @@ static BOOLEAN SarPmIdMapLookupByRef(_In_ DWORDLONG Ref,
     return found;
 }
 
-static SAR_PHANTOM_TRUST SarPhantomProcessTrust(_In_ HANDLE ProcessId)
-{
-    PSAR_IDENTITY_ENTRY entry;
-    SAR_PHANTOM_TRUST trust = SAR_PHANTOM_UNTRUSTED;
-
-    if (g_sar_state == NULL)
-        return SAR_PHANTOM_UNTRUSTED;
-
-    FltAcquirePushLockShared(&g_sar_state->identity_lock);
-    {
-        ULONG bucket = ((ULONG_PTR)ProcessId ^ ((ULONG_PTR)ProcessId >> 13)) * 0x9E3779B1u;
-        bucket = bucket % g_sar_state->identity_bucket_count;
-        PLIST_ENTRY head = &g_sar_state->identity_buckets[bucket];
-        for (PLIST_ENTRY cur = head->Flink; cur != head; cur = cur->Flink) {
-            entry = CONTAINING_RECORD(cur, SAR_IDENTITY_ENTRY, link);
-            if (entry->process_id == ProcessId) {
-                trust = entry->phantom_trust;
-                break;
-            }
-        }
-    }
-    FltReleasePushLock(&g_sar_state->identity_lock);
-    return trust;
-}
-
 static BOOLEAN SarPhantomIsTrusted(_In_ HANDLE ProcessId)
 {
-    if (SarStateIdentityLookup(g_sar_state, ProcessId) == SAR_IDSTATE_EXEMPT)
-        return TRUE;
-    return SarPhantomProcessTrust(ProcessId) == SAR_PHANTOM_TRUSTED;
+    return SarStateIdentityLookup(g_sar_state, ProcessId) == SAR_IDSTATE_EXEMPT;
 }
 
 _IRQL_requires_max_(APC_LEVEL)
@@ -1767,22 +1740,6 @@ static VOID SarPhantomLoadImageNotify(_In_opt_ PUNICODE_STRING FullImageName,
     ULONG sigLevel = (ImageInfo->Properties >> 12) & 0xF;
     if (sigLevel >= 4)
         return;
-
-    FltAcquirePushLockExclusive(&g_sar_state->identity_lock);
-    {
-        ULONG bucket = ((ULONG_PTR)ProcessId ^ ((ULONG_PTR)ProcessId >> 13)) * 0x9E3779B1u;
-        bucket = bucket % g_sar_state->identity_bucket_count;
-        PLIST_ENTRY head = &g_sar_state->identity_buckets[bucket];
-        for (PLIST_ENTRY cur = head->Flink; cur != head; cur = cur->Flink) {
-            PSAR_IDENTITY_ENTRY entry = CONTAINING_RECORD(cur, SAR_IDENTITY_ENTRY, link);
-            if (entry->process_id == ProcessId) {
-                if (entry->phantom_trust == SAR_PHANTOM_TRUSTED)
-                    entry->phantom_trust = SAR_PHANTOM_TAINTED;
-                break;
-            }
-        }
-    }
-    FltReleasePushLock(&g_sar_state->identity_lock);
 
     {
         UINT64 revoked_key = 0;

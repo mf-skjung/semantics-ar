@@ -17,12 +17,6 @@
 
 #define SAR_PHANTOM_DIR      L"\\SystemRoot\\System32\\drivers\\SemanticsAr\\phantom"
 
-typedef enum _SAR_PHANTOM_TRUST {
-    SAR_PHANTOM_UNTRUSTED = 0,
-    SAR_PHANTOM_TRUSTED   = 1,
-    SAR_PHANTOM_TAINTED   = 2
-} SAR_PHANTOM_TRUST;
-
 typedef struct _SAR_DIR_OFFSETS {
     ULONG next_entry;
     ULONG file_index;

@@ -30,6 +30,9 @@ FLT_PREOP_CALLBACK_STATUS SarPreFsControl(_Inout_ PFLT_CALLBACK_DATA Data,
 FLT_PREOP_CALLBACK_STATUS SarPreAcquireForSection(_Inout_ PFLT_CALLBACK_DATA Data,
                                                   _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                                   _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
+FLT_PREOP_CALLBACK_STATUS SarPreCleanup(_Inout_ PFLT_CALLBACK_DATA Data,
+                                        _In_ PCFLT_RELATED_OBJECTS FltObjects,
+                                        _Flt_CompletionContext_Outptr_ PVOID *CompletionContext);
 FLT_POSTOP_CALLBACK_STATUS SarPostRead(_Inout_ PFLT_CALLBACK_DATA Data,
                                        _In_ PCFLT_RELATED_OBJECTS FltObjects,
                                        _In_opt_ PVOID CompletionContext,
@@ -79,6 +82,7 @@ static const FLT_OPERATION_REGISTRATION g_sar_operations[] = {
     { IRP_MJ_FILE_SYSTEM_CONTROL, 0, SarPreFsControl, SarPhantomPostFsControl },
     { IRP_MJ_QUERY_INFORMATION, 0, NULL, SarPhantomPostQueryInfo },
     { IRP_MJ_ACQUIRE_FOR_SECTION_SYNCHRONIZATION, 0, SarPreAcquireForSection, NULL },
+    { IRP_MJ_CLEANUP, 0, SarPreCleanup, NULL },
     { IRP_MJ_OPERATION_END }
 };
 

@@ -229,6 +229,41 @@ int main(void) {
         free(buf);
     }
 
+    printf("[containment-aware staging: only the uncovered remainder is a gap]\n");
+    {
+        sar_preserve_record_t g[8];
+        uint64_t gc = 0;
+        uint64_t goff = 0, glen = 0;
+
+        int empty = sar_preserve_first_gap(g, gc, pa, 0, 1000, &goff, &glen);
+        CHECK(empty == 1 && goff == 0 && glen == 1000, "empty store: entire region is one gap");
+
+        sar_preserve_record_t p0;
+        sar_preserve_record_init(&p0, pa, 0, 16, 100, 0, 16, 1, iv, 16, orig, 16);
+        sar_preserve_append(g, &gc, 8, &p0);
+
+        int pfx = sar_preserve_first_gap(g, gc, pa, 0, 1u << 20, &goff, &glen);
+        CHECK(pfx == 1 && goff == 16 && glen == (1u << 20) - 16,
+              "prefix hold [0,16) + overwrite [0,1MB): uncovered gap is [16,1MB) (close-reopen defect closed)");
+
+        int cov = sar_preserve_first_gap(g, gc, pa, 0, 16, &goff, &glen);
+        CHECK(cov == 0, "region fully within a held record reports no gap (ALREADY_COVERED)");
+
+        int other = sar_preserve_first_gap(g, gc, pb, 0, 16, &goff, &glen);
+        CHECK(other == 1 && goff == 0 && glen == 16, "a hold on another path never covers this path");
+
+        sar_preserve_record_t p1;
+        sar_preserve_record_init(&p1, pa, 100, 100, 101, 16, 100, 1, iv, 16, orig, 100);
+        sar_preserve_append(g, &gc, 8, &p1);
+
+        int mid = sar_preserve_first_gap(g, gc, pa, 0, 300, &goff, &glen);
+        CHECK(mid == 1 && goff == 16 && glen == 84,
+              "first gap skips the prefix hold and stops at the next hold's start");
+        int resume = sar_preserve_first_gap(g, gc, pa, 200, 100, &goff, &glen);
+        CHECK(resume == 1 && goff == 200 && glen == 100,
+              "gap resumes after an interior hold ends");
+    }
+
     printf("\npreserve: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

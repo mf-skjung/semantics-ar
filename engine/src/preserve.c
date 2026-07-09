@@ -78,6 +78,45 @@ int sar_preserve_covered(const sar_preserve_record_t *records, uint64_t count,
     return 0;
 }
 
+int sar_preserve_first_gap(const sar_preserve_record_t *records, uint64_t count,
+                           const uint16_t *provenance_path,
+                           uint64_t offset, uint64_t length,
+                           uint64_t *gap_offset, uint64_t *gap_length) {
+    uint64_t cursor = offset;
+    uint64_t end = offset + length;
+    while (cursor < end) {
+        uint64_t cover_end = cursor;
+        int covered = 0;
+        for (uint64_t i = 0; i < count; i++) {
+            if (!sar_pres_path_eq(records[i].provenance_path, provenance_path))
+                continue;
+            uint64_t ro = records[i].provenance_offset;
+            uint64_t re = ro + records[i].provenance_length;
+            if (ro <= cursor && cursor < re) {
+                covered = 1;
+                if (re > cover_end)
+                    cover_end = re;
+            }
+        }
+        if (covered) {
+            cursor = cover_end;
+            continue;
+        }
+        uint64_t gap_end = end;
+        for (uint64_t i = 0; i < count; i++) {
+            if (!sar_pres_path_eq(records[i].provenance_path, provenance_path))
+                continue;
+            uint64_t ro = records[i].provenance_offset;
+            if (ro > cursor && ro < gap_end)
+                gap_end = ro;
+        }
+        *gap_offset = cursor;
+        *gap_length = gap_end - cursor;
+        return 1;
+    }
+    return 0;
+}
+
 int sar_preserve_append(sar_preserve_record_t *records,
                         uint64_t *count, uint64_t capacity,
                         const sar_preserve_record_t *rec) {

@@ -37,6 +37,11 @@ int sar_preserve_covered(const sar_preserve_record_t *records, uint64_t count,
                          const uint16_t *provenance_path,
                          uint64_t offset, uint64_t length);
 
+int sar_preserve_first_gap(const sar_preserve_record_t *records, uint64_t count,
+                           const uint16_t *provenance_path,
+                           uint64_t offset, uint64_t length,
+                           uint64_t *gap_offset, uint64_t *gap_length);
+
 int sar_preserve_append(sar_preserve_record_t *records,
                         uint64_t *count, uint64_t capacity,
                         const sar_preserve_record_t *rec);

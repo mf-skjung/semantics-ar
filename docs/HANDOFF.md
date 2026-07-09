@@ -1,14 +1,18 @@
-# Handoff — semantics-ar — LATEST: **T2 (whitelist + active injection-proofing) is COMPLETE and VM-verified** (`scripts\vm_verify_t2.ps1`: 13 passed / 0 failed / 0 skipped; crash-free soak; no launch FP) — full record in **§T2 COMPLETE** at the top. **T3 (the full `docs/CONSTITUTION.md` rewrite) is now the project's terminus and the single most critical remaining task — read §T3 MISSION (ACTIVE) before doing anything else.** T1 (mmap FN=0 unification, three defects fixed) was completed and committed in the prior session — see §PRIOR SESSION (below §T2 COMPLETE), which supersedes the old "THIS SESSION" narrative that used to sit at the top of this file. Read **§T2 COMPLETE**, **§T3 MISSION (ACTIVE)**, §RESOLVED, and §4 below first.
+# Handoff — semantics-ar — LATEST: **`docs/CONSTITUTION.md` is RATIFIED — the finalized, authoritative specification governing the implementation** (where code and the Constitution disagree, the Constitution is right). **The backend — the Windows filesystem minifilter driver plus the user-mode service — is complete and VM-verified against the Constitution's Part XI conformance checklist.** Treat this as the settled current state; do not re-open Parts I–X from inside a coding task. **T4 (a full redesign of the operator-surface frontend under `frontend/`, from scratch, derived from the ratified Constitution and `docs/EXPERIENCE_CHARTER.md`) is now the project's terminus and the single most critical remaining task — read §T4 MISSION (ACTIVE) before doing anything else.** Read **§T4 MISSION (ACTIVE)**, §RESOLVED, and §4 below first.
 
-This is the single living handoff — a **specification for the next work**, not a log. **Read §T2 COMPLETE,
-§T3 MISSION (ACTIVE), §RESOLVED, and §4 NEXT WORK below first — they are newer than everything under Part 0+ and
-supersede it where they conflict.** **T1 and T2 are both COMPLETE, VM-verified, and committed to main** (mmap
+This is the single living handoff — a **specification for the next work**, not a log. **Read §T4 MISSION
+(ACTIVE), §RESOLVED, and §4 NEXT WORK below first — they are newer than everything under Part 0+ and
+supersede it where they conflict.** **T1, T2, and T3 are all COMPLETE** (mmap
 FN=0 unification in `driver/{operations,capture,seam}`; whitelist + active injection-proofing in
-`driver/{obguard,state,phantom,driver}` + `service/autoverdict`) — see §PRIOR SESSION and §T2 COMPLETE for the
-full record. **The only major work remaining is T3 (the full `docs/CONSTITUTION.md` rewrite) — see §T3 MISSION
-(ACTIVE).** Before touching anything, read `docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design),
-`docs/EXTERNAL_VALIDATION.md` (frontier; §4.1 = the diff-restricted-T soundness), and the VM evidence
-`build_verify/AH1_AH2_analysis_20260707.md` + `AH3_analysis_20260707.md`, then this file.
+`driver/{obguard,state,phantom,driver}` + `service/autoverdict`; the full `docs/CONSTITUTION.md` rewrite) — see
+§PRIOR SESSION, §T2 COMPLETE, and §T3 COMPLETE for the backend record. **`docs/CONSTITUTION.md` is RATIFIED and
+governs the implementation; the backend (driver + service) is VM-verified against its Part XI conformance
+checklist.** **The only major work remaining is T4 (a full redesign of the operator-surface frontend under
+`frontend/`, from scratch) — see §T4 MISSION (ACTIVE).** Before touching anything, read `docs/CONSTITUTION.md`
+(the governing specification) and `docs/EXPERIENCE_CHARTER.md` (the subordinate operator-surface charter), then
+`docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design), `docs/EXTERNAL_VALIDATION.md` (frontier;
+§4.1 = the diff-restricted-T soundness), and the VM evidence `build_verify/AH1_AH2_analysis_20260707.md` +
+`AH3_analysis_20260707.md`, then this file.
 
 > **⚠ BINDING LESSON FOR THE SUCCESSOR — READ FIRST, DO NOT REPEAT.** This session's implementer repeatedly tried to
 > satisfy hard requirements by **silently changing the goal to an easier one the owner had explicitly forbidden** —
@@ -100,48 +104,67 @@ full record. **The only major work remaining is T3 (the full `docs/CONSTITUTION.
 ### BACKLOG STATUS (supersedes the "REMAINING BACKLOG" list in §PRIOR SESSION below)
 - (T2) whitelist + active injection-proofing — **DONE (this session).**
 - Broad coverage sweep — `scripts\vm_verify_coverage.ps1` (phases A/A2/P/E/EV/B/C/C2/H/D) NOT re-run since the
-  mmap+T2 driver changes; a prudent regression re-run before/around T3 (verification only; T2 changes are
-  largely orthogonal to the capture/gate/mmap paths). Low risk, not development.
+  mmap+T2 driver changes; a prudent regression re-run before the next driver change (verification only; T2
+  changes are largely orthogonal to the capture/gate/mmap paths). Low risk, not development.
 - TIER2 harness trust-signing — general Phase TIER2 still SKIP; `inject_probe.exe` was trust-signed for T2 tests.
 - (minor) scan-dedup race in `SarCaptureWorker` — harmless for FN=0. Backlog.
 - (B.2) comm-port latency (budget/inflight) — visibility-only. Backlog.
-- **(T3) full Constitution rewrite — THE TERMINUS, now ACTIVE and top-priority.** See §T3 MISSION (ACTIVE) below.
+- (T3) full Constitution rewrite — **DONE.** `docs/CONSTITUTION.md` is ratified and governs; see §T3 COMPLETE below.
+- **(T4) full frontend redesign — THE TERMINUS, now ACTIVE and top-priority.** See §T4 MISSION (ACTIVE) below.
 
 ---
 
-## T3 MISSION (ACTIVE, TOP-PRIORITY) — full `docs/CONSTITUTION.md` rewrite
+## T3 COMPLETE — the `docs/CONSTITUTION.md` rewrite
 
-With T1 and T2 complete, **T3 is now the project's terminus and the single most critical remaining task.** State
-this bluntly for the successor:
+**T3 = the full Constitution rewrite — DONE.** `docs/CONSTITUTION.md` carries `STATUS: RATIFIED` and is the
+finalized, authoritative specification for semantics-ar: a Windows filesystem minifilter driver plus a
+user-mode service. It governs the implementation — where code and the Constitution disagree, the Constitution
+is right and the code is wrong. **The backend (driver + service) is VM-verified against the Constitution's Part
+XI conformance checklist** and is the settled current state. Its Part 0 (0.1/0.3) fixes what re-research is
+allowed to reopen — do not re-litigate Parts I–X from inside a coding task; a gap is CLOSED by default unless it
+escapes Part 0.3's three tests.
 
-- The CURRENT `docs/CONSTITUTION.md` is **significantly DIVERGENT from the actual project code and is badly
-  written**: it describes flawed/legacy logic **as if it were legitimate**, and its framing **violates the
-  project's core philosophy**. It must be rewritten wholesale from the running, VM-verified design.
-- **The philosophy the new Constitution must never forget (owner's explicit emphasis):** defending attacks
-  flawlessly is NOT the only thing that matters. Giving the normal user ZERO discomfort — no resource
-  inefficiency, no false positives, no usability degradation — is EQUALLY, EXTREMELY important. **99.9% of all
-  scenarios are NORMAL operation**, and the design must never be described or built in a way that sacrifices the
-  normal-path experience for defense. The governing triad, co-equal and in strict priority only when they
-  conflict: **FN = 0** (against a recoverable-destruction attacker) → **FP → 0** (invisible in normal operation;
-  exempt identities are monitored ZERO; blocks only on definitive evidence or the ENFORCE resource bound) →
-  **cost/usability → theoretical minimum**. The Constitution must foreground FP≈0 and zero-usability-impact as
-  first-class goals, not afterthoughts.
-- **Binding rewrite rules** (from the existing Part IV.3 intent): deep understanding of the code FIRST; move
-  only IMPLEMENTED logic in; ground each clause in file/function + rationale; write **as-if-original** (no
-  changelog, no "we changed X"); strict item-type discipline (INVARIANT/DECISION/BOUNDARY/NEGATIVE/DEPLOY,
-  MEASURED/DERIVED/DESIGN). `CONSTITUTION.md` III.5 (Preservation) and Part IV (the Gate) are LEGACY
-  (whole-file-at-open) and must be replaced.
-- **Must encode, grounded in the shipped code:** T1 (unified mmap/non-mmap region-only capture; UserMode arm
-  gate; extent-type discriminator; APC/drift boundaries; first-write-wins + Oracle-reconcile for DT-T2); the
-  adopted preservation redesign (per-region, PASSIVE, no whole-file-at-open; see
-  `docs/DESIGN_REVIEW_PRESERVATION.md`); T2 (the live injection-proofing model above, the sweep-removal and
-  birth-time-infeasibility findings, auto-verdict, and the R-t2-window / PPL-ceiling / A.3 boundaries); the
-  corrected graduated response (per-op refusal / block-before-evict, never process termination, never eviction
-  of a live pre-image); σ-scan stream recovery; the exemption contract (OS-owned path ∪ PP/PPL ∪ authenticated
-  whitelist+verdict with start_key binding; interpreter denylist; scoped to headless non-scripting apps).
+`docs/EXPERIENCE_CHARTER.md` (`STATUS: RATIFIED (v1.0)`) is the operator-surface design counterpart, explicitly
+**subordinate to the Constitution** (where they disagree, the Constitution is right). Both are now the governing
+documents for §T4 below.
 
-**This section supersedes the "last, after T1+T2" framing in §4.3 below — T3 is not queued behind anything else;
-it is the active task.**
+---
+
+## T4 MISSION (ACTIVE, TOP-PRIORITY) — full frontend redesign
+
+With T1, T2, and T3 all complete and the backend VM-verified against the Constitution, **T4 is now the project's
+terminus and the single most critical remaining task.** State this bluntly for the successor:
+
+- The operator-surface frontend under `frontend/` — the .NET 10 WPF app `SemanticsAr.App`, the
+  `SemanticsAr.Core` library, the `sarapi` C named-pipe client, and the COM `elevation-host` — was built against
+  the **legacy** Constitution's operator-surface design. **It must not be assumed valid.** No frontend file,
+  view, viewmodel, or structural decision carries forward by default.
+- The next work is a **full redesign of the operator surface from scratch**, derived from the finalized
+  `docs/CONSTITUTION.md` and `docs/EXPERIENCE_CHARTER.md` (the charter is subordinate to the Constitution —
+  where they disagree, the Constitution is right).
+- **This handoff deliberately does not pre-digest that analysis.** The successor must independently and
+  comprehensively re-read and re-analyze both governing documents in full, and independently and
+  comprehensively re-analyze the existing frontend source in full (`frontend/SemanticsAr.App`,
+  `frontend/SemanticsAr.Core`, `frontend/sarapi`, `frontend/elevation-host`) before designing anything.
+- **Reuse only what genuinely fits the new design; boldly discard what does not.** Do not preserve legacy
+  structure, naming, or flow out of inertia. A control, view, or service class earns a place in the redesign
+  because it is the minimal correct thing under the ratified Constitution and Charter — not because it already
+  exists.
+- The redesign must honor, at minimum:
+  - The Charter's core discipline: **surface recoverability certainty honestly** — definitive (a proven key) /
+    bounded (a preserved region within budget) / unrecoverable — and **never claim more certainty than the
+    backend proves**. A false all-clear is a constitutional violation.
+  - The **read-vs-elevated authority split** (what any reader may see vs. what only an elevated operator may
+    command).
+  - The Constitution's **Part V (graduated response and user authority)**: AUDIT vs ENFORCE; circumstantial
+    pressure refuses one operation, definitive evidence blocks the convicted actor's destructive operations,
+    nothing terminates a process; **the user's only knob is the resource envelope** — retention time and
+    capacity — plus the AUDIT/ENFORCE posture. The frontend must not expose tuning of detection, conviction, or
+    the gate.
+- VM-verify the redesigned frontend against the running backend before calling any part of it done.
+
+**This section supersedes the "last, after T1+T2+T3" framing in §4.3/§4.4 below — T4 is not queued behind
+anything else; it is the active task.**
 
 ---
 
@@ -168,11 +191,11 @@ list in §T2 COMPLETE at the top, which reflects T2 now being done:**
 3. **TIER2 phase** — trust-sign the harness on the VM so Phase TIER2 runs (currently SKIP: `verdict=unsigned`).
 4. **(minor) scan-dedup race** — `SarCaptureWorker` already-scanned test (shared-lock then exclusive re-check) can let two work items for one process both scan+convict; harmless for FN=0 (block list dedups; extra key record), but defeats single-scan intent. Backlog.
 5. **(B.2) comm-port latency** — `budget`/`inflight` propagation flaky; visibility-only.
-6. ~~**(T3) full `docs/CONSTITUTION.md` rewrite**~~ — no longer "last": now ACTIVE and top-priority, see §T3 MISSION (ACTIVE) at the top.
+6. ~~**(T3) full `docs/CONSTITUTION.md` rewrite**~~ — DONE; see §T3 COMPLETE at the top.
 
 ---
 
-## THIS SESSION (PRIOR — superseded by §T2 COMPLETE / §T3 MISSION above) — T1 verified working, one real gap found (open), driver back to prior-session T1 state
+## THIS SESSION (PRIOR — superseded by §T2 COMPLETE / §T3 COMPLETE above) — T1 verified working, one real gap found (open), driver back to prior-session T1 state
 
 **Summary of this session's outcome, most important first:**
 1. **T1's Oracle/block mechanism is proven correct on real VM runs.** A new positive/negative VM phase
@@ -431,12 +454,12 @@ Three evidence channels (Oracle / Preserve / Phantom), response graduated to cer
 termination** — every response denies the destructive I/O and the process keeps running. Gate (`engine/src/gate.c`) is
 passive (`D ∧ read-preceded ∧ T`, T = diff-restricted 2-gram novelty; emits capture-or-skip, never blocks). Corrected
 graduated response: **circumstantial capacity → per-op refusal, no process block, paging exempt; definitive conviction
-(Oracle FORWARD / Phantom) → process block.** See the code + `DESIGN_REVIEW_PRESERVATION.md` for truth; `CONSTITUTION.md`
-is still legacy (whole-file-at-open) pending the §C rewrite.
+(Oracle FORWARD / Phantom) → process block.** See the code + `DESIGN_REVIEW_PRESERVATION.md` for the backend
+detail; `docs/CONSTITUTION.md` is the ratified, authoritative specification and matches this design.
 
 ---
 
-## 2. What this cycle COMPLETED and VM-verified (do NOT redo; understand for the Constitution rewrite)
+## 2. What this cycle COMPLETED and VM-verified (do NOT redo; this is the settled grounding the ratified Constitution encodes)
 
 The prior handoff's "NEXT WORK": **A (exemption), B (two side-findings), C (Constitution)**. Status now:
 
@@ -545,13 +568,13 @@ processnotify.c, phantom.c, phantom.h, commport.c · `common/include/semantics_a
 
 ---
 
-## 4. NEXT WORK (strict order) — the terminus is the Constitution
+## 4. NEXT WORK (strict order) — the terminus is the full frontend redesign
 
 ### 4.1 T1 — Unify the mmap and non-mmap capture logic onto ONE wiring (owner's priority; the "화룡점정")
 **STATUS: DONE, COMMITTED, VM-verified** (`vm_verify_new.ps1`: 29 passed / 0 failed / 1 env-skip; MMAP-ORACLE
 positive lost=0 — three FN=0 defects found and fixed, see §PRIOR SESSION for the full account). Do NOT
-re-implement or re-litigate this — the design below is now what is shipped; kept here only as grounding for the
-T3 Constitution rewrite (§T3 MISSION).
+re-implement or re-litigate this — the design below is now what is shipped, and is encoded in the ratified
+`docs/CONSTITUTION.md` (§T3 COMPLETE); kept here only as grounding.
 
 The owner dislikes the mmap/non-mmap split and wants them on the **same** gate→preserve→Oracle wiring. This is now
 possible because at the mmap flush we hold **both** the pre-image (raw-read from disk) and the post-image (the
@@ -575,7 +598,7 @@ paging-write buffer) — exactly the (old, new) pair the non-mmap gate consumes.
 **STATUS: DONE, VM-verified** (`scripts\vm_verify_t2.ps1`: 13 passed / 0 failed / 0 skipped — see §T2 COMPLETE at
 the top for the full record: `driver/obguard.c`, the trust model decision, auto-verdict, the two dead-ends that
 must not be retried, and the R-t2-window/PPL-ceiling/A.3 boundaries). Kept below only as the original design
-rationale, now grounding for the T3 Constitution rewrite.
+rationale, now encoded in the ratified `docs/CONSTITUTION.md`.
 
 Exemption = ZERO monitoring (contract). To make it sound without whole-file trust, the driver **actively makes an
 exempted process injection-proof** so a non-kernel actor cannot write through it. (Research this session: real
@@ -596,25 +619,18 @@ enough; the exemption anchor must be an injection-proof *STATE*.)
 - Honest [BOUNDARY] (same ceiling PPL has, IX.1): kernel attacker; in-process memory-safety exploit; a voluntarily
   mapped shared-writable section the app executes from.
 
-### 4.3 T3 — Constitution full rewrite (THE TERMINUS — ACTIVE NOW, top priority; T1+T2 are both done)
-**See §T3 MISSION (ACTIVE) near the top of this file for the full, owner-explicit framing (the FN=0 → FP≈0 →
-cost triad, why the current Constitution is disqualified, and the binding rewrite rules) — this subsection is
-the condensed checklist.**
+### 4.3 T3 — Constitution full rewrite
+**STATUS: DONE.** `docs/CONSTITUTION.md` is ratified and is the authoritative specification governing the
+implementation; see §T3 COMPLETE near the top of this file. Kept here only as the historical order marker —
+T1+T2+T3 are all done; §4.4 is the active terminus.
 
-`docs/CONSTITUTION.md` III.5 / Part IV are legacy (whole-file-at-open) and describe flawed/legacy logic as if
-legitimate. Rewrite to the running, VM-verified design. **Binding (owner explicit):** deep understanding first
-(explain *why each clause is the minimal correct thing*; re-derive / web-research if unsure); move only
-implemented logic in, each clause grounded in file/function + rationale; **as-if-original** (no changelog); item-type
-discipline ([INVARIANT]/[DECISION]/[BOUNDARY]/[NEGATIVE]/[DEPLOY], MEASURED/DERIVED/DESIGN), Part 0 closure, Part IX
-boundaries. **Must encode:** the unified gate→preserve→Oracle wiring (T1); mmap as region-only paging-write capture
-with the UserMode arm gate, extent-type new/overwrite discriminator, reservation + release-as-you-stage, and the APC +
-drift boundaries; first-write-wins + Oracle-reconcile + probation/protected pools (DT-T2); the exemption contract with
-active injection-proofing (T2 — ObGuard access-bit stripping, Tier-1 PP/PPL vs Tier-2 whitelist trust asymmetry,
-auto-verdict collapsing the pre-verdict window, interpreter denylist); σ-scan stream recovery; the corrected graduated
-response (circumstantial→per-op refusal / block-before-evict / paging exempt; definitive→process block). **Part IX
-residuals:** R-mmap-APC (paging unrefusable), R-mmap-drift (defrag-while-mapped), R-mmap-resident (MFT sub-~700 B, no
-extents), R-t2-window (pre-verdict race, zero for Tier-1), the PPL ceiling, A.3 Tier-2 confused-deputy, the bounded
-envelope, store confidentiality without a kernel attacker, B.2 (comm-port latency — still open, visibility only).
+### 4.4 T4 — Full frontend redesign (THE TERMINUS — ACTIVE NOW, top priority; T1+T2+T3 are all done)
+**See §T4 MISSION (ACTIVE) near the top of this file for the full framing — this subsection is the condensed
+pointer.** The operator-surface frontend under `frontend/` (`SemanticsAr.App`, `SemanticsAr.Core`, `sarapi`,
+`elevation-host`) was built against the legacy Constitution's operator-surface design and must not be assumed
+valid. Redesign it from scratch, derived from the ratified `docs/CONSTITUTION.md` and
+`docs/EXPERIENCE_CHARTER.md`, independently re-analyzing both governing documents and the existing frontend
+source before designing anything. Reuse only what genuinely fits the new design; boldly discard the rest.
 
 ---
 

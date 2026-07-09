@@ -584,6 +584,21 @@ SarEnforceInPlaceCapture(_Inout_ PFLT_CALLBACK_DATA Data, _In_ PCFLT_RELATED_OBJ
 }
 
 FLT_PREOP_CALLBACK_STATUS
+SarPreCleanup(_Inout_ PFLT_CALLBACK_DATA Data,
+              _In_ PCFLT_RELATED_OBJECTS FltObjects,
+              _Flt_CompletionContext_Outptr_ PVOID *CompletionContext)
+{
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(CompletionContext);
+
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL && IoGetTopLevelIrp() == NULL &&
+        SarStreamSectionDirty(FltObjects))
+        FltFlushBuffers(FltObjects->Instance, FltObjects->FileObject);
+
+    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS
 SarPreWrite(_Inout_ PFLT_CALLBACK_DATA Data,
             _In_ PCFLT_RELATED_OBJECTS FltObjects,
             _Flt_CompletionContext_Outptr_ PVOID *CompletionContext)

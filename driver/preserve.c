@@ -766,115 +766,135 @@ SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UIN
                                   _In_reads_bytes_(PlaintextLen) const UCHAR *Plaintext,
                                   _In_ ULONG PlaintextLen, _In_ BOOLEAN AgainstReservation)
 {
-    UINT64 ct_len;
-    UINT64 off;
-    UCHAR iv[SAR_PRESERVE_AES_BLOCK];
-    PUCHAR ctbuf;
-    ULONG produced = 0;
+    UINT64 end;
+    UINT64 cursor;
     LARGE_INTEGER now;
-    sar_preserve_record_t rec;
-    NTSTATUS status;
+    BOOLEAN staged = FALSE;
+    SAR_STAGE_RESULT result = SAR_STAGE_ALREADY_COVERED;
 
     if (Preserve == NULL || Preserve->ready == 0)
         return SAR_STAGE_FAILED;
     if (PlaintextLen == 0 || Length == 0)
         return SAR_STAGE_STORED;
-
-    ct_len = SarPresRound16(PlaintextLen);
-    if (ct_len > Preserve->capacity_bytes)
-        return SAR_STAGE_DROPPED;
-
-    if (!NT_SUCCESS(BCryptGenRandom(NULL, iv, SAR_PRESERVE_AES_BLOCK,
-                                    BCRYPT_USE_SYSTEM_PREFERRED_RNG)))
-        return SAR_STAGE_FAILED;
-
-    ctbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)ct_len, SAR_POOL_TAG_PRESBUF);
-    if (ctbuf == NULL)
+    if ((UINT64)PlaintextLen != Length)
         return SAR_STAGE_FAILED;
 
     KeQuerySystemTime(&now);
 
     FltAcquirePushLockExclusive(&Preserve->lock);
 
-    if (sar_preserve_covered(Preserve->records, Preserve->record_count, Path, Offset, Length)) {
-        FltReleasePushLock(&Preserve->lock);
-        ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-        return SAR_STAGE_ALREADY_COVERED;
-    }
-
     if (sar_preserve_evict_aged(Preserve->records, &Preserve->record_count,
                                 (uint64_t)now.QuadPart, Preserve->retention_100ns) > 0)
         Preserve->free_dirty = TRUE;
 
-    {
-        UINT64 prot = sar_preserve_protected_bytes(Preserve->records, Preserve->record_count);
-        UINT64 res = AgainstReservation ? 0 : Preserve->reserved_bytes;
+    end = Offset + Length;
+    cursor = Offset;
+
+    while (cursor < end) {
+        UINT64 g_off = 0;
+        UINT64 g_len = 0;
+        UINT64 ct_len;
+        UINT64 prot;
+        UINT64 res;
+        UINT64 off;
+        ULONG ptoff;
+        UCHAR iv[SAR_PRESERVE_AES_BLOCK];
+        PUCHAR ctbuf;
+        PUCHAR padbuf;
+        ULONG produced = 0;
+        sar_preserve_record_t rec;
+        NTSTATUS status;
+
+        if (!sar_preserve_first_gap(Preserve->records, Preserve->record_count, Path,
+                                    cursor, end - cursor, &g_off, &g_len))
+            break;
+
+        ptoff = (ULONG)(g_off - Offset);
+        ct_len = SarPresRound16(g_len);
+        if (ct_len > Preserve->capacity_bytes) {
+            result = SAR_STAGE_DROPPED;
+            break;
+        }
+
+        prot = sar_preserve_protected_bytes(Preserve->records, Preserve->record_count);
+        res = AgainstReservation ? 0 : Preserve->reserved_bytes;
         if (prot + ct_len > Preserve->capacity_bytes) {
-            FltReleasePushLock(&Preserve->lock);
-            ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-            return SAR_STAGE_DROPPED;
+            result = SAR_STAGE_DROPPED;
+            break;
         }
         if (sar_preserve_total_bytes(Preserve->records, Preserve->record_count) + res + ct_len >
             Preserve->capacity_bytes) {
             if (SarStateModeGet(g_sar_state) == SEMANTICS_AR_MODE_ENFORCE) {
-                FltReleasePushLock(&Preserve->lock);
-                ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-                return SAR_STAGE_DROPPED;
+                result = SAR_STAGE_DROPPED;
+                break;
             }
             if (sar_preserve_evict_probation_oldest(Preserve->records, &Preserve->record_count,
                                                     Preserve->capacity_bytes - prot - ct_len) > 0)
                 Preserve->free_dirty = TRUE;
         }
-    }
 
-    if (Preserve->record_count >= Preserve->record_capacity) {
-        FltReleasePushLock(&Preserve->lock);
-        ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-        return SAR_STAGE_DROPPED;
-    }
+        if (Preserve->record_count >= Preserve->record_capacity) {
+            result = SAR_STAGE_DROPPED;
+            break;
+        }
 
-    {
-        PUCHAR padbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)ct_len,
-                                                SAR_POOL_TAG_PRESBUF);
+        if (!NT_SUCCESS(BCryptGenRandom(NULL, iv, SAR_PRESERVE_AES_BLOCK,
+                                        BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+            result = SAR_STAGE_FAILED;
+            break;
+        }
+
+        ctbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)ct_len, SAR_POOL_TAG_PRESBUF);
+        if (ctbuf == NULL) {
+            result = SAR_STAGE_FAILED;
+            break;
+        }
+        padbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)ct_len, SAR_POOL_TAG_PRESBUF);
         if (padbuf == NULL) {
-            FltReleasePushLock(&Preserve->lock);
             ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-            return SAR_STAGE_FAILED;
+            result = SAR_STAGE_FAILED;
+            break;
         }
         RtlZeroMemory(padbuf, (SIZE_T)ct_len);
-        RtlCopyMemory(padbuf, Plaintext, PlaintextLen);
+        RtlCopyMemory(padbuf, Plaintext + ptoff, (SIZE_T)g_len);
         status = SarPresCrypt(Preserve, TRUE, padbuf, (ULONG)ct_len, iv, ctbuf, (ULONG)ct_len,
                               &produced);
         RtlSecureZeroMemory(padbuf, (SIZE_T)ct_len);
         ExFreePoolWithTag(padbuf, SAR_POOL_TAG_PRESBUF);
-    }
 
-    if (!NT_SUCCESS(status)) {
-        FltReleasePushLock(&Preserve->lock);
+        if (!NT_SUCCESS(status)) {
+            ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
+            result = SAR_STAGE_FAILED;
+            break;
+        }
+
+        off = SarPresAlloc(Preserve, ct_len);
+        status = SarPresDataWrite(Preserve, off, ctbuf, (ULONG)ct_len);
+        RtlSecureZeroMemory(ctbuf, (SIZE_T)ct_len);
         ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-        return SAR_STAGE_FAILED;
+
+        if (!NT_SUCCESS(status)) {
+            Preserve->free_dirty = TRUE;
+            result = SAR_STAGE_FAILED;
+            break;
+        }
+
+        sar_preserve_record_init(&rec, Path, g_off, g_len, (uint64_t)now.QuadPart, off, ct_len,
+                                 ActorId, iv, SAR_PRESERVE_AES_BLOCK, Plaintext + ptoff,
+                                 (ULONG)g_len);
+        if (sar_preserve_append(Preserve->records, &Preserve->record_count,
+                                Preserve->record_capacity, &rec) == 1)
+            InterlockedExchange(&Preserve->dirty, 1);
+
+        staged = TRUE;
+        cursor = g_off + g_len;
     }
-
-    off = SarPresAlloc(Preserve, ct_len);
-
-    status = SarPresDataWrite(Preserve, off, ctbuf, (ULONG)ct_len);
-    RtlSecureZeroMemory(ctbuf, (SIZE_T)ct_len);
-    ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
-
-    if (!NT_SUCCESS(status)) {
-        Preserve->free_dirty = TRUE;
-        FltReleasePushLock(&Preserve->lock);
-        return SAR_STAGE_FAILED;
-    }
-
-    sar_preserve_record_init(&rec, Path, Offset, Length, (uint64_t)now.QuadPart, off, ct_len,
-                             ActorId, iv, SAR_PRESERVE_AES_BLOCK, Plaintext, PlaintextLen);
-    if (sar_preserve_append(Preserve->records, &Preserve->record_count, Preserve->record_capacity,
-                            &rec) == 1)
-        InterlockedExchange(&Preserve->dirty, 1);
 
     FltReleasePushLock(&Preserve->lock);
-    return SAR_STAGE_STORED;
+
+    if (result == SAR_STAGE_DROPPED || result == SAR_STAGE_FAILED)
+        return result;
+    return staged ? SAR_STAGE_STORED : SAR_STAGE_ALREADY_COVERED;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
