@@ -14,6 +14,7 @@ typedef struct _SAR_IDENTITY_ENTRY {
     sar_identity_t identity;
     BOOLEAN identity_valid;
     BOOLEAN subsystem_process;
+    BOOLEAN protected_trusted;
     LONG phantom_trust;
     volatile LONG phantom_evidence;
 } SAR_IDENTITY_ENTRY, *PSAR_IDENTITY_ENTRY;
@@ -74,5 +75,16 @@ BOOLEAN SarStateIdentityApplyVerdict(_Inout_ PSAR_STATE State,
                                   _In_ HANDLE ProcessId,
                                   _In_ UINT64 StartKey,
                                   _In_ const sar_identity_t *VerifiedIdentity);
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateProtectedTarget(_In_ PSAR_STATE State, _In_ PEPROCESS Target,
+                                _Out_opt_ PUINT64 StartKey);
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateOpenerTrusted(_In_ PSAR_STATE State, _In_ PEPROCESS Opener);
+
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateRevokeExemption(_Inout_ PSAR_STATE State, _In_ HANDLE ProcessId,
+                               _Out_opt_ PUINT64 StartKey);
 
 #endif

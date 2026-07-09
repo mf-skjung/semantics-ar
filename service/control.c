@@ -6,6 +6,7 @@
 #include "pipe_server.h"
 #include "posture.h"
 #include "recovery.h"
+#include "autoverdict.h"
 
 static int sar_catalog_fetch(sar_comm_client_t *client, uint32_t index,
                              semantics_ar_catalog_entry_t *out_entry,
@@ -149,6 +150,8 @@ int sar_control_apply(sar_comm_client_t *client,
 
         cs = sar_control_send_whitelist(client, cmd->op, &eval.identity);
         reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
+        if (cs == SAR_COMM_OK)
+            sar_autoverdict_note(path, cmd->op == SAR_CTL_OP_WHITELIST_ADD ? 1 : 0);
         break;
     }
 
@@ -213,61 +216,12 @@ int sar_control_apply(sar_comm_client_t *client,
     }
 
     case SAR_CTL_OP_VERDICT: {
-        DWORD pid = (DWORD)cmd->arg0;
-        wchar_t image[SEMANTICS_AR_PROTO_PATH_MAX];
-        DWORD nchars = SEMANTICS_AR_PROTO_PATH_MAX;
-        HANDLE hproc;
-        semantics_ar_process_query_t q;
-        semantics_ar_process_reply_t pr;
-        semantics_ar_identity_verdict_t v;
-        sar_identity_eval_t eval;
-
-        image[0] = 0;
-        hproc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-        if (hproc != NULL) {
-            if (!QueryFullProcessImageNameW(hproc, 0, image, &nchars))
-                image[0] = 0;
-            CloseHandle(hproc);
-        }
-        if (image[0] == 0) {
-            reply->result = -1;
-            break;
-        }
-
-        memset(&q, 0, sizeof(q));
-        q.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
-        q.header.message_type = SEMANTICS_AR_MSG_PROCESS_QUERY;
-        q.header.message_length = (uint32_t)sizeof(q);
-        q.pid = pid;
-        memset(&pr, 0, sizeof(pr));
-        cs = sar_comm_send_recv(client, &q, (uint32_t)sizeof(q), &pr, (uint32_t)sizeof(pr),
-                                SEMANTICS_AR_MSG_PROCESS_REPLY);
-        if (cs != SAR_COMM_OK || !pr.valid || pr.start_key == 0) {
-            reply->result = -1;
-            break;
-        }
-
-        memset(&eval, 0, sizeof(eval));
-        reply->verdict = sar_identity_evaluate(image, &eval);
-        if (reply->verdict != SAR_IDENTITY_VERDICT_VERIFIED) {
-            reply->result = -1;
-            reply->id_state = pr.id_state;
-            break;
-        }
-
-        memset(&v, 0, sizeof(v));
-        v.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
-        v.header.message_type = SEMANTICS_AR_MSG_IDENTITY_VERDICT;
-        v.header.message_length = (uint32_t)sizeof(v);
-        v.pid = pid;
-        v.start_key = pr.start_key;
-        memcpy(v.image_path, eval.identity.image_path, sizeof(v.image_path));
-        memcpy(v.cert_subject, eval.identity.cert_subject, sizeof(v.cert_subject));
-        memcpy(v.content_hash, eval.identity.content_hash, sizeof(v.content_hash));
-        cs = sar_comm_send(client, &v, (uint32_t)sizeof(v));
-        reply->result = (cs == SAR_COMM_OK) ? 0 : (int32_t)cs;
-        reply->id_state = pr.id_state;
-        reply->proc_start_key = pr.start_key;
+        uint32_t id_state = 0;
+        uint64_t start_key = 0;
+        reply->verdict = sar_verdict_pid(client, (uint32_t)cmd->arg0, &id_state, &start_key);
+        reply->result = (reply->verdict == SAR_IDENTITY_VERDICT_VERIFIED) ? 0 : -1;
+        reply->id_state = id_state;
+        reply->proc_start_key = start_key;
         break;
     }
 
@@ -643,11 +597,20 @@ int sar_control_listener_start(sar_comm_client_t *client)
         return -1;
     }
 
+    if (sar_autoverdict_start(client, &g_control_lock) != 0) {
+        sar_pipe_server_stop(&g_events_server);
+        sar_pipe_server_stop(&g_posture_server);
+        sar_pipe_server_stop(&g_control_server);
+        DeleteCriticalSection(&g_control_lock);
+        return -1;
+    }
+
     return 0;
 }
 
 void sar_control_listener_stop(void)
 {
+    sar_autoverdict_stop();
     sar_pipe_server_stop(&g_events_server);
     sar_pipe_server_stop(&g_posture_server);
     sar_pipe_server_stop(&g_control_server);

@@ -6,6 +6,7 @@ add_executable(semantics_ar_service
     main.c
     commclient.c
     control.c
+    autoverdict.c
     pipe_server.c
     posture.c
     recovery.c

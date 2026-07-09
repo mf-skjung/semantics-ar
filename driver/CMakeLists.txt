@@ -24,6 +24,7 @@ set(SAR_DRIVER_SOURCES
     feature.c
     bypassio.c
     eventlog.c
+    obguard.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/msg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/whitelist.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../control/src/mode.c

@@ -8,6 +8,7 @@
 #include "preserve.h"
 #include "phantom.h"
 #include "eventlog.h"
+#include "obguard.h"
 
 SAR_GLOBALS g_sar;
 PSAR_STATE g_sar_state;
@@ -132,6 +133,7 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(Flags);
 
+    SarObGuardUnregister();
     SarPhantomImageNotifyUnregister();
     SarProcessNotifyUnregister();
 
@@ -360,8 +362,37 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     else
         g_sar.preserve = NULL;
 
+    status = SarObGuardRegister();
+    if (!NT_SUCCESS(status)) {
+        if (g_sar.preserve != NULL) {
+            SarPreserveDestroy(g_sar.preserve);
+            g_sar.preserve = NULL;
+        }
+        SarCaptureDestroy(g_sar.capture);
+        g_sar.capture = NULL;
+        if (g_sar.phantom != NULL) {
+            SarPhantomImageNotifyUnregister();
+            SarPhantomDestroy(g_sar.phantom);
+            g_sar.phantom = NULL;
+        }
+        SarKeystoreDestroy(g_sar.keystore);
+        g_sar.keystore = NULL;
+        SarCommPortClose(g_sar.comm);
+        g_sar.comm = NULL;
+        SarProcessNotifyUnregister();
+        FltUnregisterFilter(g_sar.filter);
+        g_sar.filter = NULL;
+        SarEventLogDestroy(g_sar.eventlog);
+        g_sar.eventlog = NULL;
+        SarStateDestroy(g_sar.state);
+        g_sar.state = NULL;
+        g_sar_state = NULL;
+        return status;
+    }
+
     status = FltStartFiltering(g_sar.filter);
     if (!NT_SUCCESS(status)) {
+        SarObGuardUnregister();
         if (g_sar.preserve != NULL) {
             SarPreserveDestroy(g_sar.preserve);
             g_sar.preserve = NULL;

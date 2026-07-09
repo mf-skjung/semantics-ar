@@ -5,6 +5,7 @@
 #include "eng_mem.h"
 #include "store_io.h"
 #include "capture.h"
+#include "eventlog.h"
 
 #include <ntifs.h>
 
@@ -1782,6 +1783,12 @@ static VOID SarPhantomLoadImageNotify(_In_opt_ PUNICODE_STRING FullImageName,
         }
     }
     FltReleasePushLock(&g_sar_state->identity_lock);
+
+    {
+        UINT64 revoked_key = 0;
+        if (SarStateRevokeExemption(g_sar_state, ProcessId, &revoked_key))
+            SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_EXEMPT_REVOKED, revoked_key);
+    }
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

@@ -1,13 +1,14 @@
-# Handoff — semantics-ar — THIS SESSION **verified T1's Oracle/block mechanism works** (VM-proven: a resident-key mmap overwrite is convicted by key and blocked in ENFORCE; a benign non-keyed mmap overwrite is not), **found and fully fixed an unrelated event-query defect** (`service/control.c` + `tools/sarctl.c`, safe and complete — see §THIS SESSION), and **found a real, still-open gap**: in a single process that maps and encrypts several files in one batch, the preservation floor does not always cover every file — a repeatable but not-yet-root-caused shortfall, worst observed as 1 of 3 files ending up with neither the floor nor the Oracle protecting it. Two in-driver mitigation attempts were tried this session and **both reverted** (§THIS SESSION explains why) — **`driver/capture.c` + `driver/seam.h` are back to byte-identical with the prior session's T1 state, UNCOMMITTED, UNVERIFIED for this gap.** The new VM phase and harness that exposed it (`tests/harness/mmap_stream.c`, Phase MMAP-ORACLE in `scripts/vm_verify_new.ps1`) are kept and working. **UPDATE (LATEST SESSION): the mmap multi-file "gap" is ROOT-CAUSED, CLOSED, and VM-verified (`vm_verify_new.ps1`: 29 passed / 0 failed / 1 env-skip; MMAP-ORACLE positive lost=0). It was three distinct FN=0 defects, all fixed and each causally proven — see §LATEST SESSION at the very top, which supersedes this header and §THIS SESSION. COMMITTED. Next major work = T2.** Still OPEN, unchanged and specified below: **(T2) whitelist + active injection-proofing**; **(T3) full Constitution rewrite — the terminus.** Read **§THIS SESSION**, §RESOLVED, and §4 below first.
+# Handoff — semantics-ar — LATEST: **T2 (whitelist + active injection-proofing) is COMPLETE and VM-verified** (`scripts\vm_verify_t2.ps1`: 13 passed / 0 failed / 0 skipped; crash-free soak; no launch FP) — full record in **§T2 COMPLETE** at the top. **T3 (the full `docs/CONSTITUTION.md` rewrite) is now the project's terminus and the single most critical remaining task — read §T3 MISSION (ACTIVE) before doing anything else.** T1 (mmap FN=0 unification, three defects fixed) was completed and committed in the prior session — see §PRIOR SESSION (below §T2 COMPLETE), which supersedes the old "THIS SESSION" narrative that used to sit at the top of this file. Read **§T2 COMPLETE**, **§T3 MISSION (ACTIVE)**, §RESOLVED, and §4 below first.
 
-This is the single living handoff — a **specification for the next work**, not a log. **Read §THIS SESSION,
-§RESOLVED, and §4 NEXT WORK below first — they are newer than everything under Part 0+ and supersede it where they
-conflict.** The **prior cycle's** work is **COMMITTED to main** (mmap redesign in `driver/{operations,capture,seam}` +
-VM evidence under `build_verify/AH*` + probe scripts); **T1 is still UNCOMMITTED, with one open gap** — see the
-header and §THIS SESSION. Before touching anything, read
-`docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design), `docs/EXTERNAL_VALIDATION.md` (frontier; §4.1 =
-the diff-restricted-T soundness), and the VM evidence `build_verify/AH1_AH2_analysis_20260707.md` +
-`AH3_analysis_20260707.md`, then this file.
+This is the single living handoff — a **specification for the next work**, not a log. **Read §T2 COMPLETE,
+§T3 MISSION (ACTIVE), §RESOLVED, and §4 NEXT WORK below first — they are newer than everything under Part 0+ and
+supersede it where they conflict.** **T1 and T2 are both COMPLETE, VM-verified, and committed to main** (mmap
+FN=0 unification in `driver/{operations,capture,seam}`; whitelist + active injection-proofing in
+`driver/{obguard,state,phantom,driver}` + `service/autoverdict`) — see §PRIOR SESSION and §T2 COMPLETE for the
+full record. **The only major work remaining is T3 (the full `docs/CONSTITUTION.md` rewrite) — see §T3 MISSION
+(ACTIVE).** Before touching anything, read `docs/DESIGN_REVIEW_PRESERVATION.md` (adopted preservation design),
+`docs/EXTERNAL_VALIDATION.md` (frontier; §4.1 = the diff-restricted-T soundness), and the VM evidence
+`build_verify/AH1_AH2_analysis_20260707.md` + `AH3_analysis_20260707.md`, then this file.
 
 > **⚠ BINDING LESSON FOR THE SUCCESSOR — READ FIRST, DO NOT REPEAT.** This session's implementer repeatedly tried to
 > satisfy hard requirements by **silently changing the goal to an easier one the owner had explicitly forbidden** —
@@ -22,7 +23,129 @@ the diff-restricted-T soundness), and the VM evidence `build_verify/AH1_AH2_anal
 
 ---
 
-## LATEST SESSION — mmap multi-file FN=0 gap ROOT-CAUSED and CLOSED; three FN=0 defects fixed; VM-verified; committed
+## T2 COMPLETE (this session) — whitelist + active injection-proofing, VM-verified
+
+**T2 = whitelist + active injection-proofing — DONE, VM-verified** (`scripts\vm_verify_t2.ps1`: 13 passed / 0 failed
+/ 0 skipped; crash-free soak; no launch FP).
+
+### Core mechanism (live, non-destructive)
+- New `driver/obguard.c` + `driver/obguard.h`: an `ObRegisterCallbacks` pre-operation callback on
+  `PsProcessType`+`PsThreadType`. When an UNTRUSTED opener opens/duplicates a handle to an EXEMPT target, it
+  STRIPS manipulation-grade access bits and KEEPS benign ones (near-FP-free):
+  - Process strip: VM_WRITE|VM_OPERATION|CREATE_THREAD|DUP_HANDLE|CREATE_PROCESS|SET_INFORMATION|SUSPEND_RESUME.
+    Keep: VM_READ, TERMINATE, QUERY_(LIMITED_)INFORMATION, SYNCHRONIZE.
+  - Thread strip: SET_CONTEXT|SUSPEND_RESUME|SET_INFORMATION|SET_THREAD_TOKEN|IMPERSONATE|DIRECT_IMPERSONATION.
+  - DuplicateHandle: trust is evaluated on the RECIPIENT (`DuplicateHandleInformation.TargetProcess`); protection
+    read from `Info->Object`. `KernelHandle` and opener==target are early-outs.
+  - AUDIT mode logs only; ENFORCE strips. Requires `/INTEGRITYCHECK` (already in build) + signed image.
+- `driver/state.c`/`state.h`: added `SarStateProtectedTarget` (EXEMPT-only predicate; EPROCESS pointer-identity
+  lookup, PID-alias-safe), `SarStateOpenerTrusted` (trusted-opener = `protected_trusted` == PP/PPL Tier-1 only),
+  and the `protected_trusted` field. Interpreter denylist (`SarIdentityIsInterpreter`: powershell/pwsh/cmd/wscript/
+  cscript/mshta/python/node) enforced in the verdict path — scripting hosts are never exempt.
+- `driver/phantom.c` (P4): foreign/low-signed non-system module loaded into an EXEMPT (non-PPL) process →
+  `SarStateRevokeExemption` demotes it to OBSERVE (re-monitored) + `SAR_EVENT_CLASS_EXEMPT_REVOKED`.
+- `driver/driver.c`: register/unregister ObGuard (before FltStartFiltering / first in unload).
+  `common/include/semantics_ar/protocol.h`: `SAR_EVENT_CLASS_BLOCK_INJECTION=8u`, `SAR_EVENT_CLASS_EXEMPT_REVOKED=10u`.
+  Build wiring: `scripts/build_driver.bat` + `driver/CMakeLists.txt` include `obguard`.
+- **Trust model DECISION:** trusted-opener = Tier-1 PP/PPL only; Tier-2 (operator-whitelisted) apps are
+  exempt-from-monitoring but NOT trusted-to-manipulate others (tightens the A.3 confused-deputy residual).
+
+### auto-verdict — DONE, VM-verified (service-side, ZERO kernel/protocol change)
+- New `service/autoverdict.c` + `service/autoverdict.h`, wired in `service/control.c` (+ `service/CMakeLists.txt`).
+  A poll thread (Toolhelp32 snapshot, 250 ms, new-PID diff, rescan-on-whitelist-add) detects launches whose full
+  Win32 path matches an operator-whitelisted path, and runs the EXISTING evaluate→`MSG_IDENTITY_VERDICT` pipeline
+  automatically (reuses `MSG_PROCESS_QUERY` + `MSG_IDENTITY_VERDICT`; the verdict logic was factored to
+  `sar_verdict_pid`, shared by the manual `sarctl verdict` path and the auto path — no duplication).
+- **WHY it was needed (corrected defect):** exemption previously required a MANUAL per-PID `sarctl verdict`;
+  whitelist registration alone did NOT auto-exempt, and the pre-verdict [t0,t1] window was UNBOUNDED
+  (operator-latency-governed) — commodity-reachable via handle-spray + dormant-payload. Auto-verdict makes
+  "whitelist once → auto-exempt on every launch" the default and collapses the window to ~250 ms + hash. The
+  whitelist match at verdict is authoritative (content_hash + cert_subject + start_key binding); the
+  path-candidate is only a cheap trigger, so path-spoofing gains nothing.
+
+### KEY DECISIONS / DEAD-ENDS (record so the successor never redoes them)
+1. **Destructive pre-existing-handle sweep: BUILT then REMOVED. DO NOT reintroduce.** A retroactive sweep
+   (`ZwQuerySystemInformation(SystemExtendedHandleInformation)` + `ZwDuplicateObject(DUPLICATE_CLOSE_SOURCE)`)
+   force-closed handles held by pre-load CRITICAL OS processes (csrss/services) → **CRITICAL_PROCESS_DIED
+   bugcheck, reproduced on VM** (the passing synchronous asserts hid it; caught only by post-run uptime
+   monitoring — reaffirms Binding Rule #10). Even after fixes (skip pre-load/untrusted; corroboration-gate the
+   close), its unique value (the pre-verdict-window pre-staged handle) was mostly not delivered and is now
+   subsumed by auto-verdict. FABLE5-reviewed across rounds. **A destructive handle-revocation sweep is forbidden.**
+2. **Birth-time handle-surface protection (option "i"): PROVEN INFEASIBLE on VM. DO NOT retry in kernel.**
+   Attempted: at process-create-notify, provisionally protect a whitelist-path candidate's handle surface (so
+   untrusted openers are stripped before verdict). It BREAKS process creation — launching a whitelisted app fails
+   with STATUS_ACCESS_DENIED, because the OS creation path (the parent completing NtCreateUserProcess AND
+   csrss/subsystem finalizing the newborn) needs manipulation-grade handles to the new process; exempting just
+   the parent (`PsGetProcessInheritedFromUniqueProcessId`) did not fix it. Same "don't strip OS-infrastructure
+   handles" hazard class as the bugcheck. PP/PPL achieves birth-time protection only because the OS implements
+   PPL creation itself. Reverted. **Conclusion: exemption/handle-surface protection legitimately starts
+   POST-verdict (post-launch); the window is closed at the source by prompt auto-verdict, not by a third-party
+   driver protecting a newborn.**
+
+### T2 BOUNDARIES (carry into the Constitution, Part IX-style)
+- **R-t2-window [BOUNDARY]:** the [t0,t1] pre-verdict window — a Tier-2 target is OBSERVE (fully gate-monitored;
+  only its handle surface is exposed) from launch until auto-verdict exempts it. Post-auto-verdict this is a
+  sub-second race requiring a pre-positioned, already-resident, whitelist-knowing attacker with an
+  image-specific pre-built payload winning a ~250 ms open race → APT-tier. **Tier-1 PP/PPL targets have ZERO
+  window** (OS birth-protects). Steer maximal-assurance targets to Tier-1.
+- **PPL ceiling [BOUNDARY]:** kernel-mode attacker; in-process memory-safety exploit (ROP) within the trusted
+  process; a voluntarily-mapped shared-writable executable section. Same ceiling PP/PPL accepts.
+- **A.3 [BOUNDARY]:** a Tier-2 whitelisted app can be a confused deputy (post-exemption abuse of a
+  genuinely-trusted binary), vanishes for Tier-1.
+- **Update/UX note:** the whitelist is exact-hash (content_hash+cert_subject); an app UPDATE changes the hash →
+  exemption breaks until re-vetted (fail-safe, verified by FORGE). Auto-verdict re-verifies on the next launch.
+  A production "update re-approval" UX (frontend detects same-path/same-signer/new-hash → prompt) is an open
+  product task, not yet built.
+
+### BACKLOG STATUS (supersedes the "REMAINING BACKLOG" list in §PRIOR SESSION below)
+- (T2) whitelist + active injection-proofing — **DONE (this session).**
+- Broad coverage sweep — `scripts\vm_verify_coverage.ps1` (phases A/A2/P/E/EV/B/C/C2/H/D) NOT re-run since the
+  mmap+T2 driver changes; a prudent regression re-run before/around T3 (verification only; T2 changes are
+  largely orthogonal to the capture/gate/mmap paths). Low risk, not development.
+- TIER2 harness trust-signing — general Phase TIER2 still SKIP; `inject_probe.exe` was trust-signed for T2 tests.
+- (minor) scan-dedup race in `SarCaptureWorker` — harmless for FN=0. Backlog.
+- (B.2) comm-port latency (budget/inflight) — visibility-only. Backlog.
+- **(T3) full Constitution rewrite — THE TERMINUS, now ACTIVE and top-priority.** See §T3 MISSION (ACTIVE) below.
+
+---
+
+## T3 MISSION (ACTIVE, TOP-PRIORITY) — full `docs/CONSTITUTION.md` rewrite
+
+With T1 and T2 complete, **T3 is now the project's terminus and the single most critical remaining task.** State
+this bluntly for the successor:
+
+- The CURRENT `docs/CONSTITUTION.md` is **significantly DIVERGENT from the actual project code and is badly
+  written**: it describes flawed/legacy logic **as if it were legitimate**, and its framing **violates the
+  project's core philosophy**. It must be rewritten wholesale from the running, VM-verified design.
+- **The philosophy the new Constitution must never forget (owner's explicit emphasis):** defending attacks
+  flawlessly is NOT the only thing that matters. Giving the normal user ZERO discomfort — no resource
+  inefficiency, no false positives, no usability degradation — is EQUALLY, EXTREMELY important. **99.9% of all
+  scenarios are NORMAL operation**, and the design must never be described or built in a way that sacrifices the
+  normal-path experience for defense. The governing triad, co-equal and in strict priority only when they
+  conflict: **FN = 0** (against a recoverable-destruction attacker) → **FP → 0** (invisible in normal operation;
+  exempt identities are monitored ZERO; blocks only on definitive evidence or the ENFORCE resource bound) →
+  **cost/usability → theoretical minimum**. The Constitution must foreground FP≈0 and zero-usability-impact as
+  first-class goals, not afterthoughts.
+- **Binding rewrite rules** (from the existing Part IV.3 intent): deep understanding of the code FIRST; move
+  only IMPLEMENTED logic in; ground each clause in file/function + rationale; write **as-if-original** (no
+  changelog, no "we changed X"); strict item-type discipline (INVARIANT/DECISION/BOUNDARY/NEGATIVE/DEPLOY,
+  MEASURED/DERIVED/DESIGN). `CONSTITUTION.md` III.5 (Preservation) and Part IV (the Gate) are LEGACY
+  (whole-file-at-open) and must be replaced.
+- **Must encode, grounded in the shipped code:** T1 (unified mmap/non-mmap region-only capture; UserMode arm
+  gate; extent-type discriminator; APC/drift boundaries; first-write-wins + Oracle-reconcile for DT-T2); the
+  adopted preservation redesign (per-region, PASSIVE, no whole-file-at-open; see
+  `docs/DESIGN_REVIEW_PRESERVATION.md`); T2 (the live injection-proofing model above, the sweep-removal and
+  birth-time-infeasibility findings, auto-verdict, and the R-t2-window / PPL-ceiling / A.3 boundaries); the
+  corrected graduated response (per-op refusal / block-before-evict, never process termination, never eviction
+  of a live pre-image); σ-scan stream recovery; the exemption contract (OS-owned path ∪ PP/PPL ∪ authenticated
+  whitelist+verdict with start_key binding; interpreter denylist; scoped to headless non-scripting apps).
+
+**This section supersedes the "last, after T1+T2" framing in §4.3 below — T3 is not queued behind anything else;
+it is the active task.**
+
+---
+
+## PRIOR SESSION — mmap multi-file FN=0 gap ROOT-CAUSED and CLOSED; three FN=0 defects fixed; VM-verified; committed
 
 The prior session's "mmap multi-file floor gap" was **not one bug in the floor**. VM instrumentation (per-branch event tags in `SarMmapCaptureInline`/`SarRawReadStageRange`/`SarPreserveStage`, distinct file sizes to disambiguate per file) decomposed the observed "0–2 of 3 files lost" into **three distinct FN=0 defects**, each fixed and each proven by a controlled experiment. The floor logic itself is sound.
 
@@ -38,17 +161,18 @@ The prior session's "mmap multi-file floor gap" was **not one bug in the floor**
 
 **Committed to main this session:** uncommitted T1 Oracle-feed (`capture.c`/`seam.h`) + Fix 1/2/3 + the events-query fix (`service/control.c`, `tools/sarctl.c`) + the MMAP-ORACLE phase & harness (`vm_verify_new.ps1`, `tests/harness/mmap_stream.c`). **This is the first state that actually satisfies FN=0 on the mmap path.**
 
-**REMAINING BACKLOG (priority order):**
-1. **(T2) whitelist + active injection-proofing** — design agreed, NOT implemented; the next major work. `ObRegisterCallbacks` to strip VM_WRITE/VM_OPERATION/CREATE_THREAD/DUP_HANDLE/SUSPEND_RESUME/SET_CONTEXT from untrusted openers of exempt processes, pre-existing-handle sweep, foreign-signed image-load veto, keyed by `EPROCESS*`/`PsGetProcessStartKey` (never PID), scoped to headless/non-scripting apps.
+**REMAINING BACKLOG (priority order) — HISTORICAL, as of this (prior) session; superseded by the "BACKLOG STATUS"
+list in §T2 COMPLETE at the top, which reflects T2 now being done:**
+1. ~~**(T2) whitelist + active injection-proofing**~~ — DONE, see §T2 COMPLETE.
 2. **Broad coverage sweep** — `scripts\vm_verify_coverage.ps1` (phases A/A2/P/E/EV/B/C/C2/H/D) not re-run since these changes; run to fully re-validate the cycle.
 3. **TIER2 phase** — trust-sign the harness on the VM so Phase TIER2 runs (currently SKIP: `verdict=unsigned`).
 4. **(minor) scan-dedup race** — `SarCaptureWorker` already-scanned test (shared-lock then exclusive re-check) can let two work items for one process both scan+convict; harmless for FN=0 (block list dedups; extra key record), but defeats single-scan intent. Backlog.
 5. **(B.2) comm-port latency** — `budget`/`inflight` propagation flaky; visibility-only.
-6. **(T3) full `docs/CONSTITUTION.md` rewrite** — the terminus; last.
+6. ~~**(T3) full `docs/CONSTITUTION.md` rewrite**~~ — no longer "last": now ACTIVE and top-priority, see §T3 MISSION (ACTIVE) at the top.
 
 ---
 
-## THIS SESSION (PRIOR — superseded by §LATEST SESSION above) — T1 verified working, one real gap found (open), driver back to prior-session T1 state
+## THIS SESSION (PRIOR — superseded by §T2 COMPLETE / §T3 MISSION above) — T1 verified working, one real gap found (open), driver back to prior-session T1 state
 
 **Summary of this session's outcome, most important first:**
 1. **T1's Oracle/block mechanism is proven correct on real VM runs.** A new positive/negative VM phase
@@ -412,18 +536,22 @@ processnotify.c, phantom.c, phantom.h, commport.c · `common/include/semantics_a
   `vm_verify_coverage.ps1` (A/A2/P/E/EV/B/C/C2/H/D) was still NOT re-run — do it (§4.3).**
 - **Events-query fix verified:** `sarctl inflight`/`sarctl events` no longer block indefinitely; full-suite VM
   runs went from routinely stalling to completing in normal time once this landed. See "Events-query fix" above.
+- **T2 (this session), `scripts\vm_verify_t2.ps1`:** **13 passed / 0 failed / 0 skipped**, crash-free soak, no
+  launch FP. Covers ObGuard access-bit stripping (process + thread + DuplicateHandle-on-recipient), AUDIT-vs-ENFORCE,
+  Tier-1 vs Tier-2 trust asymmetry, auto-verdict launch-detection, and the interpreter denylist. `build_verify/
+  semantics_ar.sys` + `semantics_ar_elam.sys` are the verified build artifacts from this run; `tests/harness/
+  inject_probe.c` is the new trust-signed harness exercising untrusted-opener handle requests against exempt
+  targets. **The broad `vm_verify_coverage.ps1` regression sweep is still NOT re-run since T1+T2** — see BACKLOG.
 
 ---
 
 ## 4. NEXT WORK (strict order) — the terminus is the Constitution
 
 ### 4.1 T1 — Unify the mmap and non-mmap capture logic onto ONE wiring (owner's priority; the "화룡점정")
-**STATUS: code complete (prior session), UNCOMMITTED. The Oracle/block half is now VM-proven correct (this
-session). The floor half has a confirmed, reproducible gap for same-process multi-file mmap batches — see
-"mmap multi-file gap" in §THIS SESSION for the full repro, what was ruled out, and the concrete next
-instrumentation step. Root-cause and close that gap, re-run `scripts\vm_verify_new.ps1` clean (including Phase
-MMAP-ORACLE), only then commit `driver/capture.c` + `driver/seam.h` and move to T2. Do NOT re-implement T1 from
-scratch — the design below is what is already built; verify/fix the existing code against it.**
+**STATUS: DONE, COMMITTED, VM-verified** (`vm_verify_new.ps1`: 29 passed / 0 failed / 1 env-skip; MMAP-ORACLE
+positive lost=0 — three FN=0 defects found and fixed, see §PRIOR SESSION for the full account). Do NOT
+re-implement or re-litigate this — the design below is now what is shipped; kept here only as grounding for the
+T3 Constitution rewrite (§T3 MISSION).
 
 The owner dislikes the mmap/non-mmap split and wants them on the **same** gate→preserve→Oracle wiring. This is now
 possible because at the mmap flush we hold **both** the pre-image (raw-read from disk) and the post-image (the
@@ -443,7 +571,12 @@ paging-write buffer) — exactly the (old, new) pair the non-mmap gate consumes.
   non-mmap are one path**; the only mmap-specific pieces are the seam (paging-write vs IRP_MJ_WRITE) and the
   new/overwrite discriminator (extent-type vs read-precedence). VM-verify (A-H1..A-H3 evidence + a mmap-Oracle test).
 
-### 4.2 T2 — Whitelist + active injection-proofing (design agreed this session; implement + VM-verify)
+### 4.2 T2 — Whitelist + active injection-proofing
+**STATUS: DONE, VM-verified** (`scripts\vm_verify_t2.ps1`: 13 passed / 0 failed / 0 skipped — see §T2 COMPLETE at
+the top for the full record: `driver/obguard.c`, the trust model decision, auto-verdict, the two dead-ends that
+must not be retried, and the R-t2-window/PPL-ceiling/A.3 boundaries). Kept below only as the original design
+rationale, now grounding for the T3 Constitution rewrite.
+
 Exemption = ZERO monitoring (contract). To make it sound without whole-file trust, the driver **actively makes an
 exempted process injection-proof** so a non-kernel actor cannot write through it. (Research this session: real
 ransomware DLL-sideloads / injects into signed processes — e.g. REvil into MsMpEng.exe — so trusted *identity* is not
@@ -463,19 +596,25 @@ enough; the exemption anchor must be an injection-proof *STATE*.)
 - Honest [BOUNDARY] (same ceiling PPL has, IX.1): kernel attacker; in-process memory-safety exploit; a voluntarily
   mapped shared-writable section the app executes from.
 
-### 4.3 T3 — Constitution full rewrite (THE TERMINUS — last, only after T1+T2)
-`docs/CONSTITUTION.md` III.5 / Part IV are legacy (whole-file-at-open). Rewrite to the running, VM-verified design.
-**Binding (owner explicit):** deep understanding first (explain *why each clause is the minimal correct thing*;
-re-derive / web-research if unsure); move only implemented logic in, each clause grounded in file/function + rationale;
-**as-if-original** (no changelog); item-type discipline ([INVARIANT]/[DECISION]/[BOUNDARY]/[NEGATIVE]/[DEPLOY],
-MEASURED/DERIVED/DESIGN), Part 0 closure, Part IX boundaries. **Must encode:** the unified gate→preserve→Oracle wiring
-(T1); mmap as region-only paging-write capture with the UserMode arm gate, extent-type new/overwrite discriminator,
-reservation + release-as-you-stage, and the APC + drift boundaries; first-write-wins + Oracle-reconcile +
-probation/protected pools (DT-T2); the exemption contract with active injection-proofing (T2); σ-scan stream recovery;
-the corrected graduated response (circumstantial→per-op refusal / block-before-evict / paging exempt; definitive→process
-block). **Part IX residuals:** R-mmap-APC (paging unrefusable), R-mmap-drift (defrag-while-mapped), R-mmap-resident
-(MFT sub-~700 B, no extents), A.3 Tier-2 confused-deputy, the bounded envelope, store confidentiality without a
-kernel attacker, B.2 (comm-port latency — still open, visibility only).
+### 4.3 T3 — Constitution full rewrite (THE TERMINUS — ACTIVE NOW, top priority; T1+T2 are both done)
+**See §T3 MISSION (ACTIVE) near the top of this file for the full, owner-explicit framing (the FN=0 → FP≈0 →
+cost triad, why the current Constitution is disqualified, and the binding rewrite rules) — this subsection is
+the condensed checklist.**
+
+`docs/CONSTITUTION.md` III.5 / Part IV are legacy (whole-file-at-open) and describe flawed/legacy logic as if
+legitimate. Rewrite to the running, VM-verified design. **Binding (owner explicit):** deep understanding first
+(explain *why each clause is the minimal correct thing*; re-derive / web-research if unsure); move only
+implemented logic in, each clause grounded in file/function + rationale; **as-if-original** (no changelog); item-type
+discipline ([INVARIANT]/[DECISION]/[BOUNDARY]/[NEGATIVE]/[DEPLOY], MEASURED/DERIVED/DESIGN), Part 0 closure, Part IX
+boundaries. **Must encode:** the unified gate→preserve→Oracle wiring (T1); mmap as region-only paging-write capture
+with the UserMode arm gate, extent-type new/overwrite discriminator, reservation + release-as-you-stage, and the APC +
+drift boundaries; first-write-wins + Oracle-reconcile + probation/protected pools (DT-T2); the exemption contract with
+active injection-proofing (T2 — ObGuard access-bit stripping, Tier-1 PP/PPL vs Tier-2 whitelist trust asymmetry,
+auto-verdict collapsing the pre-verdict window, interpreter denylist); σ-scan stream recovery; the corrected graduated
+response (circumstantial→per-op refusal / block-before-evict / paging exempt; definitive→process block). **Part IX
+residuals:** R-mmap-APC (paging unrefusable), R-mmap-drift (defrag-while-mapped), R-mmap-resident (MFT sub-~700 B, no
+extents), R-t2-window (pre-verdict race, zero for Tier-1), the PPL ceiling, A.3 Tier-2 confused-deputy, the bounded
+envelope, store confidentiality without a kernel attacker, B.2 (comm-port latency — still open, visibility only).
 
 ---
 
@@ -559,3 +698,18 @@ kernel attacker, B.2 (comm-port latency — still open, visibility only).
     wait added to a paging-write-adjacent path) made the reproduction rate measurably worse. Prefer a full VM
     snapshot restore over repeatedly hot-swapping a live driver while a root cause is still unconfirmed — the
     live VM stopped responding once during exactly that kind of iteration this session, cause undetermined.
+11. **NEVER build a destructive pre-existing-handle sweep (retroactive `ZwDuplicateObject(DUPLICATE_CLOSE_SOURCE)`
+    against handles enumerated via `SystemExtendedHandleInformation`).** T2's implementer built and VM-tested one
+    to close the pre-verdict handle-staging window; it force-closed handles held by pre-load CRITICAL OS processes
+    (csrss/services) and **produced a reproduced CRITICAL_PROCESS_DIED bugcheck**, caught only by post-run uptime
+    monitoring (the synchronous asserts all passed — this is rule #10 again). It was removed; its unique value is
+    now covered by auto-verdict's ~250 ms window collapse. Do not reintroduce this class of mechanism.
+12. **NEVER attempt birth-time (process-create-notify) handle-surface protection in kernel for a whitelist
+    candidate.** T2's implementer tried provisionally protecting a not-yet-verdicted process's handle surface at
+    creation so untrusted openers would be stripped before verdict; it reliably **broke process creation itself**
+    (STATUS_ACCESS_DENIED launching the app) because the OS's own creation machinery (parent completing
+    NtCreateUserProcess, csrss/subsystem finalizing the newborn) needs manipulation-grade handles to the new
+    process — the same "don't strip OS-infrastructure handles" hazard class as rule #11's bugcheck. PP/PPL gets
+    birth-time protection for free only because the OS implements PPL creation itself; a third-party driver
+    cannot replicate it for arbitrary whitelisted processes. Exemption/handle-surface protection legitimately
+    starts POST-verdict; close the window at the source (fast auto-verdict), not by protecting a newborn process.
