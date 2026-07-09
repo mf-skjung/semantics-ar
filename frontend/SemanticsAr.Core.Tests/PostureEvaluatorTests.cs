@@ -25,7 +25,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void EnforceWithDriver_IsGreenProtected()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1, 42));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1, 42), false);
         Assert.Equal(PostureLevel.Green, v.Level);
         Assert.Equal(PostureReason.Protected, v.Reason);
         Assert.Equal(PostureMode.Enforce, v.Mode);
@@ -35,18 +35,35 @@ public sealed class PostureEvaluatorTests
     }
 
     [Fact]
-    public void AuditWithDriver_IsAmberAuditMode()
+    public void UnacknowledgedAudit_IsAmberAuditMode()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 0));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 0), false);
         Assert.Equal(PostureLevel.Amber, v.Level);
         Assert.Equal(PostureReason.AuditMode, v.Reason);
         Assert.Equal(PostureMode.Audit, v.Mode);
     }
 
     [Fact]
+    public void AcknowledgedAudit_CollapsesToGreenNeutral()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 0), true);
+        Assert.Equal(PostureLevel.Green, v.Level);
+        Assert.Equal(PostureReason.AuditAcknowledged, v.Reason);
+        Assert.Equal(PostureMode.Audit, v.Mode);
+    }
+
+    [Fact]
+    public void EnforceIgnoresAcknowledgement()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1), true);
+        Assert.Equal(PostureLevel.Green, v.Level);
+        Assert.Equal(PostureReason.Protected, v.Reason);
+    }
+
+    [Fact]
     public void DriverDisconnected_IsRed()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 0, 1));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 0, 1), false);
         Assert.Equal(PostureLevel.Red, v.Level);
         Assert.Equal(PostureReason.DriverDisconnected, v.Reason);
     }
@@ -54,7 +71,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void ServiceNotRunning_IsRed()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(0, 0, 0));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(0, 0, 0), false);
         Assert.Equal(PostureLevel.Red, v.Level);
         Assert.Equal(PostureReason.ServiceNotRunning, v.Reason);
     }
@@ -62,7 +79,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void UnknownMode_WithDriver_IsAmberVersionMismatch()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 7));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 7), false);
         Assert.Equal(PostureLevel.Amber, v.Level);
         Assert.Equal(PostureReason.VersionMismatch, v.Reason);
         Assert.False(v.ManagementAvailable);
@@ -72,7 +89,7 @@ public sealed class PostureEvaluatorTests
     public void Descents_ArePassedThroughWithoutChangingLevel()
     {
         PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok,
-            Frame(1, 1, 1, 0, 0x1u | 0x4u));
+            Frame(1, 1, 1, 0, 0x1u | 0x4u), false);
         Assert.Equal(PostureLevel.Green, v.Level);
         Assert.Equal(PostureDescent.NoTpm | PostureDescent.NoPpl, v.Descents);
     }
@@ -80,7 +97,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void NoDescents_IsPostureDescentNone()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1), false);
         Assert.Equal(PostureDescent.None, v.Descents);
     }
 
@@ -88,7 +105,7 @@ public sealed class PostureEvaluatorTests
     public void PreserveHealthAndExpiry_ArePassedThrough()
     {
         PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok,
-            Frame(1, 1, 1, 0, 0, health: 3u, expiry: 3u));
+            Frame(1, 1, 1, 0, 0, health: 3u, expiry: 3u), false);
         Assert.Equal(PreserveHealth.Critical, v.PreserveHealth);
         Assert.Equal(PreserveExpiry.WithinOneDay, v.OldestProtectedExpiry);
     }
@@ -96,7 +113,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void PreserveHealthUnknown_WhenStatsAbsent()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1));
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1), false);
         Assert.Equal(PreserveHealth.Unknown, v.PreserveHealth);
         Assert.Equal(PreserveExpiry.None, v.OldestProtectedExpiry);
     }
@@ -104,7 +121,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void ServerUntrusted_IsRed()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.ServerUntrusted, default);
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.ServerUntrusted, default, false);
         Assert.Equal(PostureLevel.Red, v.Level);
         Assert.Equal(PostureReason.ServerUntrusted, v.Reason);
         Assert.False(v.ManagementAvailable);
@@ -113,7 +130,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void VersionMismatch_IsAmber()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.VersionMismatch, default);
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.VersionMismatch, default, false);
         Assert.Equal(PostureLevel.Amber, v.Level);
         Assert.Equal(PostureReason.VersionMismatch, v.Reason);
     }
@@ -121,7 +138,7 @@ public sealed class PostureEvaluatorTests
     [Fact]
     public void AccessDenied_IsRed()
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.AccessDenied, default);
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.AccessDenied, default, false);
         Assert.Equal(PostureLevel.Red, v.Level);
         Assert.Equal(PostureReason.AccessDenied, v.Reason);
     }
@@ -131,7 +148,7 @@ public sealed class PostureEvaluatorTests
     [InlineData(SarApiResult.TransportError)]
     public void TransientFailures_AreRedUnreachable(SarApiResult result)
     {
-        PostureVerdict v = PostureEvaluator.Evaluate(result, default);
+        PostureVerdict v = PostureEvaluator.Evaluate(result, default, false);
         Assert.Equal(PostureLevel.Red, v.Level);
         Assert.Equal(PostureReason.ServiceUnreachable, v.Reason);
     }

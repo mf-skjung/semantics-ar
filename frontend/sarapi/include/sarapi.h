@@ -131,6 +131,8 @@ SARAPI_API sarapi_result_t __cdecl sarapi_whitelist_remove(const uint16_t *image
 #define SARAPI_EVENT_MODE_CHANGED      5u
 #define SARAPI_EVENT_WHITELIST_ADDED   6u
 #define SARAPI_EVENT_WHITELIST_REMOVED 7u
+#define SARAPI_EVENT_BLOCK_INJECTION   8u
+#define SARAPI_EVENT_EXEMPT_REVOKED    10u
 
 typedef struct {
     uint32_t valid;

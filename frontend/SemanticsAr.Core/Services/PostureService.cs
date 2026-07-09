@@ -13,6 +13,7 @@ public sealed class PostureService : IDisposable
     private PostureVerdict? _lastGood;
     private PostureVerdict? _current;
     private int _consecutiveTransientFailures;
+    private bool _auditAcknowledged;
 
     public PostureService(IPostureReader reader, int staleTolerance = 3)
     {
@@ -35,6 +36,21 @@ public sealed class PostureService : IDisposable
         }
     }
 
+    public bool AuditAcknowledged
+    {
+        get
+        {
+            lock (_gate)
+                return _auditAcknowledged;
+        }
+        set
+        {
+            lock (_gate)
+                _auditAcknowledged = value;
+            Poll();
+        }
+    }
+
     public void Start(TimeSpan interval)
     {
         lock (_gate)
@@ -53,7 +69,11 @@ public sealed class PostureService : IDisposable
 
     private PostureVerdict Resolve(SarApiResult result, in SarApiPosture posture)
     {
-        PostureVerdict verdict = PostureEvaluator.Evaluate(result, in posture);
+        bool acknowledged;
+        lock (_gate)
+            acknowledged = _auditAcknowledged;
+
+        PostureVerdict verdict = PostureEvaluator.Evaluate(result, in posture, acknowledged);
 
         lock (_gate)
         {

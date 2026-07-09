@@ -10,4 +10,6 @@ public enum JournalEventClass
     ModeChanged = 5,
     WhitelistAdded = 6,
     WhitelistRemoved = 7,
+    BlockInjection = 8,
+    ExemptRevoked = 10,
 }

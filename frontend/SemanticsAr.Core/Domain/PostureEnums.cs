@@ -43,6 +43,7 @@ public enum PostureReason
 {
     Protected,
     AuditMode,
+    AuditAcknowledged,
     DriverDisconnected,
     ServiceNotRunning,
     ServiceUnreachable,
