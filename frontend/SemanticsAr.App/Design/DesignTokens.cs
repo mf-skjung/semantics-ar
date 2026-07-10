@@ -70,16 +70,12 @@ internal static class DesignTokens
 
     private static TokensDto Load()
     {
+        JsonSerializerOptions options = new() { PropertyNameCaseInsensitive = true };
         using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName)
             ?? throw new InvalidOperationException($"Embedded design tokens '{ResourceName}' were not found.");
-        return JsonSerializer.Deserialize<TokensDto>(stream, SerializerOptions)
+        return JsonSerializer.Deserialize<TokensDto>(stream, options)
             ?? throw new InvalidOperationException("Design tokens deserialized to null.");
     }
-
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
 
     private sealed class TokensDto
     {
