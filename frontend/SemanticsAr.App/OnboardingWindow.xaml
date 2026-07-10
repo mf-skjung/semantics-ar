@@ -1,0 +1,73 @@
+<ui:FluentWindow
+    x:Class="SemanticsAr.App.OnboardingWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:vm="clr-namespace:SemanticsAr.App.ViewModels"
+    d:DataContext="{d:DesignInstance Type=vm:OnboardingViewModel}"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Welcome to semantics-ar"
+    Width="560"
+    Height="440"
+    ResizeMode="NoResize"
+    WindowStartupLocation="CenterScreen"
+    WindowBackdropType="Mica"
+    ExtendsContentIntoTitleBar="True">
+
+    <ui:FluentWindow.Resources>
+        <BooleanToVisibilityConverter x:Key="B2V" />
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Welcome to semantics-ar" />
+
+        <Grid Grid.Row="1" Margin="28,8,28,0">
+            <StackPanel Visibility="{Binding ShowWelcome, Converter={StaticResource B2V}}">
+                <TextBlock FontSize="22" FontWeight="SemiBold" Text="You're protected — here's what to expect" />
+                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding PlatformPreempt}" />
+            </StackPanel>
+
+            <StackPanel Visibility="{Binding ShowAssets, Converter={StaticResource B2V}}">
+                <TextBlock FontSize="22" FontWeight="SemiBold" Text="Two ways your files come back" />
+                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding TwoAssets}" />
+                <TextBlock Margin="0,14,0,0" FontSize="12.5" Opacity="0.75" TextWrapping="Wrap" Text="{Binding CoverageLine}" />
+            </StackPanel>
+
+            <StackPanel Visibility="{Binding ShowMode, Converter={StaticResource B2V}}">
+                <TextBlock FontSize="22" FontWeight="SemiBold" Text="Starting in AUDIT" />
+                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding ModeIntro}" />
+                <TextBlock Margin="0,14,0,0" FontSize="12.5" Opacity="0.8" TextWrapping="Wrap" Text="{Binding EnforceFuture}" />
+            </StackPanel>
+
+            <StackPanel Visibility="{Binding ShowTray, Converter={StaticResource B2V}}">
+                <TextBlock FontSize="22" FontWeight="SemiBold" Text="Keep the verdict in view" />
+                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding TrayHelp}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="2" Margin="28,16,28,24">
+            <TextBlock VerticalAlignment="Center" FontSize="12" Opacity="0.7" Text="{Binding StepLabel}" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button
+                    Padding="16,8"
+                    Content="Back"
+                    Command="{Binding BackCommand}"
+                    Visibility="{Binding ShowBack, Converter={StaticResource B2V}}" />
+                <ui:Button
+                    Margin="8,0,0,0"
+                    Padding="16,8"
+                    Appearance="Primary"
+                    Content="{Binding PrimaryLabel}"
+                    Command="{Binding NextCommand}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

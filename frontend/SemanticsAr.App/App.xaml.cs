@@ -44,6 +44,9 @@ public partial class App : Application
         _window.Show();
         _posture.Start(TimeSpan.FromMilliseconds(1500));
         _journal.Start(TimeSpan.FromSeconds(2));
+
+        if (!OnboardingStore.IsCompleted())
+            new OnboardingWindow(new OnboardingViewModel()) { Owner = _window }.ShowDialog();
     }
 
     private void OnJournalEventReceived(object? sender, JournalEventArgs e)
