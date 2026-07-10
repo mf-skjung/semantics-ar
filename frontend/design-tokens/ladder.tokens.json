@@ -1,0 +1,13 @@
+{
+  "posture": {
+    "green":   { "light": "#0F7B0F", "dark": "#6CCB5F" },
+    "amber":   { "light": "#9D5D00", "dark": "#FCE100" },
+    "red":     { "light": "#C42B1C", "dark": "#FF99A4" },
+    "neutral": { "light": "#616161", "dark": "#9A9A9A" }
+  },
+  "ladder": {
+    "definitive":    { "label": "DEFINITIVE",    "gloss": "Verified reconstruction",  "accent": { "light": "#0E7C66", "dark": "#34D399" } },
+    "bounded":       { "label": "BOUNDED",        "gloss": "Stored copy, time-limited", "accent": { "light": "#B45309", "dark": "#FBBF24" } },
+    "unrecoverable": { "label": "UNRECOVERABLE",  "gloss": "Not recoverable",           "accent": { "light": "#57534E", "dark": "#A8A29E" } }
+  }
+}

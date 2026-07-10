@@ -2,9 +2,9 @@ using System.Windows.Controls;
 
 namespace SemanticsAr.App.Views;
 
-public partial class PlaceholderView : UserControl
+public partial class BudgetView : UserControl
 {
-    public PlaceholderView()
+    public BudgetView()
     {
         InitializeComponent();
     }

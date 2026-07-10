@@ -6,12 +6,11 @@ namespace SemanticsAr.App.ViewModels;
 
 public partial class RecoverableItemViewModel : ObservableObject
 {
-    public RecoverableItemViewModel(RecoverableItem model, RestoreDisposition disposition, string groupLabel, bool canOverwriteInPlace)
+    public RecoverableItemViewModel(RecoverableItem model, RestoreDisposition disposition, string groupLabel)
     {
         Model = model;
         Disposition = disposition;
         GroupLabel = groupLabel;
-        CanOverwriteInPlace = canOverwriteInPlace;
         _isSelected = disposition is RestoreDisposition.Additive or RestoreDisposition.DeletedSince;
     }
 
@@ -21,13 +20,8 @@ public partial class RecoverableItemViewModel : ObservableObject
 
     public string GroupLabel { get; }
 
-    public bool CanOverwriteInPlace { get; }
-
     [ObservableProperty]
     private bool _isSelected;
-
-    [ObservableProperty]
-    private bool _overwriteInPlace;
 
     public bool CanSelect => Disposition != RestoreDisposition.Blocked;
 
@@ -41,16 +35,16 @@ public partial class RecoverableItemViewModel : ObservableObject
     public string DisplayPath => Model.ProvenancePath;
 
     public string Detail => Model.Rung == CertaintyRung.Definitive
-        ? "The captured key restores the original in place — your file is replaced only after byte-for-byte verification, and left untouched if it cannot be verified."
+        ? "Verified reconstruction — the captured key rebuilds the original at its location, replaced only after byte-for-byte verification."
         : Disposition switch
         {
             RestoreDisposition.Additive =>
-                "Unchanged since it was captured — restored as a separate copy beside your current file.",
+                "Unchanged since the incident.",
             RestoreDisposition.DeletedSince =>
-                "Deleted since it was captured — restored in place as a new file.",
+                "Deleted since the incident — restored as a new file.",
             RestoreDisposition.ModifiedSince =>
-                "Changed since it was captured — restored beside your current file, keeping both.",
+                "Modified since the incident — restoring to its original location discards newer content.",
             _ =>
-                "A folder now occupies this path — it cannot be restored here.",
+                "A folder now occupies this path — it can't be restored to its original location.",
         };
 }

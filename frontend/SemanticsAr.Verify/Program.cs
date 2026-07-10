@@ -114,9 +114,11 @@ if (session.State == RecoverySessionState.Browsing)
         }
         else
         {
+            string folderRoot = RestorePlanner.DefaultFolderRoot(DateTimeOffset.Now);
             try
             {
-                target = RestorePlanner.SideBySidePath(first.ProvenancePath, DateTimeOffset.Now, reserved, probe);
+                System.IO.Directory.CreateDirectory(folderRoot);
+                target = RestorePlanner.FolderTargetPath(folderRoot, first.ProvenancePath, reserved, probe);
             }
             catch
             {

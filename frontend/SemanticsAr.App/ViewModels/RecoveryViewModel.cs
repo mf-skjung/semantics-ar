@@ -39,7 +39,17 @@ public partial class RecoveryViewModel : ObservableObject
     private string _summary = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FolderModeChosen))]
+    private RestoreDestination _destination = RestoreDestination.OriginalLocations;
+
+    [ObservableProperty]
     private string _unavailableText = string.Empty;
+
+    public bool FolderModeChosen => Destination == RestoreDestination.CopyToFolder;
+
+    public string FolderHint =>
+        $"Copies go to {RestorePlanner.DefaultFolderRoot(DateTimeOffset.Now)} — your originals are never touched. "
+        + "Verified reconstructions (DEFINITIVE) restore to their original location only and are left out of a folder copy.";
 
     public RecoveryViewModel(PostureService posture, Func<IElevatedControlChannel> channelFactory)
     {
@@ -141,31 +151,37 @@ public partial class RecoveryViewModel : ObservableObject
         try
         {
             HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
-            DateTimeOffset now = DateTimeOffset.Now;
+            string folderRoot = RestorePlanner.DefaultFolderRoot(DateTimeOffset.Now);
             List<RestoreRequest> plan = new();
             List<RecoveryOutcome> unplannable = new();
 
             foreach (RecoverableItemViewModel item in PreviewItems)
             {
-                if (item.Disposition == RestoreDisposition.Blocked)
+                switch (RestorePlanner.Decide(item.Model.Rung, item.Disposition, Destination))
                 {
-                    unplannable.Add(new RecoveryOutcome(item.Model, RecoveryOutcomeKind.ChannelError, 0, ElevatedError.Unknown));
-                    continue;
-                }
+                    case PlanDecision.InPlace:
+                        plan.Add(new RestoreRequest(item.Model, item.Model.ProvenancePath));
+                        break;
 
-                try
-                {
-                    bool inPlace = item.Model.Rung == CertaintyRung.Definitive
-                        || item.Disposition == RestoreDisposition.DeletedSince
-                        || (item.OverwriteInPlace && item.CanOverwriteInPlace);
-                    string target = inPlace
-                        ? item.Model.ProvenancePath
-                        : RestorePlanner.SideBySidePath(item.Model.ProvenancePath, now, reserved, _probe);
-                    plan.Add(new RestoreRequest(item.Model, target));
-                }
-                catch (Exception ex) when (ex is PathTooLongException or ArgumentException)
-                {
-                    unplannable.Add(new RecoveryOutcome(item.Model, RecoveryOutcomeKind.ChannelError, 0, ElevatedError.Unknown));
+                    case PlanDecision.ToFolder:
+                        try
+                        {
+                            string target = RestorePlanner.FolderTargetPath(folderRoot, item.Model.ProvenancePath, reserved, _probe);
+                            plan.Add(new RestoreRequest(item.Model, target));
+                        }
+                        catch (Exception ex) when (ex is PathTooLongException or ArgumentException)
+                        {
+                            unplannable.Add(Decline(item.Model, RecoveryDeclineReason.PathUnavailable));
+                        }
+                        break;
+
+                    case PlanDecision.DeclineDefinitiveFolder:
+                        unplannable.Add(Decline(item.Model, RecoveryDeclineReason.DefinitiveFolderOnly));
+                        break;
+
+                    case PlanDecision.DeclineBlocked:
+                        unplannable.Add(Decline(item.Model, RecoveryDeclineReason.PathBlocked));
+                        break;
                 }
             }
 
@@ -176,7 +192,7 @@ public partial class RecoveryViewModel : ObservableObject
             if (executed && _session.State == RecoverySessionState.Browsing)
                 return;
 
-            if (_session.State == RecoverySessionState.Unavailable)
+            if (executed && _session.State == RecoverySessionState.Unavailable)
             {
                 UnavailableText = DescribeError(_session.LastError);
                 Stage = RecoveryStage.Unavailable;
@@ -257,13 +273,12 @@ public partial class RecoveryViewModel : ObservableObject
 
     private RecoverableItemViewModel MakeItem(RecoverableItem model, string label)
     {
-        FileState state = _probe.Probe(model.ProvenancePath);
-        RestoreDisposition disposition = RestorePlanner.Classify(model, state);
-        bool allowInPlace = model.Rung == CertaintyRung.Bounded
-            && (disposition is RestoreDisposition.Additive or RestoreDisposition.ModifiedSince)
-            && !state.IsReparsePoint;
-        return new RecoverableItemViewModel(model, disposition, label, allowInPlace);
+        RestoreDisposition disposition = RestorePlanner.Classify(model, _probe);
+        return new RecoverableItemViewModel(model, disposition, label);
     }
+
+    private static RecoveryOutcome Decline(RecoverableItem item, RecoveryDeclineReason reason) =>
+        new(item, RecoveryOutcomeKind.DeclinedLeftIntact, 0, ElevatedError.None) { DeclineReason = reason };
 
     private static string BuildSummary(PostureVerdict? verdict)
     {

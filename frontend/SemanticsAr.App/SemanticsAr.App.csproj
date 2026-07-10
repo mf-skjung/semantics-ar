@@ -30,6 +30,12 @@
     <ProjectReference Include="..\SemanticsAr.Core\SemanticsAr.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\design-tokens\ladder.tokens.json">
+      <LogicalName>SemanticsAr.App.ladder.tokens.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <PropertyGroup>
     <SarApiDll>$(MSBuildProjectDirectory)\..\..\build_fe\frontend\sarapi\Release\sarapi.dll</SarApiDll>
   </PropertyGroup>

@@ -20,8 +20,8 @@
         <DataTemplate DataType="{x:Type vm:RecoveryViewModel}">
             <views:RecoveryView />
         </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
-            <views:PlaceholderView />
+        <DataTemplate DataType="{x:Type vm:BudgetViewModel}">
+            <views:BudgetView />
         </DataTemplate>
     </ui:FluentWindow.Resources>
 
@@ -39,21 +39,37 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <ListBox
-                Grid.Column="0"
-                Margin="8"
-                ItemsSource="{Binding Surfaces}"
-                SelectedItem="{Binding SelectedSurface}"
-                AutomationProperties.Name="Surfaces">
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <TextBlock
-                            Margin="6,10"
-                            FontSize="15"
-                            Text="{Binding Name}" />
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+            <DockPanel Grid.Column="0" Margin="8">
+                <Border
+                    DockPanel.Dock="Bottom"
+                    Margin="6,12,6,4"
+                    Padding="10,5"
+                    HorizontalAlignment="Left"
+                    CornerRadius="999"
+                    BorderThickness="1"
+                    BorderBrush="{DynamicResource Status.Neutral.Brush}"
+                    ToolTip="Protection mode (read-only here)"
+                    AutomationProperties.Name="{Binding ModeLabel}">
+                    <TextBlock
+                        FontSize="11"
+                        FontWeight="SemiBold"
+                        Foreground="{DynamicResource Status.Neutral.Brush}"
+                        Text="{Binding ModeLabel}" />
+                </Border>
+                <ListBox
+                    ItemsSource="{Binding Surfaces}"
+                    SelectedItem="{Binding SelectedSurface}"
+                    AutomationProperties.Name="Surfaces">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock
+                                Margin="6,10"
+                                FontSize="15"
+                                Text="{Binding Name}" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
 
             <ContentControl
                 Grid.Column="1"

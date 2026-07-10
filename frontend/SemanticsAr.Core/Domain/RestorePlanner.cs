@@ -11,6 +11,20 @@ public enum RestoreDisposition
     Blocked,
 }
 
+public enum RestoreDestination
+{
+    OriginalLocations,
+    CopyToFolder,
+}
+
+public enum PlanDecision
+{
+    InPlace,
+    ToFolder,
+    DeclineDefinitiveFolder,
+    DeclineBlocked,
+}
+
 public readonly record struct FileState(bool Exists, bool IsDirectory, bool IsReparsePoint, bool Accessible, DateTimeOffset LastWriteUtc);
 
 public interface IFileProbe
@@ -25,15 +39,12 @@ public static class RestorePlanner
     public static string ToWin32(string ntPath) =>
         ntPath.StartsWith('\\') ? GlobalRootPrefix + ntPath : ntPath;
 
-    public static DateTimeOffset? Anchor(ulong fileTime)
-    {
-        if (fileTime == 0 || fileTime > (ulong)long.MaxValue)
-            return null;
-        long ft = (long)fileTime;
-        return ft <= DateTimeOffset.MaxValue.ToFileTime()
-            ? DateTimeOffset.FromFileTime(ft)
-            : null;
-    }
+    private const long MaxFileTime = 2650467743999999999;
+
+    public static DateTimeOffset? Anchor(ulong fileTime) =>
+        fileTime is 0 or > (ulong)MaxFileTime
+            ? null
+            : new DateTimeOffset(DateTime.FromFileTimeUtc((long)fileTime));
 
     public static RestoreDisposition Classify(RecoverableItem item, IFileProbe probe) =>
         Classify(item, probe.Probe(item.ProvenancePath));
@@ -51,28 +62,48 @@ public static class RestorePlanner
             : RestoreDisposition.ModifiedSince;
     }
 
-    public static string SideBySidePath(string ntPath, DateTimeOffset when, ISet<string> reserved, IFileProbe probe)
+    public static PlanDecision Decide(CertaintyRung rung, RestoreDisposition disposition, RestoreDestination destination)
+    {
+        if (destination == RestoreDestination.CopyToFolder)
+            return rung == CertaintyRung.Definitive
+                ? PlanDecision.DeclineDefinitiveFolder
+                : PlanDecision.ToFolder;
+
+        return disposition == RestoreDisposition.Blocked
+            ? PlanDecision.DeclineBlocked
+            : PlanDecision.InPlace;
+    }
+
+    public static string DefaultFolderRoot(DateTimeOffset when) =>
+        $@"C:\Recovered\{when.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}";
+
+    public static string FolderTargetPath(string folderRoot, string provenancePath, ISet<string> reserved, IFileProbe probe)
     {
         const int max = 259;
-        int cut = ntPath.LastIndexOf('\\');
-        if (cut <= 0 || cut == ntPath.Length - 1)
-            throw new ArgumentException(ntPath, nameof(ntPath));
+        int cut = provenancePath.LastIndexOf('\\');
+        string leaf = cut >= 0 ? provenancePath[(cut + 1)..] : provenancePath;
+        if (leaf.Length == 0)
+            throw new ArgumentException($"Not a file path: '{provenancePath}'", nameof(provenancePath));
 
-        string dir = ntPath[..cut];
-        string leaf = ntPath[(cut + 1)..];
         int dot = leaf.LastIndexOf('.');
         string name = dot > 0 ? leaf[..dot] : leaf;
         string ext = dot > 0 ? leaf[dot..] : string.Empty;
-        string stamp = when.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
 
         for (int n = 0; ; n++)
         {
-            string suffix = (n == 0 ? $"_RESTORED_{stamp}" : $"_RESTORED_{stamp}({n})") + ext;
-            int budget = max - dir.Length - 1 - suffix.Length;
+            string suffix = (n == 0 ? string.Empty : $" ({n})") + ext;
+            int budget = max - folderRoot.Length - 1 - suffix.Length;
             if (budget < 1)
-                throw new PathTooLongException(ntPath);
-            string trimmed = name.Length > budget ? name[..budget] : name;
-            string candidate = $"{dir}\\{trimmed}{suffix}";
+                throw new PathTooLongException(folderRoot);
+            string trimmed = name;
+            if (name.Length > budget)
+            {
+                int take = budget;
+                if (char.IsHighSurrogate(name[take - 1]))
+                    take--;
+                trimmed = name[..take];
+            }
+            string candidate = $@"{folderRoot}\{trimmed}{suffix}";
             if (!probe.Probe(candidate).Exists && reserved.Add(candidate))
                 return candidate;
         }

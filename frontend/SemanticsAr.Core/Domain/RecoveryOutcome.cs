@@ -7,6 +7,14 @@ public enum RecoveryOutcomeKind
     ChannelError,
 }
 
+public enum RecoveryDeclineReason
+{
+    None,
+    DefinitiveFolderOnly,
+    PathBlocked,
+    PathUnavailable,
+}
+
 public sealed record RecoveryOutcome(
     RecoverableItem Item,
     RecoveryOutcomeKind Kind,
@@ -14,4 +22,6 @@ public sealed record RecoveryOutcome(
     ElevatedError Error)
 {
     public string TargetPath { get; init; } = string.Empty;
+
+    public RecoveryDeclineReason DeclineReason { get; init; } = RecoveryDeclineReason.None;
 }

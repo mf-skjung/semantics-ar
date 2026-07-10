@@ -46,6 +46,13 @@ public sealed class RestorePlannerTests
     }
 
     [Fact]
+    public void Anchor_MaxRimFileTime_AbsorbsInsteadOfThrowing()
+    {
+        Assert.NotNull(RestorePlanner.Anchor(2650467743999999999UL));
+        Assert.Null(RestorePlanner.Anchor(2650467744000000000UL));
+    }
+
+    [Fact]
     public void Classify_UnchangedSinceCapture_IsAdditive()
     {
         FakeProbe probe = new FakeProbe().Set(@"\Device\v\a.txt",
@@ -108,62 +115,82 @@ public sealed class RestorePlannerTests
     }
 
     [Fact]
-    public void SideBySide_InsertsStampBeforeExtension()
+    public void DefaultFolderRoot_IsDatedRecoveredFolder()
     {
-        FakeProbe probe = new();
-        HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
-        string path = RestorePlanner.SideBySidePath(@"\Device\v\docs\a.txt", Anchor, reserved, probe);
-        Assert.Equal(@"\Device\v\docs\a_RESTORED_20260701_000000.txt", path);
+        Assert.Equal(@"C:\Recovered\2026-07-01", RestorePlanner.DefaultFolderRoot(Anchor));
+    }
+
+    [Theory]
+    [InlineData(CertaintyRung.Definitive, RestoreDisposition.Additive, RestoreDestination.OriginalLocations, PlanDecision.InPlace)]
+    [InlineData(CertaintyRung.Bounded, RestoreDisposition.Additive, RestoreDestination.OriginalLocations, PlanDecision.InPlace)]
+    [InlineData(CertaintyRung.Bounded, RestoreDisposition.Blocked, RestoreDestination.OriginalLocations, PlanDecision.DeclineBlocked)]
+    [InlineData(CertaintyRung.Bounded, RestoreDisposition.ModifiedSince, RestoreDestination.CopyToFolder, PlanDecision.ToFolder)]
+    [InlineData(CertaintyRung.Bounded, RestoreDisposition.Blocked, RestoreDestination.CopyToFolder, PlanDecision.ToFolder)]
+    [InlineData(CertaintyRung.Definitive, RestoreDisposition.Additive, RestoreDestination.CopyToFolder, PlanDecision.DeclineDefinitiveFolder)]
+    public void Decide_ResolvesDestinationAndBackendLimits(
+        CertaintyRung rung, RestoreDisposition disposition, RestoreDestination destination, PlanDecision expected)
+    {
+        Assert.Equal(expected, RestorePlanner.Decide(rung, disposition, destination));
     }
 
     [Fact]
-    public void SideBySide_SameSecondCollision_Uniquifies()
+    public void FolderTarget_FlattensLeafUnderFolderRoot()
     {
         FakeProbe probe = new();
         HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
-        string first = RestorePlanner.SideBySidePath(@"\Device\v\a.txt", Anchor, reserved, probe);
-        string second = RestorePlanner.SideBySidePath(@"\Device\v\a.txt", Anchor, reserved, probe);
-        Assert.NotEqual(first, second);
-        Assert.EndsWith(@"(1).txt", second);
+        string path = RestorePlanner.FolderTargetPath(@"C:\Recovered\2026-07-01", @"\Device\v\docs\a.txt", reserved, probe);
+        Assert.Equal(@"C:\Recovered\2026-07-01\a.txt", path);
     }
 
     [Fact]
-    public void SideBySide_ExistingTargetOnDisk_Uniquifies()
+    public void FolderTarget_SameLeafCollision_Uniquifies()
     {
-        FakeProbe probe = new FakeProbe().Set(@"\Device\v\a_RESTORED_20260701_000000.txt",
+        FakeProbe probe = new();
+        HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
+        string first = RestorePlanner.FolderTargetPath(@"C:\Recovered\d", @"\Device\v\one\a.txt", reserved, probe);
+        string second = RestorePlanner.FolderTargetPath(@"C:\Recovered\d", @"\Device\v\two\a.txt", reserved, probe);
+        Assert.Equal(@"C:\Recovered\d\a.txt", first);
+        Assert.Equal(@"C:\Recovered\d\a (1).txt", second);
+    }
+
+    [Fact]
+    public void FolderTarget_ExistingTargetOnDisk_Uniquifies()
+    {
+        FakeProbe probe = new FakeProbe().Set(@"C:\Recovered\d\a.txt",
             new FileState(true, false, false, true, default));
         HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
-        string path = RestorePlanner.SideBySidePath(@"\Device\v\a.txt", Anchor, reserved, probe);
-        Assert.EndsWith(@"(1).txt", path);
+        string path = RestorePlanner.FolderTargetPath(@"C:\Recovered\d", @"\Device\v\a.txt", reserved, probe);
+        Assert.Equal(@"C:\Recovered\d\a (1).txt", path);
     }
 
     [Fact]
-    public void SideBySide_NoExtension_AppendsSuffix()
+    public void FolderTarget_NoExtension_UniquifiesWithoutDot()
     {
         FakeProbe probe = new();
         HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
-        string path = RestorePlanner.SideBySidePath(@"\Device\v\README", Anchor, reserved, probe);
-        Assert.Equal(@"\Device\v\README_RESTORED_20260701_000000", path);
+        string first = RestorePlanner.FolderTargetPath(@"C:\Recovered\d", @"\Device\v\README", reserved, probe);
+        string second = RestorePlanner.FolderTargetPath(@"C:\Recovered\d", @"\Device\v\sub\README", reserved, probe);
+        Assert.Equal(@"C:\Recovered\d\README", first);
+        Assert.Equal(@"C:\Recovered\d\README (1)", second);
     }
 
     [Fact]
-    public void SideBySide_LongPath_TrimsNameToBudget()
-    {
-        FakeProbe probe = new();
-        HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
-        string dir = @"\Device\HarddiskVolume3\" + new string('d', 180);
-        string original = dir + @"\" + new string('n', 60) + ".txt";
-        string path = RestorePlanner.SideBySidePath(original, Anchor, reserved, probe);
-        Assert.True(path.Length <= 259);
-        Assert.Contains("_RESTORED_20260701_000000.txt", path);
-    }
-
-    [Fact]
-    public void SideBySide_RootlessPath_Throws()
+    public void FolderTarget_TrailingSeparator_Throws()
     {
         FakeProbe probe = new();
         HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
         Assert.Throws<ArgumentException>(() =>
-            RestorePlanner.SideBySidePath("a.txt", Anchor, reserved, probe));
+            RestorePlanner.FolderTargetPath(@"C:\Recovered\d", @"\Device\v\docs\", reserved, probe));
+    }
+
+    [Fact]
+    public void FolderTarget_LongLeaf_TrimsNameToBudget()
+    {
+        FakeProbe probe = new();
+        HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
+        string original = @"\Device\v\" + new string('n', 300) + ".txt";
+        string path = RestorePlanner.FolderTargetPath(@"C:\Recovered\2026-07-01", original, reserved, probe);
+        Assert.True(path.Length <= 259);
+        Assert.EndsWith(".txt", path);
     }
 }

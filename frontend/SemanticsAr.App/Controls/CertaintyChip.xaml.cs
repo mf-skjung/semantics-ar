@@ -1,7 +1,8 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Media;
+using System.Windows.Shapes;
+using SemanticsAr.App.Design;
 
 namespace SemanticsAr.App.Controls;
 
@@ -39,21 +40,19 @@ public partial class CertaintyChip : UserControl
 
     private void Update()
     {
-        (string glyph, string label, string brushKey) = Rung switch
+        string glyph = Rung switch
         {
-            CertaintyRung.Definitive => ("✓", "Definitive", "Status.Green.Brush"),
-            CertaintyRung.Bounded => ("⌛", "Bounded", "Status.Amber.Brush"),
-            _ => ("∅", "Unrecoverable", "Status.Neutral.Brush"),
+            CertaintyRung.Definitive => "✓",
+            CertaintyRung.Bounded => "⌛",
+            _ => "∅",
         };
 
+        RungToken token = DesignTokens.Rung(Rung);
         GlyphText.Text = glyph;
-        LabelText.Text = label;
-        AutomationProperties.SetName(ChipBorder, label);
+        LabelText.Text = token.Label;
+        AutomationProperties.SetName(ChipBorder, token.Label);
 
-        if (Application.Current?.Resources[brushKey] is Brush brush)
-        {
-            AccentDot.Fill = brush;
-            ChipBorder.BorderBrush = brush;
-        }
+        AccentDot.SetResourceReference(Shape.FillProperty, token.BrushKey);
+        ChipBorder.SetResourceReference(Border.BorderBrushProperty, token.BrushKey);
     }
 }

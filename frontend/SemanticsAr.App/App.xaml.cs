@@ -26,7 +26,7 @@ public partial class App : Application
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
         ApplicationThemeManager.ApplySystemTheme();
-        ThemePalette.Install();
+        DesignTokens.Install();
 
         _startedAt = DateTimeOffset.UtcNow;
         _posture = new PostureService(new NativePostureReader());
