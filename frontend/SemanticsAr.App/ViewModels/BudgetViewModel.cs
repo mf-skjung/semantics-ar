@@ -1,5 +1,5 @@
-using System.Globalization;
-using System.Windows;
+using System.Collections.ObjectModel;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SemanticsAr.Core.Domain;
@@ -16,6 +16,10 @@ public enum BudgetStage
 
 public partial class BudgetViewModel : ObservableObject
 {
+    private const double TrendWidth = 560;
+    private const double TrendHeight = 64;
+    private const double TrendPad = 6;
+
     private readonly Func<IElevatedControlChannel> _channelFactory;
     private BudgetSession? _session;
     private bool _busy;
@@ -24,13 +28,17 @@ public partial class BudgetViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowPreElevation))]
     [NotifyPropertyChangedFor(nameof(ShowLoaded))]
     [NotifyPropertyChangedFor(nameof(ShowUnavailable))]
+    [NotifyPropertyChangedFor(nameof(ShowApps))]
     private BudgetStage _stage = BudgetStage.PreElevation;
+
+    [ObservableProperty]
+    private BudgetRange _selectedRange = BudgetRange.Last7Days;
 
     [ObservableProperty]
     private string _achievedWindowText = string.Empty;
 
     [ObservableProperty]
-    private string _cacheText = string.Empty;
+    private string _heldText = string.Empty;
 
     [ObservableProperty]
     private string _oldestText = string.Empty;
@@ -38,10 +46,23 @@ public partial class BudgetViewModel : ObservableObject
     [ObservableProperty]
     private string _unavailableText = string.Empty;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowApps))]
+    private bool _isEmpty;
+
+    [ObservableProperty]
+    private string _emptyText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowTrend))]
+    private PointCollection _trendPoints = new();
+
     public BudgetViewModel(Func<IElevatedControlChannel> channelFactory)
     {
         _channelFactory = channelFactory;
     }
+
+    public ObservableCollection<AppImpactRowViewModel> Apps { get; } = new();
 
     public string Summary =>
         "How far back you can restore, and which activity is spending that window. "
@@ -51,6 +72,8 @@ public partial class BudgetViewModel : ObservableObject
     public bool ShowPreElevation => Stage == BudgetStage.PreElevation;
     public bool ShowLoaded => Stage == BudgetStage.Loaded;
     public bool ShowUnavailable => Stage == BudgetStage.Unavailable;
+    public bool ShowApps => Stage == BudgetStage.Loaded && !IsEmpty;
+    public bool ShowTrend => TrendPoints.Count > 1;
 
     [RelayCommand]
     private void Begin()
@@ -79,11 +102,21 @@ public partial class BudgetViewModel : ObservableObject
 
         _session?.Close();
         _session = null;
+        Apps.Clear();
+        TrendPoints = new();
         AchievedWindowText = string.Empty;
-        CacheText = string.Empty;
+        HeldText = string.Empty;
         OldestText = string.Empty;
         UnavailableText = string.Empty;
+        EmptyText = string.Empty;
+        IsEmpty = false;
         Stage = BudgetStage.PreElevation;
+    }
+
+    partial void OnSelectedRangeChanged(BudgetRange value)
+    {
+        if (_session?.State == BudgetSessionState.Loaded)
+            Recompute();
     }
 
     private void SyncFromSession()
@@ -96,13 +129,13 @@ public partial class BudgetViewModel : ObservableObject
 
         switch (_session.State)
         {
-            case BudgetSessionState.Loaded when _session.Snapshot is { } snapshot:
-                Apply(snapshot);
+            case BudgetSessionState.Loaded:
+                Recompute();
                 Stage = BudgetStage.Loaded;
                 break;
 
             case BudgetSessionState.Unavailable:
-                UnavailableText = DescribeError(_session.LastError);
+                UnavailableText = ElevatedErrorText.Describe(_session.LastError, "read your recovery budget");
                 Stage = BudgetStage.Unavailable;
                 break;
 
@@ -112,53 +145,54 @@ public partial class BudgetViewModel : ObservableObject
         }
     }
 
-    private static readonly string[] ByteUnits = ["bytes", "KB", "MB", "GB", "TB"];
-
-    private void Apply(BudgetSnapshot snapshot)
+    private void Recompute()
     {
-        AchievedWindowText = snapshot.AchievedWindow(DateTimeOffset.Now) is { } window
-            ? DescribeWindow(window)
-            : snapshot.CopyCount > 0
-                ? "Recovery window unknown — kept copies carry no readable capture time yet."
-                : "No kept copies are standing by yet.";
+        if (_session is null)
+            return;
 
-        CacheText = snapshot.CopyCount == 1
-            ? $"1 kept copy · {DescribeBytes(snapshot.CopyBytes)} held"
-            : $"{snapshot.CopyCount:N0} kept copies · {DescribeBytes(snapshot.CopyBytes)} held";
+        BudgetAttribution attribution = _session.Compute(SelectedRange, DateTimeOffset.Now);
 
-        OldestText = snapshot.OldestCopy is { } oldest
+        IsEmpty = attribution.Apps.Count == 0;
+        EmptyText = attribution.TotalCopyCount == 0
+            ? "No kept copies are standing by yet. When apps replace read originals, the copies held for you will show up here, grouped by the app that caused them."
+            : "No attributed activity in this range. Widen the range to see older kept copies.";
+
+        AchievedWindowText = attribution.AchievedWindow is { } window
+            ? BudgetFormat.Days(window)
+            : attribution.TotalCopyCount > 0
+                ? "unknown — kept copies carry no readable capture time yet"
+                : "no kept copies yet";
+
+        HeldText = $"{BudgetFormat.Copies(attribution.TotalCopyCount)} · {BudgetFormat.Bytes(attribution.TotalBytes)} held";
+
+        OldestText = attribution.OldestCopy is { } oldest
             ? $"Oldest kept copy: {oldest.LocalDateTime:MMM d, yyyy}"
             : string.Empty;
+
+        Apps.Clear();
+        foreach (AppImpact impact in attribution.Apps)
+            Apps.Add(new AppImpactRowViewModel(impact, attribution.AchievedWindow, attribution.Range));
+
+        TrendPoints = BuildTrend(attribution.Trend);
     }
 
-    private static string DescribeWindow(TimeSpan window)
+    private static PointCollection BuildTrend(IReadOnlyList<TrendPoint> trend)
     {
-        if (window < TimeSpan.Zero)
-            window = TimeSpan.Zero;
-        double days = window.TotalDays;
-        if (days < 1)
-            return "less than a day";
-        long whole = (long)Math.Round(days);
-        return whole == 1 ? "about 1 day" : $"about {whole} days";
-    }
+        ulong max = 0;
+        foreach (TrendPoint point in trend)
+            max = Math.Max(max, point.Bytes);
+        if (max == 0 || trend.Count < 2)
+            return new PointCollection();
 
-    private static string DescribeBytes(ulong bytes)
-    {
-        double value = bytes;
-        int unit = 0;
-        while (unit < ByteUnits.Length - 1
-            && Math.Round(value, unit == 0 ? 0 : 1, MidpointRounding.AwayFromZero) >= 1024)
+        PointCollection points = new(trend.Count);
+        double usable = TrendHeight - 2 * TrendPad;
+        for (int i = 0; i < trend.Count; i++)
         {
-            value /= 1024;
-            unit++;
+            double x = i / (double)(trend.Count - 1) * TrendWidth;
+            double y = TrendPad + (1 - trend[i].Bytes / (double)max) * usable;
+            points.Add(new System.Windows.Point(x, y));
         }
-
-        string number = unit == 0
-            ? value.ToString("N0", CultureInfo.CurrentCulture)
-            : value.ToString("N1", CultureInfo.CurrentCulture);
-        return $"{number} {ByteUnits[unit]}";
+        points.Freeze();
+        return points;
     }
-
-    private static string DescribeError(ElevatedError error) =>
-        ElevatedErrorText.Describe(error, "read your recovery budget");
 }

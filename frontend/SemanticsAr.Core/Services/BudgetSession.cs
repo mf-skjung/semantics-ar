@@ -22,7 +22,9 @@ public sealed class BudgetSession
 
     public BudgetSessionState State { get; private set; } = BudgetSessionState.Idle;
 
-    public BudgetSnapshot? Snapshot { get; private set; }
+    public IReadOnlyList<RecoverableItem> Preserved { get; private set; } = Array.Empty<RecoverableItem>();
+
+    public IReadOnlyList<AppIdentity> Identities { get; private set; } = Array.Empty<AppIdentity>();
 
     public ElevatedError LastError { get; private set; }
 
@@ -33,7 +35,8 @@ public sealed class BudgetSession
 
         State = BudgetSessionState.Elevating;
         LastError = ElevatedError.None;
-        Snapshot = null;
+        Preserved = Array.Empty<RecoverableItem>();
+        Identities = Array.Empty<AppIdentity>();
 
         IElevatedControlChannel channel;
         try
@@ -58,22 +61,34 @@ public sealed class BudgetSession
 
         using (channel)
         {
-            ElevatedError err = channel.LoadPreserved(out IReadOnlyList<RecoverableItem> preserved);
-            if (err != ElevatedError.None)
+            ElevatedError preservedErr = channel.LoadPreserved(out IReadOnlyList<RecoverableItem> preserved);
+            if (preservedErr != ElevatedError.None)
             {
-                Fail(err);
+                Fail(preservedErr);
                 return;
             }
 
-            Snapshot = BudgetSnapshot.FromPreserve(preserved);
+            ElevatedError identityErr = channel.LoadAppIdentities(out IReadOnlyList<AppIdentity> identities);
+            if (identityErr != ElevatedError.None)
+            {
+                Fail(identityErr);
+                return;
+            }
+
+            Preserved = preserved;
+            Identities = identities;
         }
 
         State = BudgetSessionState.Loaded;
     }
 
+    public BudgetAttribution Compute(BudgetRange range, DateTimeOffset now) =>
+        BudgetAttribution.Build(Preserved, Identities, range, now);
+
     public void Close()
     {
-        Snapshot = null;
+        Preserved = Array.Empty<RecoverableItem>();
+        Identities = Array.Empty<AppIdentity>();
         LastError = ElevatedError.None;
         State = BudgetSessionState.Idle;
     }
