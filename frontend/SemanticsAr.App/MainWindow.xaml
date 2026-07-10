@@ -40,22 +40,30 @@
             </Grid.ColumnDefinitions>
 
             <DockPanel Grid.Column="0" Margin="8">
-                <Border
+                <Button
                     DockPanel.Dock="Bottom"
                     Margin="6,12,6,4"
-                    Padding="10,5"
+                    Padding="0"
                     HorizontalAlignment="Left"
-                    CornerRadius="999"
-                    BorderThickness="1"
-                    BorderBrush="{DynamicResource Status.Neutral.Brush}"
-                    ToolTip="Protection mode (read-only here)"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    Cursor="Hand"
+                    Click="ModeChip_Click"
+                    IsEnabled="{Binding CanSwitchMode}"
+                    ToolTip="Change protection mode"
                     AutomationProperties.Name="{Binding ModeLabel}">
-                    <TextBlock
-                        FontSize="11"
-                        FontWeight="SemiBold"
-                        Foreground="{DynamicResource Status.Neutral.Brush}"
-                        Text="{Binding ModeLabel}" />
-                </Border>
+                    <Border
+                        Padding="10,5"
+                        CornerRadius="999"
+                        BorderThickness="1"
+                        BorderBrush="{DynamicResource Status.Neutral.Brush}">
+                        <TextBlock
+                            FontSize="11"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource Status.Neutral.Brush}"
+                            Text="{Binding ModeLabel}" />
+                    </Border>
+                </Button>
                 <ListBox
                     ItemsSource="{Binding Surfaces}"
                     SelectedItem="{Binding SelectedSurface}"
