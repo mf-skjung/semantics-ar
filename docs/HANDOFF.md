@@ -159,7 +159,60 @@ X.3 anchor — now asserts match) and de-duplicated the interpreter predicate ou
 
 ## §5 What REMAINS (next tasks)
 
-### 5.A [NEXT — recommended] XII.3 integrity-halt posture flag (backend + frontend, VM re-verify)
+### 5.A [TOP PRIORITY — do first] Self-protection over-match defect + make the live GUI run on the VM
+
+Two coupled blockers found this session while trying to run the WPF app against the LIVE driver/
+service on the VM. **The host renders the app fine, but the host has no driver/service, so it is NOT
+a valid test — the app MUST run against the live engine on the VM with real posture/budget/exemption
+data.** Both must be fixed.
+
+**(1) Self-protection over-match — `driver/operations.c:230` `SarNameIsOwnStore`.**
+The driver protects its on-disk store (`\SystemRoot\System32\drivers\SemanticsAr\`, keystore +
+preserve data — Const. VII, store must be tamper-proof). It identifies "own store" files by a **bare
+case-insensitive substring search for `L"SemanticsAr"` anywhere in the file path** (sets
+`SAR_STREAMCTX_FLAG_OWN_STORE` at `operations.c:507-510`; `SarTargetIsProtectedStore` reads it at
+`:563`; create/write/setinfo callbacks block on it at `:659/722/865`). This is **too broad**: any
+file whose *name* contains "SemanticsAr" — including the product's OWN frontend binaries
+`SemanticsAr.App.exe`, `SemanticsAr.Core.dll`, `SemanticsArElevationHost.exe`,
+`SemanticsArElevation.tlb` — is treated as the protected store and made **unwritable anywhere on disk
+while the driver is loaded**. Consequences: the product's own frontend can't be installed/updated
+while the driver runs (a real installer would be blocked); any unrelated file a user names
+`SemanticsAr*` is silently write-blocked and the product's presence leaks. Repro: with the driver
+loaded, copying `SemanticsAr.App.exe` yields 0 bytes / access-denied, while `zzz.exe`/`sarapi.dll`
+copy fine; unload the driver → all copy fine.
+**Fix:** anchor `SarNameIsOwnStore` to the actual store LOCATION — match the store directory prefix
+(`...\System32\drivers\SemanticsAr\`) or require "SemanticsAr" to appear as a path COMPONENT under
+the drivers directory, not a bare substring — so it protects only the real store. Driver change → VM
+re-verify (regression must stay 29/0/1; add a probe asserting that writing `C:\...\SemanticsAr.App.exe`
+SUCCEEDS while the store dir stays write-protected). Interim deploy workaround used this session:
+`fltmc unload semantics_ar` → copy the app → `fltmc load semantics_ar` → restart the service.
+
+**(2) The WPF window does not render on the VM (Hyper-V) — only on the host.**
+Same binary: on the host the window shows normally (`MainWindowHandle` valid, title "semantics-ar");
+on the VM the process runs but `MainWindowHandle=0`, no window, **no crash** (it does not crash — the
+process stays alive because `ShutdownMode=OnExplicitShutdown`, so there is no window and no error).
+Cause is graphics/session, not code: the app uses WPF-UI `FluentWindow` + **Mica backdrop**
+(`MainWindow.xaml` `WindowBackdropType="Mica"`), which needs DWM/GPU composition; the Hyper-V VM
+(basic display, no GPU) + enhanced-session desktop can't create the Mica window. VM session layout to
+know: console = session 1 (usually locked, no user); the interactive admin desktop + explorer = the
+Hyper-V **enhanced session** (session 2). Launch the app in the session the operator actually views
+(VMConnect Enhanced Session = session 2) and clear leaked instances from other sessions first.
+**Fix options (pick whichever renders on this VM):** degrade the backdrop when DWM/GPU is absent
+(fall back `WindowBackdropType` to `None`/`Auto`, or apply Mica only when `DwmIsCompositionEnabled`),
+and/or force software rendering (`RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly` in App
+startup). Verify by launching interactively in the operator's session, confirming `MainWindowHandle
+!= 0` + a visible window, then clicking Home (live posture from the running service) → Recovery
+budget → Exemptions with the driver+service live. This is the true end-to-end GUI verification the
+offscreen smoke cannot give.
+
+**Deliverable:** a documented, repeatable way to run the app **on the VM** against the live driver/
+service, showing real posture + budget bars + exemption enumerate — plus the `SarNameIsOwnStore` fix
+so deployment no longer requires unloading the driver. (Build/deploy details: publish framework-
+dependent — the VM has .NET 10 Desktop Runtime 10.0.9 — via `dotnet publish frontend/SemanticsAr.App
+... -o <dir>`; the COM elevation host is registered on the VM with `SemanticsArElevationHost.exe
+/RegServer`, which writes `HKLM\...\CLSID\{B3F2A6C1-...A12}\LocalServer32`.)
+
+### 5.B XII.3 integrity-halt posture flag (backend + frontend, VM re-verify)
 The last unimplemented Part XII amendment. `docs/CONSTITUTION_PART_XII.md` XII.3: project a single
 enum/boolean **integrity-halt** signal on the *posture* frame (VII.1.4 tamper / rollback detection),
 which drives a red Home posture + a foreground-window alert (the posture plane's one new field this
@@ -177,16 +230,16 @@ Part is allowed, XII.0.1). Scope:
 - Consult FRONTEND_DESIGN for the exact posture visual + Charter for calm-vs-alarm wording (an
   integrity halt IS an alarm-worthy, foreground event — the one exception to calm-by-default).
 
-### 5.B XII.5 remainder / polish (optional, only if owner asks)
+### 5.C XII.5 remainder / polish (optional, only if owner asks)
 - Exemption-list refresh-on-remove is optimistic (local drop, one elevation); a genuine re-enumeration
   would need a second consent. Fine as-is.
 - Remove-by-anchor for lapsed entries (see §4.1) if the owner wants lapsed entries clearable in-UI.
 
-### 5.C Ratify Part XII into `CONSTITUTION.md`
+### 5.D Ratify Part XII into `CONSTITUTION.md`
 Once XII.3 lands and the whole Part is stable, fold `CONSTITUTION_PART_XII.md` into
 `docs/CONSTITUTION.md` and mark it ratified (per §0 precedence, amend the doc, don't just edit code).
 
-### 5.D Push
+### 5.E Push
 Both session-5 commits (`dc4e721`, `b39932f`) plus session-4 (`a5d1822`) are on `main`, **NOT
 pushed**. Push is operator-controlled — do it only on explicit owner request.
 
