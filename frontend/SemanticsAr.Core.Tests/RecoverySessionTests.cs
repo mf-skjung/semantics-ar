@@ -27,6 +27,12 @@ public sealed class RecoverySessionTests
             return PreservedError;
         }
 
+        public ElevatedError LoadAppIdentities(out IReadOnlyList<AppIdentity> items)
+        {
+            items = Array.Empty<AppIdentity>();
+            return ElevatedError.None;
+        }
+
         public RecoveryOutcome Recover(RecoverableItem item, string targetPath)
         {
             return OnRecover?.Invoke(item)

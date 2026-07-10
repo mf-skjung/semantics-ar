@@ -7,6 +7,7 @@
 #include "posture.h"
 #include "recovery.h"
 #include "autoverdict.h"
+#include "attrib.h"
 
 static int sar_catalog_fetch(sar_comm_client_t *client, uint32_t index,
                              semantics_ar_catalog_entry_t *out_entry,
@@ -295,8 +296,26 @@ int sar_control_apply(sar_comm_client_t *client,
             reply->preserve_entries[n].length = e.provenance_length;
             reply->preserve_entries[n].capture_time = e.capture_time;
             reply->preserve_entries[n].size = e.payload_length;
+            reply->preserve_entries[n].actor_start_key = e.actor_start_key;
+            reply->preserve_entries[n].state = e.state;
+            reply->preserve_entries[n].app_identity_id = sar_attrib_resolve(e.causing_image_path);
         }
         reply->total = total;
+        reply->returned = n;
+        reply->result = 0;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        break;
+    }
+
+    case SAR_CTL_OP_APP_IDENTITY_LIST: {
+        uint32_t start = cmd->mode;
+        uint32_t n = 0;
+
+        for (n = 0; n < SAR_CTL_LIST_PAGE; n++) {
+            if (!sar_attrib_enumerate(start + n, &reply->app_identities[n]))
+                break;
+        }
+        reply->total = sar_attrib_count();
         reply->returned = n;
         reply->result = 0;
         reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;

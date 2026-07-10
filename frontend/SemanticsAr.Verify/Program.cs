@@ -52,7 +52,7 @@ if (result == SarApiResult.Ok)
     Metric("protocol_version", posture.ProtocolVersion.ToString());
     Metric("captured_key_count", posture.CapturedKeyCount.ToString());
     Metric("descents / health / oldest-expiry", v.Descents + " / " + v.PreserveHealth + " / " + v.OldestProtectedExpiry);
-    Check("protocol version matches (no version skew)", posture.ProtocolVersion == 1u, posture.ProtocolVersion.ToString());
+    Check("protocol version matches (no version skew)", posture.ProtocolVersion == 2u, posture.ProtocolVersion.ToString());
     Check("service running", posture.ServiceRunning != 0u);
     Check("driver connected", posture.DriverConnected != 0u);
 }

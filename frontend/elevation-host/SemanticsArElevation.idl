@@ -16,6 +16,10 @@ interface ISarElevatedControl : IUnknown
                          [out] unsigned long *total,
                          [out] unsigned long *returned,
                          [out] SAFEARRAY(unsigned char) *blob);
+    HRESULT AppIdentityPage([in] unsigned long start,
+                            [out] unsigned long *total,
+                            [out] unsigned long *returned,
+                            [out] SAFEARRAY(unsigned char) *blob);
     HRESULT Recover([in] SAFEARRAY(unsigned char) keyId,
                     [in] BSTR targetPath,
                     [out] long *result);

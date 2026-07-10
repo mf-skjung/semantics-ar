@@ -12,6 +12,8 @@ public sealed record RecoverableItem : IIncidentSource
     public ulong Size { get; init; }
     public ulong CaptureTime { get; init; }
     public ulong ActorStartKey { get; init; }
+    public PreservePool Pool { get; init; }
+    public ulong AppIdentityId { get; init; }
 
     public DateTimeOffset Timestamp => RestorePlanner.Anchor(CaptureTime) ?? DateTimeOffset.MinValue;
 }

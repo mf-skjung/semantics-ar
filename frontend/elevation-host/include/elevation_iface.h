@@ -18,6 +18,8 @@ public:
                                                   ULONG *returned, SAFEARRAY **blob) = 0;
     virtual HRESULT STDMETHODCALLTYPE PreservePage(ULONG start, ULONG *total,
                                                    ULONG *returned, SAFEARRAY **blob) = 0;
+    virtual HRESULT STDMETHODCALLTYPE AppIdentityPage(ULONG start, ULONG *total,
+                                                      ULONG *returned, SAFEARRAY **blob) = 0;
     virtual HRESULT STDMETHODCALLTYPE Recover(SAFEARRAY *keyId, BSTR targetPath,
                                               LONG *result) = 0;
     virtual HRESULT STDMETHODCALLTYPE PreserveRecover(BSTR targetPath, ULONGLONG offset,

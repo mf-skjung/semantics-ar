@@ -27,6 +27,43 @@ public sealed class ElevatedControlChannel : IElevatedControlChannel
         return LoadPaged(catalog: false, out items);
     }
 
+    public ElevatedError LoadAppIdentities(out IReadOnlyList<AppIdentity> items)
+    {
+        items = Array.Empty<AppIdentity>();
+        ISarElevatedControl control = Control();
+        List<AppIdentity> all = new();
+        uint start = 0;
+
+        while (true)
+        {
+            int hr = control.AppIdentityPage(start, out uint total, out uint returned, out nint blob);
+
+            ElevatedError err = ElevatedErrors.FromHResult(hr);
+            if (err != ElevatedError.None)
+                return err;
+
+            try
+            {
+                if (returned > 0)
+                {
+                    byte[] bytes = SafeArrayNative.CopyBytes(blob);
+                    all.AddRange(RecoveryLadder.ParseAppIdentities(bytes, (int)returned));
+                }
+            }
+            finally
+            {
+                SafeArrayNative.Destroy(blob);
+            }
+
+            start += returned;
+            if (returned == 0 || start >= total)
+                break;
+        }
+
+        items = all;
+        return ElevatedError.None;
+    }
+
     public RecoveryOutcome Recover(RecoverableItem item, string targetPath)
     {
         ISarElevatedControl control = Control();

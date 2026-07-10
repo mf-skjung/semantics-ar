@@ -43,6 +43,7 @@ typedef struct _SAR_STREAM_CONTEXT {
     PSAR_EXTENT_MAP mmap_map;
     PUINT16       mmap_path;
     volatile HANDLE mmap_arm_pid;
+    volatile LONG64 mmap_arm_key;
     volatile LONG64 mmap_reserved;
     UCHAR         read_sample[SAR_CAPTURE_BUFFER_BYTES];
 } SAR_STREAM_CONTEXT, *PSAR_STREAM_CONTEXT;

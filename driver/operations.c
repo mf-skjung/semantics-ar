@@ -275,6 +275,7 @@ static PSAR_STREAM_CONTEXT SarGetStreamContext(_In_ PCFLT_RELATED_OBJECTS FltObj
     context->mmap_map = NULL;
     context->mmap_path = NULL;
     context->mmap_arm_pid = NULL;
+    context->mmap_arm_key = 0;
     context->mmap_reserved = 0;
     FltInitializePushLock(&context->cap_lock);
 

@@ -5,6 +5,7 @@
 #include "commclient.h"
 #include "control.h"
 #include "identity.h"
+#include "attrib.h"
 
 #define SAR_SERVICE_NAME L"SemanticsAr"
 #define SAR_SIGNING_KEY_NAME L"SemanticsArServiceKey"
@@ -126,6 +127,8 @@ static void WINAPI sar_service_main(DWORD argc, LPWSTR *argv)
                        0);
         return;
     }
+
+    sar_attrib_init();
 
     if (sar_control_listener_start(&g_service.comm) != 0) {
         sar_comm_close(&g_service.comm);

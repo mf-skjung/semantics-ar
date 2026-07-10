@@ -11,6 +11,8 @@ _Static_assert(SARAPI_PATH_MAX == SEMANTICS_AR_PROTO_PATH_MAX, "path max");
 _Static_assert(SARAPI_SUBJECT_MAX == SEMANTICS_AR_PROTO_SUBJECT_MAX, "subject max");
 _Static_assert(SARAPI_HASH_SIZE == SEMANTICS_AR_CONTENT_HASH_SIZE, "hash size");
 _Static_assert(SARAPI_PAGE == SAR_CTL_LIST_PAGE, "page size");
+_Static_assert(sizeof(sarapi_preserve_entry_t) == 576, "preserve entry ABI");
+_Static_assert(sizeof(sarapi_app_identity_t) == 1080, "app identity ABI");
 
 #define SARAPI_CTL_BUSY_WAIT_MS 2000u
 #define SARAPI_CTL_ATTEMPTS     3u
@@ -185,6 +187,53 @@ sarapi_result_t __cdecl sarapi_preserve_page(uint32_t start,
         entries[i].length = reply.preserve_entries[i].length;
         entries[i].capture_time = reply.preserve_entries[i].capture_time;
         entries[i].size = reply.preserve_entries[i].size;
+        entries[i].actor_start_key = reply.preserve_entries[i].actor_start_key;
+        entries[i].app_identity_id = reply.preserve_entries[i].app_identity_id;
+        entries[i].state = reply.preserve_entries[i].state;
+    }
+    *out_total = reply.total;
+    *out_returned = reply.returned;
+    return SARAPI_OK;
+}
+
+sarapi_result_t __cdecl sarapi_app_identity_page(uint32_t start,
+                                                 sarapi_app_identity_t *entries,
+                                                 uint32_t *out_total,
+                                                 uint32_t *out_returned)
+{
+    sar_control_command_t cmd;
+    sar_control_reply_t   reply;
+    sarapi_result_t       r;
+    uint32_t              i;
+
+    if (!entries || !out_total || !out_returned)
+        return SARAPI_INVALID_ARG;
+
+    *out_total = 0;
+    *out_returned = 0;
+    memset(entries, 0, sizeof(*entries) * SARAPI_PAGE);
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.op = SAR_CTL_OP_APP_IDENTITY_LIST;
+    cmd.mode = start;
+
+    r = control_txn(&cmd, &reply);
+    if (r != SARAPI_OK)
+        return r;
+    if (reply.result != 0)
+        return SARAPI_ACCESS_DENIED;
+    if (reply.returned > SARAPI_PAGE)
+        return SARAPI_TRANSPORT_ERROR;
+
+    for (i = 0; i < reply.returned; i++) {
+        entries[i].app_identity_id = reply.app_identities[i].app_identity_id;
+        memcpy(entries[i].image_path, reply.app_identities[i].image_path,
+               sizeof(entries[i].image_path));
+        memcpy(entries[i].cert_subject, reply.app_identities[i].cert_subject,
+               sizeof(entries[i].cert_subject));
+        memcpy(entries[i].content_hash, reply.app_identities[i].content_hash,
+               sizeof(entries[i].content_hash));
+        entries[i].verdict = reply.app_identities[i].verdict;
     }
     *out_total = reply.total;
     *out_returned = reply.returned;

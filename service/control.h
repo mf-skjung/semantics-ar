@@ -22,6 +22,7 @@
 #define SAR_CTL_OP_VERDICT           10u
 #define SAR_CTL_OP_PROCESS_QUERY     11u
 #define SAR_CTL_OP_STATUS            12u
+#define SAR_CTL_OP_APP_IDENTITY_LIST 13u
 
 #define SAR_CTL_LIST_PAGE            8u
 
@@ -51,7 +52,18 @@ typedef struct {
     uint64_t length;
     uint64_t capture_time;
     uint64_t size;
+    uint64_t actor_start_key;
+    uint64_t app_identity_id;
+    uint32_t state;
 } sar_preserve_list_entry_t;
+
+typedef struct {
+    uint64_t app_identity_id;
+    uint16_t image_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint16_t cert_subject[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+    uint8_t  content_hash[SEMANTICS_AR_CONTENT_HASH_SIZE];
+    uint32_t verdict;
+} sar_app_identity_entry_t;
 
 typedef struct {
     int32_t            result;
@@ -60,6 +72,7 @@ typedef struct {
     uint32_t           returned;
     sar_catalog_entry_t entries[SAR_CTL_LIST_PAGE];
     sar_preserve_list_entry_t preserve_entries[SAR_CTL_LIST_PAGE];
+    sar_app_identity_entry_t app_identities[SAR_CTL_LIST_PAGE];
     sar_identity_t     resolved;
     uint32_t           id_state;
     uint64_t           proc_start_key;

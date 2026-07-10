@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define SARAPI_ABI_VERSION 1u
+#define SARAPI_ABI_VERSION 2u
 
 #if defined(SARAPI_STATIC)
 #define SARAPI_API
@@ -71,13 +71,27 @@ typedef struct {
     uint64_t actor_start_key;
 } sarapi_catalog_entry_t;
 
+#define SARAPI_PRESERVE_PROBATION 0u
+#define SARAPI_PRESERVE_PROTECTED 1u
+
 typedef struct {
     uint16_t provenance_path[SARAPI_PATH_MAX];
     uint64_t offset;
     uint64_t length;
     uint64_t capture_time;
     uint64_t size;
+    uint64_t actor_start_key;
+    uint64_t app_identity_id;
+    uint32_t state;
 } sarapi_preserve_entry_t;
+
+typedef struct {
+    uint64_t app_identity_id;
+    uint16_t image_path[SARAPI_PATH_MAX];
+    uint16_t cert_subject[SARAPI_SUBJECT_MAX];
+    uint8_t  content_hash[SARAPI_HASH_SIZE];
+    uint32_t verdict;
+} sarapi_app_identity_t;
 
 typedef struct {
     uint16_t image_path[SARAPI_PATH_MAX];
@@ -94,6 +108,11 @@ SARAPI_API sarapi_result_t __cdecl sarapi_preserve_page(uint32_t start,
                                                         sarapi_preserve_entry_t *entries,
                                                         uint32_t *out_total,
                                                         uint32_t *out_returned);
+
+SARAPI_API sarapi_result_t __cdecl sarapi_app_identity_page(uint32_t start,
+                                                            sarapi_app_identity_t *entries,
+                                                            uint32_t *out_total,
+                                                            uint32_t *out_returned);
 
 SARAPI_API sarapi_result_t __cdecl sarapi_recover(const uint8_t *key_id,
                                                   const uint16_t *target_path,

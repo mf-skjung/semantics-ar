@@ -715,6 +715,8 @@ static VOID SarPresReapNamespace(_Inout_ PSAR_PRESERVE P, _In_ BOOLEAN ByAge, _I
     }
 }
 
+C_ASSERT(SEMANTICS_AR_PROVENANCE_PATH_MAX == SEMANTICS_AR_PROTO_PATH_MAX);
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarPreserveStageLink(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *Path,
                               _In_ UINT64 FileSize, _In_ UINT64 ActorId, _In_ UINT64 LinkId)
@@ -722,11 +724,16 @@ NTSTATUS SarPreserveStageLink(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 
     LARGE_INTEGER now;
     sar_preserve_record_t rec;
     ULONG64 i;
+    UINT16 causingPath[SEMANTICS_AR_PROVENANCE_PATH_MAX];
 
     if (Preserve == NULL || Preserve->ready == 0)
         return STATUS_DEVICE_NOT_READY;
 
     KeQuerySystemTime(&now);
+
+    RtlZeroMemory(causingPath, sizeof(causingPath));
+    if (g_sar_state != NULL)
+        (VOID)SarStateImageByStartKey(g_sar_state, ActorId, causingPath);
 
     FltAcquirePushLockExclusive(&Preserve->lock);
 
@@ -752,6 +759,7 @@ NTSTATUS SarPreserveStageLink(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 
     sar_preserve_record_init(&rec, Path, 0, FileSize, (uint64_t)now.QuadPart, LinkId, 0, ActorId,
                              NULL, 0, NULL, 0);
     rec.kind = SAR_PRESERVE_KIND_NAMESPACE;
+    RtlCopyMemory(rec.causing_image_path, causingPath, sizeof(rec.causing_image_path));
     if (sar_preserve_append(Preserve->records, &Preserve->record_count, Preserve->record_capacity,
                             &rec) == 1)
         InterlockedExchange(&Preserve->dirty, 1);
@@ -771,6 +779,7 @@ SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UIN
     LARGE_INTEGER now;
     BOOLEAN staged = FALSE;
     SAR_STAGE_RESULT result = SAR_STAGE_ALREADY_COVERED;
+    UINT16 causingPath[SEMANTICS_AR_PROVENANCE_PATH_MAX];
 
     if (Preserve == NULL || Preserve->ready == 0)
         return SAR_STAGE_FAILED;
@@ -780,6 +789,10 @@ SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UIN
         return SAR_STAGE_FAILED;
 
     KeQuerySystemTime(&now);
+
+    RtlZeroMemory(causingPath, sizeof(causingPath));
+    if (g_sar_state != NULL)
+        (VOID)SarStateImageByStartKey(g_sar_state, ActorId, causingPath);
 
     FltAcquirePushLockExclusive(&Preserve->lock);
 
@@ -882,6 +895,7 @@ SAR_STAGE_RESULT SarPreserveStage(_Inout_ PSAR_PRESERVE Preserve, _In_ const UIN
         sar_preserve_record_init(&rec, Path, g_off, g_len, (uint64_t)now.QuadPart, off, ct_len,
                                  ActorId, iv, SAR_PRESERVE_AES_BLOCK, Plaintext + ptoff,
                                  (ULONG)g_len);
+        RtlCopyMemory(rec.causing_image_path, causingPath, sizeof(rec.causing_image_path));
         if (sar_preserve_append(Preserve->records, &Preserve->record_count,
                                 Preserve->record_capacity, &rec) == 1)
             InterlockedExchange(&Preserve->dirty, 1);
@@ -1134,6 +1148,10 @@ int SarPreserveProject(_In_ PSAR_PRESERVE Preserve, _In_ ULONG64 Index,
         Entry->provenance_length = r->provenance_length;
         Entry->capture_time = r->capture_time;
         Entry->payload_length = r->payload_length;
+        Entry->actor_start_key = r->actor_id;
+        Entry->state = r->state;
+        RtlCopyMemory(Entry->causing_image_path, r->causing_image_path,
+                      sizeof(Entry->causing_image_path));
         valid = 1;
     }
     FltReleasePushLock(&Preserve->lock);

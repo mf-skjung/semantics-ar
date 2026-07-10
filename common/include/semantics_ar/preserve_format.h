@@ -27,6 +27,7 @@ typedef struct {
     uint8_t  iv[SEMANTICS_AR_IV_MAX];
     uint8_t  iv_length;
     uint8_t  content_tag[SEMANTICS_AR_MAC_SIZE];
+    uint16_t causing_image_path[SEMANTICS_AR_PROVENANCE_PATH_MAX];
 } sar_preserve_record_t;
 
 typedef struct {

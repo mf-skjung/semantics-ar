@@ -299,6 +299,35 @@ BOOLEAN SarStateIdentityQuery(_In_ PSAR_STATE State, _In_ HANDLE ProcessId,
 }
 
 _IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateImageByStartKey(_In_ PSAR_STATE State, _In_ UINT64 StartKey,
+                                _Out_writes_(SEMANTICS_AR_PROTO_PATH_MAX) PUINT16 OutPath)
+{
+    ULONG b;
+    BOOLEAN found = FALSE;
+
+    RtlZeroMemory(OutPath, SEMANTICS_AR_PROTO_PATH_MAX * sizeof(UINT16));
+    if (StartKey == 0)
+        return FALSE;
+
+    FltAcquirePushLockShared(&State->identity_lock);
+    for (b = 0; b < State->identity_bucket_count && !found; b++) {
+        PLIST_ENTRY head = &State->identity_buckets[b];
+        PLIST_ENTRY it;
+        for (it = head->Flink; it != head; it = it->Flink) {
+            PSAR_IDENTITY_ENTRY e = CONTAINING_RECORD(it, SAR_IDENTITY_ENTRY, link);
+            if (e->start_key == StartKey && e->identity_valid) {
+                RtlCopyMemory(OutPath, e->identity.image_path,
+                              SEMANTICS_AR_PROTO_PATH_MAX * sizeof(UINT16));
+                found = TRUE;
+                break;
+            }
+        }
+    }
+    FltReleasePushLock(&State->identity_lock);
+    return found;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
 sar_id_state_t SarStateIdentityLookup(_In_ PSAR_STATE State, _In_ HANDLE ProcessId)
 {
     PSAR_IDENTITY_ENTRY entry;

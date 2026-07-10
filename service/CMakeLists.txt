@@ -10,7 +10,8 @@ add_executable(semantics_ar_service
     pipe_server.c
     posture.c
     recovery.c
-    identity.c)
+    identity.c
+    attrib.c)
 
 target_include_directories(semantics_ar_service PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"

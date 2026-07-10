@@ -15,6 +15,9 @@ internal partial interface ISarElevatedControl
     int PreservePage(uint start, out uint total, out uint returned, out nint blob);
 
     [PreserveSig]
+    int AppIdentityPage(uint start, out uint total, out uint returned, out nint blob);
+
+    [PreserveSig]
     int Recover(nint keyId, string targetPath, out int result);
 
     [PreserveSig]

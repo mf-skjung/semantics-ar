@@ -10,7 +10,24 @@
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
 #endif
 
-#define SAR_COMM_RECV_BUFFER 1024u
+#define SAR_COMM_RECV_BUFFER 2048u
+
+typedef union {
+    semantics_ar_connect_challenge_t challenge;
+    semantics_ar_connect_response_t  connect_response;
+    semantics_ar_status_reply_t      status_reply;
+    semantics_ar_catalog_reply_t     catalog_reply;
+    semantics_ar_preserve_reply_t    preserve_reply;
+    semantics_ar_events_reply_t      events_reply;
+    semantics_ar_process_reply_t     process_reply;
+    semantics_ar_identity_verdict_t  identity_verdict;
+    semantics_ar_verdict_notify_t    verdict_notify;
+    semantics_ar_whitelist_control_t whitelist_control;
+    semantics_ar_recovery_exec_t     recovery_exec;
+    semantics_ar_recovery_result_t   recovery_result;
+} sar_comm_any_msg_t;
+
+C_ASSERT(sizeof(sar_comm_any_msg_t) <= SAR_COMM_RECV_BUFFER);
 
 typedef struct {
     FILTER_MESSAGE_HEADER fltHeader;

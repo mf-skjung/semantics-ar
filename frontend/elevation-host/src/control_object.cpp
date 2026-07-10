@@ -185,6 +185,34 @@ public:
         return S_OK;
     }
 
+    HRESULT STDMETHODCALLTYPE AppIdentityPage(ULONG start, ULONG *total,
+                                              ULONG *returned, SAFEARRAY **blob) override
+    {
+        if (!total || !returned || !blob)
+            return E_POINTER;
+        *total = 0;
+        *returned = 0;
+        *blob = NULL;
+
+        HRESULT hr = ValidateCaller();
+        if (FAILED(hr))
+            return hr;
+
+        sarapi_app_identity_t entries[SARAPI_PAGE];
+        uint32_t              t = 0, n = 0;
+        sarapi_result_t       r = sarapi_app_identity_page(start, entries, &t, &n);
+        if (r != SARAPI_OK)
+            return MapResult(r);
+
+        hr = PackBlob(entries, n * (ULONG)sizeof(entries[0]), blob);
+        if (FAILED(hr))
+            return hr;
+
+        *total = t;
+        *returned = n;
+        return S_OK;
+    }
+
     HRESULT STDMETHODCALLTYPE Recover(SAFEARRAY *keyId, BSTR targetPath,
                                       LONG *result) override
     {

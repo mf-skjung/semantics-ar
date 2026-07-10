@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "semantics_ar/keystore_format.h"
 
-#define SEMANTICS_AR_PROTOCOL_VERSION 1u
+#define SEMANTICS_AR_PROTOCOL_VERSION 2u
 
 #define SAR_COMM_PORT_NAME L"\\SemanticsArPort"
 
@@ -174,6 +174,9 @@ typedef struct {
     uint64_t provenance_length;
     uint64_t capture_time;
     uint64_t payload_length;
+    uint64_t actor_start_key;
+    uint32_t state;
+    uint16_t causing_image_path[SEMANTICS_AR_PROTO_PATH_MAX];
 } semantics_ar_preserve_entry_t;
 
 typedef struct {

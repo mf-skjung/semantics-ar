@@ -135,14 +135,54 @@ static int cmd_preserve_list(void)
             for (; j < SEMANTICS_AR_PROTO_PATH_MAX && e->provenance_path[j] != 0; j++)
                 path[j] = (wchar_t)e->provenance_path[j];
             path[j] = 0;
-            wprintf(L"[%u] off=%llu len=%llu size=%llu  %ls\n", start + i,
+            wprintf(L"[%u] off=%llu len=%llu size=%llu actor=%llu pool=%u app=%llu  %ls\n", start + i,
                     (unsigned long long)e->offset, (unsigned long long)e->length,
-                    (unsigned long long)e->size, path);
+                    (unsigned long long)e->size, (unsigned long long)e->actor_start_key,
+                    e->state, (unsigned long long)e->app_identity_id, path);
         }
         start += reply.returned;
     } while (start < total);
 
     wprintf(L"%u preserved region(s)\n", total);
+    return 0;
+}
+
+static int cmd_app_identity(void)
+{
+    uint32_t start = 0, total = 0;
+
+    do {
+        sar_control_command_t cmd;
+        sar_control_reply_t reply;
+        uint32_t i;
+
+        memset(&cmd, 0, sizeof cmd);
+        cmd.op = SAR_CTL_OP_APP_IDENTITY_LIST;
+        cmd.mode = start;
+        if (send_command(&cmd, &reply) != 0)
+            return 1;
+
+        total = reply.total;
+        if (reply.returned == 0)
+            break;
+        for (i = 0; i < reply.returned; i++) {
+            const sar_app_identity_entry_t *e = &reply.app_identities[i];
+            wchar_t path[SEMANTICS_AR_PROTO_PATH_MAX];
+            wchar_t subj[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+            uint32_t j = 0;
+            for (; j < SEMANTICS_AR_PROTO_PATH_MAX && e->image_path[j] != 0; j++)
+                path[j] = (wchar_t)e->image_path[j];
+            path[j] = 0;
+            for (j = 0; j < SEMANTICS_AR_PROTO_SUBJECT_MAX && e->cert_subject[j] != 0; j++)
+                subj[j] = (wchar_t)e->cert_subject[j];
+            subj[j] = 0;
+            wprintf(L"[app] id=%llu verdict=%u signer=\"%ls\"  %ls\n",
+                    (unsigned long long)e->app_identity_id, e->verdict, subj, path);
+        }
+        start += reply.returned;
+    } while (start < total);
+
+    wprintf(L"%u app identit(ies)\n", total);
     return 0;
 }
 
@@ -419,6 +459,8 @@ int main(int argc, char **argv)
         return cmd_mode(argv[2]);
     if (argc >= 2 && strcmp(argv[1], "preserve-list") == 0)
         return cmd_preserve_list();
+    if (argc >= 2 && strcmp(argv[1], "app-identity") == 0)
+        return cmd_app_identity();
     if (argc == 5 && strcmp(argv[1], "preserve-recover") == 0)
         return cmd_preserve_recover(argv[2], argv[3], argv[4]);
     if (argc == 4 && strcmp(argv[1], "budget") == 0)

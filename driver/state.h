@@ -70,6 +70,10 @@ BOOLEAN SarStateIdentityQuery(_In_ PSAR_STATE State, _In_ HANDLE ProcessId,
                              _Out_ UINT64 *StartKey, _Out_ sar_id_state_t *IdState);
 
 _IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarStateImageByStartKey(_In_ PSAR_STATE State, _In_ UINT64 StartKey,
+                                _Out_writes_(SEMANTICS_AR_PROTO_PATH_MAX) PUINT16 OutPath);
+
+_IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarStateIdentityApplyVerdict(_Inout_ PSAR_STATE State,
                                   _In_ HANDLE ProcessId,
                                   _In_ UINT64 StartKey,
