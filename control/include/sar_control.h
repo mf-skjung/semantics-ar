@@ -28,6 +28,7 @@ typedef struct {
 
 typedef struct {
     sar_identity_t *entries;
+    uint64_t *first_seen;
     uint32_t count;
     uint32_t capacity;
 } sar_whitelist_t;
@@ -37,14 +38,19 @@ typedef enum {
     SAR_WL_FULL = 1,
     SAR_WL_DUPLICATE = 2,
     SAR_WL_NOT_FOUND = 3,
-    SAR_WL_INVALID = 4
+    SAR_WL_INVALID = 4,
+    SAR_WL_INTERPRETER = 5
 } sar_wl_status_t;
 
 void sar_whitelist_init(sar_whitelist_t *wl, sar_identity_t *storage,
-                        uint32_t capacity);
+                        uint64_t *first_seen, uint32_t capacity);
 int sar_whitelist_match(const sar_whitelist_t *wl, const sar_identity_t *id);
-sar_wl_status_t sar_whitelist_add(sar_whitelist_t *wl, const sar_identity_t *id);
+sar_wl_status_t sar_whitelist_add(sar_whitelist_t *wl, const sar_identity_t *id,
+                                  uint64_t first_seen);
 sar_wl_status_t sar_whitelist_remove(sar_whitelist_t *wl, const sar_identity_t *id);
+sar_wl_status_t sar_whitelist_enumerate(const sar_whitelist_t *wl, uint32_t index,
+                                        sar_identity_t *out_id, uint64_t *out_first_seen);
+int sar_identity_is_interpreter(const uint16_t *image_path);
 
 typedef enum {
     SAR_IDSTATE_OBSERVE_PENDING = 0,

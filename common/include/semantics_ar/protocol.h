@@ -30,6 +30,8 @@
 #define SEMANTICS_AR_MSG_IDENTITY_VERDICT 20
 #define SEMANTICS_AR_MSG_PROCESS_QUERY    21
 #define SEMANTICS_AR_MSG_PROCESS_REPLY    22
+#define SEMANTICS_AR_MSG_WHITELIST_QUERY  23
+#define SEMANTICS_AR_MSG_WHITELIST_REPLY  24
 
 #define SEMANTICS_AR_MODE_AUDIT   0
 #define SEMANTICS_AR_MODE_ENFORCE 1
@@ -205,6 +207,27 @@ typedef struct {
     uint64_t retention_100ns;
     uint64_t capacity_bytes;
 } semantics_ar_set_budget_t;
+
+typedef struct {
+    uint16_t image_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint16_t cert_subject[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+    uint8_t  content_hash[SEMANTICS_AR_CONTENT_HASH_SIZE];
+    uint64_t first_seen;
+} semantics_ar_whitelist_entry_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    uint32_t index;
+} semantics_ar_whitelist_query_t;
+
+typedef struct {
+    semantics_ar_msg_header_t header;
+    int32_t  result;
+    uint32_t total;
+    uint32_t index;
+    uint32_t valid;
+    semantics_ar_whitelist_entry_t entry;
+} semantics_ar_whitelist_reply_t;
 
 typedef struct {
     semantics_ar_msg_header_t header;

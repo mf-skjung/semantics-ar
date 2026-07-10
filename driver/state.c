@@ -15,6 +15,7 @@ NTSTATUS SarStateCreate(_Outptr_ PSAR_STATE *State)
 {
     PSAR_STATE state;
     sar_identity_t *storage;
+    uint64_t *first_seen;
     LIST_ENTRY *buckets;
     ULONG i;
 
@@ -32,10 +33,20 @@ NTSTATUS SarStateCreate(_Outptr_ PSAR_STATE *State)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    first_seen = (uint64_t *)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                                             sizeof(uint64_t) * SAR_WHITELIST_CAPACITY,
+                                             SAR_POOL_TAG_WHITELIST);
+    if (first_seen == NULL) {
+        ExFreePoolWithTag(storage, SAR_POOL_TAG_WHITELIST);
+        ExFreePoolWithTag(state, SAR_POOL_TAG_STATE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     buckets = (LIST_ENTRY *)ExAllocatePool2(POOL_FLAG_NON_PAGED,
                                             sizeof(LIST_ENTRY) * SAR_IDENTITY_BUCKET_COUNT,
                                             SAR_POOL_TAG_IDENTITY);
     if (buckets == NULL) {
+        ExFreePoolWithTag(first_seen, SAR_POOL_TAG_WHITELIST);
         ExFreePoolWithTag(storage, SAR_POOL_TAG_WHITELIST);
         ExFreePoolWithTag(state, SAR_POOL_TAG_STATE);
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -46,7 +57,8 @@ NTSTATUS SarStateCreate(_Outptr_ PSAR_STATE *State)
     FltInitializePushLock(&state->whitelist_lock);
     FltInitializePushLock(&state->identity_lock);
     state->whitelist_storage = storage;
-    sar_whitelist_init(&state->whitelist, storage, SAR_WHITELIST_CAPACITY);
+    state->whitelist_first_seen = first_seen;
+    sar_whitelist_init(&state->whitelist, storage, first_seen, SAR_WHITELIST_CAPACITY);
     state->identity_buckets = buckets;
     state->identity_bucket_count = SAR_IDENTITY_BUCKET_COUNT;
     for (i = 0; i < SAR_IDENTITY_BUCKET_COUNT; i++)
@@ -80,6 +92,7 @@ VOID SarStateDestroy(_Inout_ PSAR_STATE State)
     FltDeletePushLock(&State->whitelist_lock);
 
     ExFreePoolWithTag(State->identity_buckets, SAR_POOL_TAG_IDENTITY);
+    ExFreePoolWithTag(State->whitelist_first_seen, SAR_POOL_TAG_WHITELIST);
     ExFreePoolWithTag(State->whitelist_storage, SAR_POOL_TAG_WHITELIST);
     ExFreePoolWithTag(State, SAR_POOL_TAG_STATE);
 }
@@ -107,12 +120,33 @@ _IRQL_requires_max_(APC_LEVEL)
 sar_wl_status_t SarStateWhitelistAdd(_Inout_ PSAR_STATE State, _In_ const sar_identity_t *Identity)
 {
     sar_wl_status_t status;
+    LARGE_INTEGER now;
+
+    KeQuerySystemTimePrecise(&now);
 
     FltAcquirePushLockExclusive(&State->whitelist_lock);
-    status = sar_whitelist_add(&State->whitelist, Identity);
+    status = sar_whitelist_add(&State->whitelist, Identity, (uint64_t)now.QuadPart);
     FltReleasePushLock(&State->whitelist_lock);
     if (status == SAR_WL_OK)
         SarEventLogRecord(g_sar.eventlog, SAR_EVENT_CLASS_WHITELIST_ADDED, 0);
+    return status;
+}
+
+_IRQL_requires_max_(APC_LEVEL)
+sar_wl_status_t SarStateWhitelistEnumerate(_In_ PSAR_STATE State, _In_ uint32_t Index,
+                                           _Out_ sar_identity_t *OutId,
+                                           _Out_ UINT64 *OutFirstSeen,
+                                           _Out_ uint32_t *OutTotal)
+{
+    sar_wl_status_t status;
+    uint64_t first_seen = 0;
+
+    FltAcquirePushLockShared(&State->whitelist_lock);
+    *OutTotal = State->whitelist.count;
+    status = sar_whitelist_enumerate(&State->whitelist, Index, OutId, &first_seen);
+    FltReleasePushLock(&State->whitelist_lock);
+
+    *OutFirstSeen = first_seen;
     return status;
 }
 
@@ -171,44 +205,7 @@ static PSAR_IDENTITY_ENTRY SarIdentityFindByProcessLocked(_In_ PSAR_STATE State,
 
 static BOOLEAN SarIdentityIsInterpreter(_In_ const sar_identity_t *Identity)
 {
-    static const WCHAR *const names[] = {
-        L"powershell.exe", L"pwsh.exe", L"cmd.exe", L"wscript.exe",
-        L"cscript.exe", L"mshta.exe", L"python.exe", L"node.exe",
-    };
-    const uint16_t *path = Identity->image_path;
-    SIZE_T len = 0;
-    SIZE_T leaf = 0;
-    SIZE_T i;
-    ULONG k;
-
-    while (len < SEMANTICS_AR_PROTO_PATH_MAX && path[len] != 0)
-        len++;
-    for (i = 0; i < len; i++) {
-        if (path[i] == L'\\' || path[i] == L'/')
-            leaf = i + 1;
-    }
-
-    for (k = 0; k < RTL_NUMBER_OF(names); k++) {
-        const WCHAR *n = names[k];
-        SIZE_T j = 0;
-        SIZE_T p = leaf;
-        BOOLEAN match = TRUE;
-
-        while (n[j] != 0) {
-            WCHAR a, b;
-            if (p >= len) { match = FALSE; break; }
-            a = (WCHAR)path[p];
-            b = n[j];
-            if (a >= L'A' && a <= L'Z') a = (WCHAR)(a + 32);
-            if (b >= L'A' && b <= L'Z') b = (WCHAR)(b + 32);
-            if (a != b) { match = FALSE; break; }
-            p++;
-            j++;
-        }
-        if (match && p == len)
-            return TRUE;
-    }
-    return FALSE;
+    return sar_identity_is_interpreter(Identity->image_path) ? TRUE : FALSE;
 }
 
 _IRQL_requires_max_(APC_LEVEL)

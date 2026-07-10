@@ -23,6 +23,7 @@ typedef struct _SAR_STATE {
     EX_PUSH_LOCK whitelist_lock;
     sar_whitelist_t whitelist;
     sar_identity_t *whitelist_storage;
+    uint64_t *whitelist_first_seen;
     EX_PUSH_LOCK identity_lock;
     LIST_ENTRY *identity_buckets;
     ULONG identity_bucket_count;
@@ -49,6 +50,12 @@ sar_wl_status_t SarStateWhitelistRemove(_Inout_ PSAR_STATE State, _In_ const sar
 
 _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarStateWhitelistMatch(_In_ PSAR_STATE State, _In_ const sar_identity_t *Identity);
+
+_IRQL_requires_max_(APC_LEVEL)
+sar_wl_status_t SarStateWhitelistEnumerate(_In_ PSAR_STATE State, _In_ uint32_t Index,
+                                           _Out_ sar_identity_t *OutId,
+                                           _Out_ UINT64 *OutFirstSeen,
+                                           _Out_ uint32_t *OutTotal);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTSTATUS SarStateIdentityInsert(_Inout_ PSAR_STATE State,

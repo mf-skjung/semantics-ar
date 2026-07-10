@@ -99,6 +99,18 @@ typedef struct {
     uint8_t  content_hash[SARAPI_HASH_SIZE];
 } sarapi_identity_t;
 
+#define SARAPI_WL_MATCH_MATCHING              0u
+#define SARAPI_WL_MATCH_LAPSED_SAME_SIGNER    1u
+#define SARAPI_WL_MATCH_LAPSED_CHANGED_SIGNER 2u
+
+typedef struct {
+    uint16_t image_path[SARAPI_PATH_MAX];
+    uint16_t cert_subject[SARAPI_SUBJECT_MAX];
+    uint8_t  content_hash[SARAPI_HASH_SIZE];
+    uint64_t first_seen;
+    uint32_t match_state;
+} sarapi_whitelist_entry_t;
+
 SARAPI_API sarapi_result_t __cdecl sarapi_catalog_page(uint32_t start,
                                                        sarapi_catalog_entry_t *entries,
                                                        uint32_t *out_total,
@@ -141,6 +153,11 @@ SARAPI_API sarapi_result_t __cdecl sarapi_whitelist_add(const uint16_t *image_pa
 SARAPI_API sarapi_result_t __cdecl sarapi_whitelist_remove(const uint16_t *image_path,
                                                            uint32_t *out_verdict,
                                                            int32_t *out_result);
+
+SARAPI_API sarapi_result_t __cdecl sarapi_whitelist_page(uint32_t start,
+                                                         sarapi_whitelist_entry_t *entries,
+                                                         uint32_t *out_total,
+                                                         uint32_t *out_returned);
 
 #define SARAPI_EVENT_NONE              0u
 #define SARAPI_EVENT_KEY_CAPTURED      1u

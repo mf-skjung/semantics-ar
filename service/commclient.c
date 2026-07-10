@@ -23,6 +23,7 @@ typedef union {
     semantics_ar_identity_verdict_t  identity_verdict;
     semantics_ar_verdict_notify_t    verdict_notify;
     semantics_ar_whitelist_control_t whitelist_control;
+    semantics_ar_whitelist_reply_t   whitelist_reply;
     semantics_ar_recovery_exec_t     recovery_exec;
     semantics_ar_recovery_result_t   recovery_result;
 } sar_comm_any_msg_t;

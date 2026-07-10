@@ -65,6 +65,34 @@ static int sar_preserve_fetch(sar_comm_client_t *client, uint32_t index,
     return 0;
 }
 
+static int sar_whitelist_fetch(sar_comm_client_t *client, uint32_t index,
+                               semantics_ar_whitelist_entry_t *out_entry,
+                               uint32_t *out_total, uint32_t *out_valid)
+{
+    semantics_ar_whitelist_query_t q;
+    semantics_ar_whitelist_reply_t r;
+    sar_comm_status_t cs;
+
+    memset(&q, 0, sizeof(q));
+    q.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    q.header.message_type = SEMANTICS_AR_MSG_WHITELIST_QUERY;
+    q.header.message_length = (uint32_t)sizeof(q);
+    q.index = index;
+
+    memset(&r, 0, sizeof(r));
+    cs = sar_comm_send_recv(client, &q, (uint32_t)sizeof(q),
+                            &r, (uint32_t)sizeof(r),
+                            SEMANTICS_AR_MSG_WHITELIST_REPLY);
+    if (cs != SAR_COMM_OK)
+        return -1;
+
+    *out_total = r.total;
+    *out_valid = r.valid;
+    if (r.valid)
+        memcpy(out_entry, &r.entry, sizeof(*out_entry));
+    return 0;
+}
+
 sar_comm_status_t sar_control_send_mode(sar_comm_client_t *client,
                                         uint32_t mode)
 {
@@ -146,6 +174,11 @@ int sar_control_apply(sar_comm_client_t *client,
         reply->verdict = sar_identity_evaluate(path, &eval);
         if (reply->verdict != SAR_IDENTITY_VERDICT_VERIFIED) {
             reply->result = -1;
+            break;
+        }
+        if (cmd->op == SAR_CTL_OP_WHITELIST_ADD &&
+            sar_identity_is_interpreter(eval.identity.image_path)) {
+            reply->result = SAR_CTL_RESULT_INTERPRETER;
             break;
         }
 
@@ -316,6 +349,63 @@ int sar_control_apply(sar_comm_client_t *client,
                 break;
         }
         reply->total = sar_attrib_count();
+        reply->returned = n;
+        reply->result = 0;
+        reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;
+        break;
+    }
+
+    case SAR_CTL_OP_WHITELIST_LIST: {
+        uint32_t start = cmd->mode;
+        uint32_t n = 0;
+        uint32_t total = 0;
+
+        for (n = 0; n < SAR_CTL_LIST_PAGE; n++) {
+            semantics_ar_whitelist_entry_t e;
+            uint32_t valid = 0;
+            sar_identity_eval_t cur;
+            sar_identity_verdict_t v;
+            wchar_t wpath[SEMANTICS_AR_PROTO_PATH_MAX];
+            uint32_t i;
+            int same_signer;
+            int same_hash;
+            uint32_t ms;
+
+            if (sar_whitelist_fetch(client, start + n, &e, &total, &valid) != 0) {
+                reply->result = -1;
+                reply->verdict = SAR_IDENTITY_VERDICT_ERROR;
+                return 0;
+            }
+            if (!valid)
+                break;
+
+            for (i = 0; i + 1 < SEMANTICS_AR_PROTO_PATH_MAX && e.image_path[i] != 0; i++)
+                wpath[i] = (wchar_t)e.image_path[i];
+            wpath[i] = L'\0';
+
+            memset(&cur, 0, sizeof(cur));
+            v = sar_identity_evaluate(wpath, &cur);
+            same_signer = memcmp(cur.identity.cert_subject, e.cert_subject,
+                                 sizeof(e.cert_subject)) == 0;
+            same_hash = memcmp(cur.identity.content_hash, e.content_hash,
+                               sizeof(e.content_hash)) == 0;
+            if (v == SAR_IDENTITY_VERDICT_VERIFIED && same_signer && same_hash)
+                ms = SAR_WL_MATCH_MATCHING;
+            else if (v == SAR_IDENTITY_VERDICT_VERIFIED && same_signer)
+                ms = SAR_WL_MATCH_LAPSED_SAME_SIGNER;
+            else
+                ms = SAR_WL_MATCH_LAPSED_CHANGED_SIGNER;
+
+            memcpy(reply->whitelist_entries[n].image_path, e.image_path,
+                   sizeof(reply->whitelist_entries[n].image_path));
+            memcpy(reply->whitelist_entries[n].cert_subject, e.cert_subject,
+                   sizeof(reply->whitelist_entries[n].cert_subject));
+            memcpy(reply->whitelist_entries[n].content_hash, e.content_hash,
+                   sizeof(reply->whitelist_entries[n].content_hash));
+            reply->whitelist_entries[n].first_seen = e.first_seen;
+            reply->whitelist_entries[n].match_state = ms;
+        }
+        reply->total = total;
         reply->returned = n;
         reply->result = 0;
         reply->verdict = SAR_IDENTITY_VERDICT_VERIFIED;

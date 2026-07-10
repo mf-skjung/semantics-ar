@@ -23,8 +23,15 @@
 #define SAR_CTL_OP_PROCESS_QUERY     11u
 #define SAR_CTL_OP_STATUS            12u
 #define SAR_CTL_OP_APP_IDENTITY_LIST 13u
+#define SAR_CTL_OP_WHITELIST_LIST    14u
 
 #define SAR_CTL_LIST_PAGE            8u
+
+#define SAR_CTL_RESULT_INTERPRETER   (-100)
+
+#define SAR_WL_MATCH_MATCHING              0u
+#define SAR_WL_MATCH_LAPSED_SAME_SIGNER    1u
+#define SAR_WL_MATCH_LAPSED_CHANGED_SIGNER 2u
 
 #pragma pack(push, 1)
 
@@ -66,6 +73,14 @@ typedef struct {
 } sar_app_identity_entry_t;
 
 typedef struct {
+    uint16_t image_path[SEMANTICS_AR_PROTO_PATH_MAX];
+    uint16_t cert_subject[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+    uint8_t  content_hash[SEMANTICS_AR_CONTENT_HASH_SIZE];
+    uint64_t first_seen;
+    uint32_t match_state;
+} sar_whitelist_list_entry_t;
+
+typedef struct {
     int32_t            result;
     uint32_t           verdict;
     uint32_t           total;
@@ -73,6 +88,7 @@ typedef struct {
     sar_catalog_entry_t entries[SAR_CTL_LIST_PAGE];
     sar_preserve_list_entry_t preserve_entries[SAR_CTL_LIST_PAGE];
     sar_app_identity_entry_t app_identities[SAR_CTL_LIST_PAGE];
+    sar_whitelist_list_entry_t whitelist_entries[SAR_CTL_LIST_PAGE];
     sar_identity_t     resolved;
     uint32_t           id_state;
     uint64_t           proc_start_key;

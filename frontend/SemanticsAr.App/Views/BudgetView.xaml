@@ -226,6 +226,15 @@
                                                 Text="{Binding CostText}"
                                                 Visibility="{Binding IsAttributed, Converter={StaticResource B2V}}" />
 
+                                            <Button
+                                                Margin="0,10,0,0"
+                                                HorizontalAlignment="Left"
+                                                Padding="12,6"
+                                                Content="Exempt this app…"
+                                                Command="{Binding ExemptCommand}"
+                                                Visibility="{Binding CanExempt, Converter={StaticResource B2V}}"
+                                                AutomationProperties.Name="Exempt this app" />
+
                                             <TextBlock
                                                 FontSize="12.5"
                                                 Opacity="0.8"

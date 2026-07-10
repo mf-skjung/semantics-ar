@@ -47,6 +47,10 @@ uint32_t sar_msg_expected_length(uint32_t message_type) {
         return (uint32_t)sizeof(semantics_ar_process_query_t);
     case SEMANTICS_AR_MSG_PROCESS_REPLY:
         return (uint32_t)sizeof(semantics_ar_process_reply_t);
+    case SEMANTICS_AR_MSG_WHITELIST_QUERY:
+        return (uint32_t)sizeof(semantics_ar_whitelist_query_t);
+    case SEMANTICS_AR_MSG_WHITELIST_REPLY:
+        return (uint32_t)sizeof(semantics_ar_whitelist_reply_t);
     default:
         return 0u;
     }

@@ -529,6 +529,49 @@ static NTSTATUS SarHandleEventsQuery(_Inout_ PSAR_COMM Comm,
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+static NTSTATUS SarHandleWhitelistQuery(_Inout_ PSAR_COMM Comm,
+                                        _In_ const semantics_ar_whitelist_query_t *Request,
+                                        _Out_writes_bytes_(OutputBufferLength) PVOID OutputBuffer,
+                                        _In_ ULONG OutputBufferLength,
+                                        _Out_ PULONG ReturnLength)
+{
+    semantics_ar_whitelist_reply_t reply;
+    sar_identity_t id;
+    UINT64 first_seen = 0;
+    uint32_t total = 0;
+    sar_wl_status_t st;
+
+    if (!sar_handshake_authenticated(&Comm->handshake)) {
+        InterlockedIncrement64(&Comm->tamper_counter);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (OutputBuffer == NULL || OutputBufferLength < sizeof(reply))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(&reply, sizeof(reply));
+    RtlZeroMemory(&id, sizeof(id));
+    reply.header.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
+    reply.header.message_type = SEMANTICS_AR_MSG_WHITELIST_REPLY;
+    reply.header.message_length = (uint32_t)sizeof(reply);
+    reply.result = 0;
+    reply.index = Request->index;
+
+    st = SarStateWhitelistEnumerate(g_sar_state, Request->index, &id, &first_seen, &total);
+    reply.total = total;
+    reply.valid = (st == SAR_WL_OK) ? 1u : 0u;
+    if (st == SAR_WL_OK) {
+        RtlCopyMemory(reply.entry.image_path, id.image_path, sizeof(reply.entry.image_path));
+        RtlCopyMemory(reply.entry.cert_subject, id.cert_subject, sizeof(reply.entry.cert_subject));
+        RtlCopyMemory(reply.entry.content_hash, id.content_hash, sizeof(reply.entry.content_hash));
+        reply.entry.first_seen = first_seen;
+    }
+
+    RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
+    *ReturnLength = (ULONG)sizeof(reply);
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
                               _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
                               _In_ ULONG InputBufferLength,
@@ -624,6 +667,10 @@ NTSTATUS SarCommMessageNotify(_In_opt_ PVOID PortCookie,
     case SEMANTICS_AR_MSG_PROCESS_QUERY:
         status = SarHandleProcessQuery(comm, (const semantics_ar_process_query_t *)InputBuffer,
                                        OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
+        break;
+    case SEMANTICS_AR_MSG_WHITELIST_QUERY:
+        status = SarHandleWhitelistQuery(comm, (const semantics_ar_whitelist_query_t *)InputBuffer,
+                                         OutputBuffer, OutputBufferLength, ReturnOutputBufferLength);
         break;
     case SEMANTICS_AR_MSG_IDENTITY_VERDICT:
         if (!sar_handshake_authenticated(&comm->handshake)) {

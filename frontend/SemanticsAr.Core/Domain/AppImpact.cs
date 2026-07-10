@@ -26,6 +26,7 @@ public sealed record AppImpact
     public required AppImpactKind Kind { get; init; }
     public required ulong AppIdentityId { get; init; }
     public required string DisplayName { get; init; }
+    public string ImagePath { get; init; } = string.Empty;
     public required string Signer { get; init; }
     public required AppSignature Signature { get; init; }
     public required int CopyCount { get; init; }

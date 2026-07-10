@@ -41,6 +41,10 @@ interface ISarElevatedControl : IUnknown
     HRESULT WhitelistRemove([in] BSTR imagePath,
                             [out] unsigned long *verdict,
                             [out] long *result);
+    HRESULT WhitelistPage([in] unsigned long start,
+                          [out] unsigned long *total,
+                          [out] unsigned long *returned,
+                          [out] SAFEARRAY(unsigned char) *blob);
     HRESULT Shutdown();
 };
 

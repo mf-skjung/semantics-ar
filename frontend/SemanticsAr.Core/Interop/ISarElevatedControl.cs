@@ -39,5 +39,8 @@ internal partial interface ISarElevatedControl
     int WhitelistRemove(string imagePath, out uint verdict, out int result);
 
     [PreserveSig]
+    int WhitelistPage(uint start, out uint total, out uint returned, out nint blob);
+
+    [PreserveSig]
     int Shutdown();
 }

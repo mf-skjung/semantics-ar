@@ -33,6 +33,8 @@ public:
                                                    LONG *result) = 0;
     virtual HRESULT STDMETHODCALLTYPE WhitelistRemove(BSTR imagePath, ULONG *verdict,
                                                       LONG *result) = 0;
+    virtual HRESULT STDMETHODCALLTYPE WhitelistPage(ULONG start, ULONG *total,
+                                                    ULONG *returned, SAFEARRAY **blob) = 0;
     virtual HRESULT STDMETHODCALLTYPE Shutdown(void) = 0;
 };
 

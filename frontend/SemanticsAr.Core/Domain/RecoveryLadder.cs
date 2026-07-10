@@ -8,6 +8,8 @@ public static class RecoveryLadder
     public const int CatalogEntrySize = 576;
     public const int PreserveEntrySize = 576;
     public const int AppIdentityEntrySize = 1080;
+    public const int WhitelistEntrySize = 1080;
+    public const int IdentitySize = 1064;
     public const int KeyIdSize = 32;
     public const int HashSize = 32;
 
@@ -99,6 +101,44 @@ public static class RecoveryLadder
             });
         }
         return items;
+    }
+
+    public static IReadOnlyList<Exemption> ParseExemptions(ReadOnlySpan<byte> blob, int count)
+    {
+        count = Math.Clamp(count, 0, blob.Length / WhitelistEntrySize);
+        List<Exemption> items = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            ReadOnlySpan<byte> e = blob.Slice(i * WhitelistEntrySize, WhitelistEntrySize);
+            string image = ReadPath(e.Slice(0, PathBytes));
+            string subject = ReadPath(e.Slice(PathBytes, SubjectBytes));
+            byte[] hash = e.Slice(PathBytes + SubjectBytes, HashSize).ToArray();
+            ulong firstSeen = BinaryPrimitives.ReadUInt64LittleEndian(e.Slice(PathBytes + SubjectBytes + HashSize, 8));
+            uint matchState = BinaryPrimitives.ReadUInt32LittleEndian(e.Slice(PathBytes + SubjectBytes + HashSize + 8, 4));
+
+            items.Add(new Exemption
+            {
+                ImagePath = image,
+                CertSubject = subject,
+                ContentHash = hash,
+                FirstSeen = RestorePlanner.Anchor(firstSeen),
+                MatchState = Exemption.MatchStateOf(matchState),
+            });
+        }
+        return items;
+    }
+
+    public static ResolvedIdentity? ParseIdentity(ReadOnlySpan<byte> blob, uint verdict)
+    {
+        if (blob.Length < IdentitySize)
+            return null;
+        return new ResolvedIdentity
+        {
+            ImagePath = ReadPath(blob.Slice(0, PathBytes)),
+            CertSubject = ReadPath(blob.Slice(PathBytes, SubjectBytes)),
+            ContentHash = blob.Slice(PathBytes + SubjectBytes, HashSize).ToArray(),
+            Verdict = verdict,
+        };
     }
 
     public static RecoveryOutcome MapResult(RecoverableItem item, int kernelResult)

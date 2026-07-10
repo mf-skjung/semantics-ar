@@ -23,6 +23,9 @@
         <DataTemplate DataType="{x:Type vm:BudgetViewModel}">
             <views:BudgetView />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:PolicyViewModel}">
+            <views:PolicyView />
+        </DataTemplate>
     </ui:FluentWindow.Resources>
 
     <Grid>

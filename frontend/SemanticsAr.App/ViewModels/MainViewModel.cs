@@ -18,17 +18,21 @@ public partial class MainViewModel : ObservableObject
     private string _modeLabel = string.Empty;
 
     private PostureMode _currentMode = PostureMode.Unknown;
+    private readonly PolicyViewModel _policy;
 
     public MainViewModel(PostureService posture, Func<IElevatedControlChannel> channelFactory)
     {
         _channelFactory = channelFactory;
         Home = new HomeViewModel(posture);
 
+        _policy = new PolicyViewModel(channelFactory, PickApp);
+
         Surfaces =
         [
             new SurfaceItem("Home", Home),
             new SurfaceItem("Recovery", new RecoveryViewModel(posture, channelFactory)),
-            new SurfaceItem("Budget & exemptions", new BudgetViewModel(channelFactory)),
+            new SurfaceItem("Recovery budget", new BudgetViewModel(channelFactory, RequestExempt)),
+            new SurfaceItem("Exemptions", _policy),
         ];
 
         _selectedSurface = Surfaces[0];
@@ -67,4 +71,28 @@ public partial class MainViewModel : ObservableObject
         PostureMode.Audit => "AUDIT MODE",
         _ => "MODE UNKNOWN",
     };
+
+    private void RequestExempt(string imagePath, string costText)
+    {
+        foreach (SurfaceItem surface in Surfaces)
+        {
+            if (ReferenceEquals(surface.Content, _policy))
+            {
+                SelectedSurface = surface;
+                break;
+            }
+        }
+        _policy.BeginExempt(imagePath, costText);
+    }
+
+    private static string? PickApp()
+    {
+        Microsoft.Win32.OpenFileDialog dialog = new()
+        {
+            Filter = "Applications (*.exe)|*.exe",
+            CheckFileExists = true,
+            Title = "Choose an application to exempt",
+        };
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
 }

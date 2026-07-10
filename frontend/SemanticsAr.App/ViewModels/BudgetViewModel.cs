@@ -21,6 +21,7 @@ public partial class BudgetViewModel : ObservableObject
     private const double TrendPad = 6;
 
     private readonly Func<IElevatedControlChannel> _channelFactory;
+    private readonly Action<string, string>? _onExempt;
     private BudgetSession? _session;
     private bool _busy;
 
@@ -57,9 +58,10 @@ public partial class BudgetViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowTrend))]
     private PointCollection _trendPoints = new();
 
-    public BudgetViewModel(Func<IElevatedControlChannel> channelFactory)
+    public BudgetViewModel(Func<IElevatedControlChannel> channelFactory, Action<string, string>? onExempt = null)
     {
         _channelFactory = channelFactory;
+        _onExempt = onExempt;
     }
 
     public ObservableCollection<AppImpactRowViewModel> Apps { get; } = new();
@@ -171,7 +173,7 @@ public partial class BudgetViewModel : ObservableObject
 
         Apps.Clear();
         foreach (AppImpact impact in attribution.Apps)
-            Apps.Add(new AppImpactRowViewModel(impact, attribution.AchievedWindow, attribution.Range));
+            Apps.Add(new AppImpactRowViewModel(impact, attribution.AchievedWindow, attribution.Range, _onExempt));
 
         TrendPoints = BuildTrend(attribution.Trend);
     }

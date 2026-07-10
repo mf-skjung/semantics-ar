@@ -129,6 +129,7 @@ public sealed record BudgetAttribution
                 Kind = AppImpactKind.Attributed,
                 AppIdentityId = id,
                 DisplayName = DisplayName(identity),
+                ImagePath = identity?.ImagePath ?? string.Empty,
                 Signer = identity?.CertSubject ?? string.Empty,
                 Signature = AppImpact.SignatureOf(identity?.Verdict ?? 4),
                 CopyCount = current.Count,

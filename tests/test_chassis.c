@@ -130,12 +130,23 @@ static void make_identity(sar_identity_t *id, uint16_t p, uint16_t s, uint8_t h)
     id->content_hash[0] = h;
 }
 
+static void make_path_identity(sar_identity_t *id, const char *leaf) {
+    size_t i;
+    memset(id, 0, sizeof(*id));
+    for (i = 0; leaf[i] != 0 && i + 1 < SEMANTICS_AR_PROTO_PATH_MAX; i++)
+        id->image_path[i] = (uint16_t)(unsigned char)leaf[i];
+    id->cert_subject[0] = 7;
+    id->content_hash[0] = 7;
+}
+
 static void test_whitelist(void) {
     sar_identity_t storage[4];
+    uint64_t fs[4];
     sar_whitelist_t wl;
-    sar_identity_t a, b, c, d, e, near;
+    sar_identity_t a, b, c, d, e, near, interp, out;
+    uint64_t seen = 0;
 
-    sar_whitelist_init(&wl, storage, 4u);
+    sar_whitelist_init(&wl, storage, fs, 4u);
     make_identity(&a, 1, 1, 1);
     make_identity(&b, 2, 2, 2);
     make_identity(&c, 3, 3, 3);
@@ -143,29 +154,47 @@ static void test_whitelist(void) {
     make_identity(&e, 5, 5, 5);
 
     CHECK(sar_whitelist_match(&wl, &a) == 0, "empty whitelist no match");
-    CHECK(sar_whitelist_add(&wl, &a) == SAR_WL_OK, "add a");
+    CHECK(sar_whitelist_add(&wl, &a, 100u) == SAR_WL_OK, "add a");
     CHECK(sar_whitelist_match(&wl, &a) == 1, "a matches after add");
-    CHECK(sar_whitelist_add(&wl, &a) == SAR_WL_DUPLICATE, "duplicate add rejected");
+    CHECK(sar_whitelist_add(&wl, &a, 111u) == SAR_WL_DUPLICATE, "duplicate add rejected");
 
     make_identity(&near, 1, 1, 9);
     CHECK(sar_whitelist_match(&wl, &near) == 0, "near miss (hash) no match");
     make_identity(&near, 1, 9, 1);
     CHECK(sar_whitelist_match(&wl, &near) == 0, "near miss (subject) no match");
     make_identity(&near, 9, 1, 1);
-    CHECK(sar_whitelist_match(&wl, &near) == 0, "near miss (path) no match");
+    CHECK(sar_whitelist_match(&wl, &near) == 1, "path-independent anchor: path-only difference still matches");
 
-    CHECK(sar_whitelist_add(&wl, &b) == SAR_WL_OK, "add b");
-    CHECK(sar_whitelist_add(&wl, &c) == SAR_WL_OK, "add c");
-    CHECK(sar_whitelist_add(&wl, &d) == SAR_WL_OK, "add d");
-    CHECK(sar_whitelist_add(&wl, &e) == SAR_WL_FULL, "capacity enforced");
+    CHECK(sar_whitelist_add(&wl, &b, 200u) == SAR_WL_OK, "add b");
+    CHECK(sar_whitelist_add(&wl, &c, 300u) == SAR_WL_OK, "add c");
+    CHECK(sar_whitelist_add(&wl, &d, 400u) == SAR_WL_OK, "add d");
+    CHECK(sar_whitelist_add(&wl, &e, 500u) == SAR_WL_FULL, "capacity enforced");
+
+    CHECK(sar_whitelist_enumerate(&wl, 1u, &out, &seen) == SAR_WL_OK, "enumerate index 1");
+    CHECK(seen == 200u, "first_seen tracks entry b");
+    CHECK(sar_whitelist_enumerate(&wl, 4u, &out, &seen) == SAR_WL_NOT_FOUND, "enumerate past end");
 
     CHECK(sar_whitelist_remove(&wl, &b) == SAR_WL_OK, "remove b");
     CHECK(sar_whitelist_match(&wl, &b) == 0, "b gone after remove");
     CHECK(sar_whitelist_match(&wl, &a) == 1, "a survives compaction");
     CHECK(sar_whitelist_match(&wl, &c) == 1, "c survives compaction");
     CHECK(sar_whitelist_match(&wl, &d) == 1, "d survives compaction");
+    CHECK(sar_whitelist_enumerate(&wl, 1u, &out, &seen) == SAR_WL_OK, "enumerate after compaction");
+    CHECK(seen == 300u, "first_seen shifts with compaction");
     CHECK(sar_whitelist_remove(&wl, &b) == SAR_WL_NOT_FOUND, "remove absent");
-    CHECK(sar_whitelist_add(&wl, &e) == SAR_WL_OK, "room freed after remove");
+    CHECK(sar_whitelist_add(&wl, &e, 500u) == SAR_WL_OK, "room freed after remove");
+
+    make_path_identity(&interp, "cmd.exe");
+    CHECK(sar_whitelist_add(&wl, &interp, 600u) == SAR_WL_INTERPRETER, "interpreter refused");
+    CHECK(sar_identity_is_interpreter(interp.image_path) == 1, "predicate flags interpreter");
+    CHECK(sar_identity_is_interpreter(a.image_path) == 0, "predicate clears non-interpreter");
+
+    make_path_identity(&interp, "C:\\Windows\\System32\\cmd.exe ");
+    CHECK(sar_identity_is_interpreter(interp.image_path) == 1, "trailing-space interpreter still caught");
+    make_path_identity(&interp, "PowerShell.EXE.");
+    CHECK(sar_identity_is_interpreter(interp.image_path) == 1, "trailing-dot + mixed-case interpreter still caught");
+    make_path_identity(&interp, "notepad.exe");
+    CHECK(sar_identity_is_interpreter(interp.image_path) == 0, "non-interpreter not flagged");
 }
 
 static void test_identity_resolve(void) {

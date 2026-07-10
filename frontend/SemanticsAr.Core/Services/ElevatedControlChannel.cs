@@ -5,6 +5,9 @@ namespace SemanticsAr.Core.Services;
 
 public sealed class ElevatedControlChannel : IElevatedControlChannel
 {
+    private const int ResultNotVerified = -1;
+    private const int ResultInterpreter = -100;
+
     private ISarElevatedControl? _control;
 
     private ElevatedControlChannel(ISarElevatedControl control)
@@ -62,6 +65,86 @@ public sealed class ElevatedControlChannel : IElevatedControlChannel
 
         items = all;
         return ElevatedError.None;
+    }
+
+    public ElevatedError LoadExemptions(out IReadOnlyList<Exemption> items)
+    {
+        items = Array.Empty<Exemption>();
+        ISarElevatedControl control = Control();
+        List<Exemption> all = new();
+        uint start = 0;
+
+        while (true)
+        {
+            int hr = control.WhitelistPage(start, out uint total, out uint returned, out nint blob);
+
+            ElevatedError err = ElevatedErrors.FromHResult(hr);
+            if (err != ElevatedError.None)
+                return err;
+
+            try
+            {
+                if (returned > 0)
+                {
+                    byte[] bytes = SafeArrayNative.CopyBytes(blob);
+                    all.AddRange(RecoveryLadder.ParseExemptions(bytes, (int)returned));
+                }
+            }
+            finally
+            {
+                SafeArrayNative.Destroy(blob);
+            }
+
+            start += returned;
+            if (returned == 0 || start >= total)
+                break;
+        }
+
+        items = all;
+        return ElevatedError.None;
+    }
+
+    public ElevatedError ResolveIdentity(string imagePath, out ResolvedIdentity? identity)
+    {
+        identity = null;
+        int hr = Control().ResolveIdentity(imagePath, out nint blob, out uint verdict, out _);
+
+        ElevatedError err = ElevatedErrors.FromHResult(hr);
+        if (err != ElevatedError.None)
+            return err;
+
+        try
+        {
+            byte[] bytes = SafeArrayNative.CopyBytes(blob);
+            identity = RecoveryLadder.ParseIdentity(bytes, verdict);
+        }
+        finally
+        {
+            SafeArrayNative.Destroy(blob);
+        }
+        return ElevatedError.None;
+    }
+
+    public ExemptionAdd WhitelistAdd(string imagePath)
+    {
+        int hr = Control().WhitelistAdd(imagePath, out uint verdict, out int result);
+
+        ElevatedError err = ElevatedErrors.FromHResult(hr);
+        if (err != ElevatedError.None)
+            return new ExemptionAdd(ExemptionAddResult.ChannelError, verdict, err);
+
+        return result switch
+        {
+            0 => new ExemptionAdd(ExemptionAddResult.Added, verdict, ElevatedError.None),
+            ResultInterpreter => new ExemptionAdd(ExemptionAddResult.RefusedInterpreter, verdict, ElevatedError.None),
+            ResultNotVerified => new ExemptionAdd(ExemptionAddResult.NotVerified, verdict, ElevatedError.None),
+            _ => new ExemptionAdd(ExemptionAddResult.ChannelError, verdict, ElevatedError.Transport),
+        };
+    }
+
+    public ElevatedError WhitelistRemove(string imagePath, out uint verdict)
+    {
+        return ElevatedErrors.FromHResult(Control().WhitelistRemove(imagePath, out verdict, out _));
     }
 
     public RecoveryOutcome Recover(RecoverableItem item, string targetPath)

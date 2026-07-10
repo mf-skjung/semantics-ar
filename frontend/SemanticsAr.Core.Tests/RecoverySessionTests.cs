@@ -33,6 +33,27 @@ public sealed class RecoverySessionTests
             return ElevatedError.None;
         }
 
+        public ElevatedError LoadExemptions(out IReadOnlyList<Exemption> items)
+        {
+            items = Array.Empty<Exemption>();
+            return ElevatedError.None;
+        }
+
+        public ElevatedError ResolveIdentity(string imagePath, out ResolvedIdentity? identity)
+        {
+            identity = null;
+            return ElevatedError.None;
+        }
+
+        public ExemptionAdd WhitelistAdd(string imagePath) =>
+            new(ExemptionAddResult.Added, 0, ElevatedError.None);
+
+        public ElevatedError WhitelistRemove(string imagePath, out uint verdict)
+        {
+            verdict = 0;
+            return ElevatedError.None;
+        }
+
         public RecoveryOutcome Recover(RecoverableItem item, string targetPath)
         {
             return OnRecover?.Invoke(item)

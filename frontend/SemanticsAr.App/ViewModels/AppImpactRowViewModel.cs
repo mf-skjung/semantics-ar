@@ -17,18 +17,22 @@ public sealed partial class AppImpactRowViewModel : ObservableObject
     private readonly AppImpact _impact;
     private readonly TimeSpan? _window;
     private readonly BudgetRange _range;
+    private readonly Action<string, string>? _onExempt;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ChevronGlyph))]
     private bool _isExpanded;
 
-    public AppImpactRowViewModel(AppImpact impact, TimeSpan? window, BudgetRange range)
+    public AppImpactRowViewModel(AppImpact impact, TimeSpan? window, BudgetRange range, Action<string, string>? onExempt = null)
     {
         _impact = impact;
         _window = window;
         _range = range;
+        _onExempt = onExempt;
         Classes = impact.Classes.Select(c => new FileClassRow(c)).ToList();
     }
+
+    public bool CanExempt => IsAttributed && _impact.ImagePath.Length > 0 && _onExempt is not null;
 
     public bool IsUnattributed => _impact.Kind == AppImpactKind.Unattributed;
     public bool IsGrouped => _impact.Kind == AppImpactKind.Grouped;
@@ -105,6 +109,9 @@ public sealed partial class AppImpactRowViewModel : ObservableObject
 
     [RelayCommand]
     private void ToggleExpand() => IsExpanded = !IsExpanded;
+
+    [RelayCommand]
+    private void Exempt() => _onExempt?.Invoke(_impact.ImagePath, CostText);
 
     private string SignerLine() => _impact.Signature switch
     {

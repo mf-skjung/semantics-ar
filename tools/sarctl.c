@@ -186,6 +186,55 @@ static int cmd_app_identity(void)
     return 0;
 }
 
+static const wchar_t *match_str(uint32_t ms)
+{
+    switch (ms) {
+    case SAR_WL_MATCH_MATCHING:              return L"matching";
+    case SAR_WL_MATCH_LAPSED_SAME_SIGNER:    return L"lapsed-same-signer";
+    case SAR_WL_MATCH_LAPSED_CHANGED_SIGNER: return L"lapsed-changed-signer";
+    default:                                 return L"?";
+    }
+}
+
+static int cmd_whitelist_list(void)
+{
+    uint32_t start = 0, total = 0;
+
+    do {
+        sar_control_command_t cmd;
+        sar_control_reply_t reply;
+        uint32_t i;
+
+        memset(&cmd, 0, sizeof cmd);
+        cmd.op = SAR_CTL_OP_WHITELIST_LIST;
+        cmd.mode = start;
+        if (send_command(&cmd, &reply) != 0)
+            return 1;
+
+        total = reply.total;
+        if (reply.returned == 0)
+            break;
+        for (i = 0; i < reply.returned; i++) {
+            const sar_whitelist_list_entry_t *e = &reply.whitelist_entries[i];
+            wchar_t path[SEMANTICS_AR_PROTO_PATH_MAX];
+            wchar_t subj[SEMANTICS_AR_PROTO_SUBJECT_MAX];
+            uint32_t j = 0;
+            for (; j < SEMANTICS_AR_PROTO_PATH_MAX && e->image_path[j] != 0; j++)
+                path[j] = (wchar_t)e->image_path[j];
+            path[j] = 0;
+            for (j = 0; j < SEMANTICS_AR_PROTO_SUBJECT_MAX && e->cert_subject[j] != 0; j++)
+                subj[j] = (wchar_t)e->cert_subject[j];
+            subj[j] = 0;
+            wprintf(L"[wl] match=%ls first_seen=%llu signer=\"%ls\"  %ls\n",
+                    match_str(e->match_state), (unsigned long long)e->first_seen, subj, path);
+        }
+        start += reply.returned;
+    } while (start < total);
+
+    wprintf(L"%u exemption(s)\n", total);
+    return 0;
+}
+
 static int cmd_preserve_recover(const char *path, const char *off, const char *len)
 {
     sar_control_command_t cmd;
@@ -473,6 +522,8 @@ int main(int argc, char **argv)
         return cmd_whitelist(SAR_CTL_OP_WHITELIST_ADD, argv[2]);
     if (argc == 3 && strcmp(argv[1], "whitelist-remove") == 0)
         return cmd_whitelist(SAR_CTL_OP_WHITELIST_REMOVE, argv[2]);
+    if (argc >= 2 && strcmp(argv[1], "whitelist-list") == 0)
+        return cmd_whitelist_list();
     if (argc == 2 && strcmp(argv[1], "events") == 0)
         return cmd_events(1);
     if (argc == 3 && strcmp(argv[1], "events") == 0)
@@ -488,7 +539,7 @@ int main(int argc, char **argv)
              L"usage: sarctl status | list | recover <key_id-hex> <path> | mode <audit|enforce>\n"
              L"       | preserve-list | preserve-recover <path> <offset> <length>\n"
              L"       | budget <retention-seconds> <capacity-MB>\n"
-             L"       | resolve <path> | whitelist-add <path> | whitelist-remove <path>\n"
+             L"       | resolve <path> | whitelist-add <path> | whitelist-remove <path> | whitelist-list\n"
              L"       | events [count]\n");
     return 2;
 }
