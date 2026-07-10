@@ -27,7 +27,7 @@ public sealed class ElevatedControlChannel : IElevatedControlChannel
         return LoadPaged(catalog: false, out items);
     }
 
-    public RecoveryOutcome Recover(RecoverableItem item)
+    public RecoveryOutcome Recover(RecoverableItem item, string targetPath)
     {
         ISarElevatedControl control = Control();
         int hr;
@@ -38,7 +38,7 @@ public sealed class ElevatedControlChannel : IElevatedControlChannel
             nint key = SafeArrayNative.FromBytes(item.KeyId ?? Array.Empty<byte>());
             try
             {
-                hr = control.Recover(key, item.ProvenancePath, out result);
+                hr = control.Recover(key, targetPath, out result);
             }
             finally
             {
@@ -47,13 +47,13 @@ public sealed class ElevatedControlChannel : IElevatedControlChannel
         }
         else
         {
-            hr = control.PreserveRecover(item.ProvenancePath, item.Offset, item.Length, out result);
+            hr = control.PreserveRecover(targetPath, item.Offset, item.Length, out result);
         }
 
         ElevatedError err = ElevatedErrors.FromHResult(hr);
         if (err != ElevatedError.None)
-            return new RecoveryOutcome(item, RecoveryOutcomeKind.ChannelError, 0, err);
-        return RecoveryLadder.MapResult(item, result);
+            return new RecoveryOutcome(item, RecoveryOutcomeKind.ChannelError, 0, err) { TargetPath = targetPath };
+        return RecoveryLadder.MapResult(item, result) with { TargetPath = targetPath };
     }
 
     public ElevatedError SetMode(uint mode)

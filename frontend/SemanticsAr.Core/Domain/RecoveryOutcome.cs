@@ -11,4 +11,7 @@ public sealed record RecoveryOutcome(
     RecoverableItem Item,
     RecoveryOutcomeKind Kind,
     int KernelResult,
-    ElevatedError Error);
+    ElevatedError Error)
+{
+    public string TargetPath { get; init; } = string.Empty;
+}

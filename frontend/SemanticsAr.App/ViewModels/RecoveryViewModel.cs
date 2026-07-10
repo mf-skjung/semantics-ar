@@ -1,5 +1,9 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
 using System.Windows;
+using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SemanticsAr.Core.Domain;
@@ -19,7 +23,9 @@ public enum RecoveryStage
 public partial class RecoveryViewModel : ObservableObject
 {
     private readonly Func<IElevatedControlChannel> _channelFactory;
+    private readonly IFileProbe _probe = new Win32FileProbe();
     private RecoverySession? _session;
+    private bool _busy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPreElevation))]
@@ -39,6 +45,10 @@ public partial class RecoveryViewModel : ObservableObject
     {
         _channelFactory = channelFactory;
         Summary = BuildSummary(posture.Current);
+
+        ICollectionView view = CollectionViewSource.GetDefaultView(Items);
+        view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(RecoverableItemViewModel.GroupLabel)));
+
         posture.PostureChanged += (_, e) =>
             Application.Current.Dispatcher.Invoke(() =>
             {
@@ -62,9 +72,41 @@ public partial class RecoveryViewModel : ObservableObject
     [RelayCommand]
     private void Begin()
     {
-        _session = new RecoverySession(_channelFactory);
-        _session.Begin();
-        SyncFromSession();
+        if (_busy)
+            return;
+
+        _busy = true;
+        try
+        {
+            _session = new RecoverySession(_channelFactory);
+            _session.Begin();
+            SyncFromSession();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void SelectAll()
+    {
+        if (Stage != RecoveryStage.Browsing)
+            return;
+
+        foreach (RecoverableItemViewModel item in Items)
+            if (item.CanSelect)
+                item.IsSelected = true;
+    }
+
+    [RelayCommand]
+    private void ClearSelection()
+    {
+        if (Stage != RecoveryStage.Browsing)
+            return;
+
+        foreach (RecoverableItemViewModel item in Items)
+            item.IsSelected = false;
     }
 
     [RelayCommand]
@@ -92,25 +134,75 @@ public partial class RecoveryViewModel : ObservableObject
     [RelayCommand]
     private void Confirm()
     {
-        if (_session is null || Stage != RecoveryStage.Preview)
+        if (_session is null || Stage != RecoveryStage.Preview || _busy)
             return;
 
-        List<RecoverableItem> selection = new();
-        foreach (RecoverableItemViewModel item in PreviewItems)
-            selection.Add(item.Model);
+        _busy = true;
+        try
+        {
+            HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
+            DateTimeOffset now = DateTimeOffset.Now;
+            List<RestoreRequest> plan = new();
+            List<RecoveryOutcome> unplannable = new();
 
-        _session.Execute(selection);
+            foreach (RecoverableItemViewModel item in PreviewItems)
+            {
+                if (item.Disposition == RestoreDisposition.Blocked)
+                {
+                    unplannable.Add(new RecoveryOutcome(item.Model, RecoveryOutcomeKind.ChannelError, 0, ElevatedError.Unknown));
+                    continue;
+                }
 
-        Report.Clear();
-        foreach (RecoveryOutcome outcome in _session.Report)
-            Report.Add(new RecoveryOutcomeViewModel(outcome));
+                try
+                {
+                    bool inPlace = item.Model.Rung == CertaintyRung.Definitive
+                        || item.Disposition == RestoreDisposition.DeletedSince
+                        || (item.OverwriteInPlace && item.CanOverwriteInPlace);
+                    string target = inPlace
+                        ? item.Model.ProvenancePath
+                        : RestorePlanner.SideBySidePath(item.Model.ProvenancePath, now, reserved, _probe);
+                    plan.Add(new RestoreRequest(item.Model, target));
+                }
+                catch (Exception ex) when (ex is PathTooLongException or ArgumentException)
+                {
+                    unplannable.Add(new RecoveryOutcome(item.Model, RecoveryOutcomeKind.ChannelError, 0, ElevatedError.Unknown));
+                }
+            }
 
-        Stage = RecoveryStage.Report;
+            bool executed = plan.Count > 0;
+            if (executed)
+                _session.Execute(plan);
+
+            if (executed && _session.State == RecoverySessionState.Browsing)
+                return;
+
+            if (_session.State == RecoverySessionState.Unavailable)
+            {
+                UnavailableText = DescribeError(_session.LastError);
+                Stage = RecoveryStage.Unavailable;
+                return;
+            }
+
+            Report.Clear();
+            foreach (RecoveryOutcome outcome in unplannable)
+                Report.Add(new RecoveryOutcomeViewModel(outcome));
+            if (executed)
+                foreach (RecoveryOutcome outcome in _session.Report)
+                    Report.Add(new RecoveryOutcomeViewModel(outcome));
+            Stage = RecoveryStage.Report;
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     [RelayCommand]
     private void Close()
     {
+        if (_busy)
+            return;
+
         _session?.Close();
         _session = null;
         Items.Clear();
@@ -131,9 +223,7 @@ public partial class RecoveryViewModel : ObservableObject
         switch (_session.State)
         {
             case RecoverySessionState.Browsing:
-                Items.Clear();
-                foreach (RecoverableItem item in _session.Items)
-                    Items.Add(new RecoverableItemViewModel(item));
+                BuildItems(_session.Items);
                 Stage = RecoveryStage.Browsing;
                 break;
 
@@ -146,6 +236,33 @@ public partial class RecoveryViewModel : ObservableObject
                 Stage = RecoveryStage.PreElevation;
                 break;
         }
+    }
+
+    private void BuildItems(IReadOnlyList<RecoverableItem> snapshot)
+    {
+        Items.Clear();
+
+        IEnumerable<RecoverableItem> grouped = snapshot.Where(i => i.ActorStartKey != 0);
+
+        foreach (Incident incident in IncidentGrouper.Group(grouped, TimeSpan.MaxValue))
+        {
+            string label = $"Incident · {incident.FirstSeen.LocalDateTime:g}";
+            foreach (RecoverableItem member in incident.Members.Cast<RecoverableItem>())
+                Items.Add(MakeItem(member, label));
+        }
+
+        foreach (RecoverableItem item in snapshot.Where(i => i.ActorStartKey == 0))
+            Items.Add(MakeItem(item, "Held copies"));
+    }
+
+    private RecoverableItemViewModel MakeItem(RecoverableItem model, string label)
+    {
+        FileState state = _probe.Probe(model.ProvenancePath);
+        RestoreDisposition disposition = RestorePlanner.Classify(model, state);
+        bool allowInPlace = model.Rung == CertaintyRung.Bounded
+            && (disposition is RestoreDisposition.Additive or RestoreDisposition.ModifiedSince)
+            && !state.IsReparsePoint;
+        return new RecoverableItemViewModel(model, disposition, label, allowInPlace);
     }
 
     private static string BuildSummary(PostureVerdict? verdict)

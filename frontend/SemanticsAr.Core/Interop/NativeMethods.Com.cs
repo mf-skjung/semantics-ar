@@ -26,6 +26,11 @@ internal static partial class NativeMethods
     internal static partial int CoGetObject(string pszName, ref BindOpts3 pBindOptions,
                                             in Guid riid, out nint ppv);
 
+    [LibraryImport("ole32")]
+    internal static partial int CoSetProxyBlanket(nint pProxy, uint dwAuthnSvc, uint dwAuthzSvc,
+                                                  nint pServerPrincName, uint dwAuthnLevel,
+                                                  uint dwImpLevel, nint pAuthInfo, uint dwCapabilities);
+
     [LibraryImport("oleaut32")]
     internal static partial nint SafeArrayCreateVector(ushort vt, int lLbound, uint cElements);
 

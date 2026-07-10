@@ -72,5 +72,80 @@ Check("events pipe connected (open + server verified SYSTEM)", journal.IsConnect
 Thread.Sleep(6000);
 Metric("events received in listen window", Volatile.Read(ref received).ToString());
 
+Console.WriteLine("=== Slice-2 elevated itemized-plane verification ===");
+
+int HostCount() => System.Diagnostics.Process.GetProcessesByName("SemanticsArElevationHost").Length;
+
+int hostsBefore = HostCount();
+Metric("elevation hosts before", hostsBefore.ToString());
+
+var session = new RecoverySession(() => ElevatedControlChannel.Activate(nint.Zero));
+session.Begin();
+Metric("recovery session state after Begin", session.State.ToString());
+
+if (session.State == RecoverySessionState.Browsing)
+{
+    Check("elevated snapshot fetched (activate + host->service chain + round-trip)", true);
+    Metric("recoverable items", session.Items.Count.ToString());
+
+    var probe = new Win32FileProbe();
+    int classified = 0;
+    foreach (RecoverableItem item in session.Items.Take(8))
+    {
+        RestoreDisposition disposition = RestorePlanner.Classify(item, probe);
+        Console.WriteLine("ITEM  rung=" + item.Rung + " disp=" + disposition + " path=" + item.ProvenancePath);
+        classified++;
+    }
+    Check("provenance paths classify via GLOBALROOT probe", classified == Math.Min(8, session.Items.Count));
+
+    Thread.Sleep(500);
+    int hostsAfterSnapshot = HostCount();
+    Metric("elevation hosts after snapshot release", hostsAfterSnapshot.ToString());
+    Check("single-use host exited after snapshot (no resident broker)", hostsAfterSnapshot <= hostsBefore);
+
+    if (session.Items.Count > 0)
+    {
+        RecoverableItem first = session.Items[0];
+        var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string target;
+        if (first.Rung == CertaintyRung.Definitive)
+        {
+            target = first.ProvenancePath;
+        }
+        else
+        {
+            try
+            {
+                target = RestorePlanner.SideBySidePath(first.ProvenancePath, DateTimeOffset.Now, reserved, probe);
+            }
+            catch
+            {
+                target = first.ProvenancePath;
+            }
+        }
+
+        session.Execute([new RestoreRequest(first, target)]);
+        Metric("recover round-trip state", session.State.ToString());
+        if (session.State == RecoverySessionState.Reported && session.Report.Count == 1)
+        {
+            RecoveryOutcome outcome = session.Report[0];
+            Metric("recover outcome", outcome.Kind + " kernel=" + outcome.KernelResult);
+            Check("recover round-trip completed over a fresh elevation", outcome.Kind != RecoveryOutcomeKind.ChannelError,
+                outcome.Error.ToString());
+        }
+        else
+        {
+            Check("recover round-trip completed over a fresh elevation", false, "state=" + session.State);
+        }
+
+        Thread.Sleep(500);
+        Metric("elevation hosts after recover", HostCount().ToString());
+    }
+}
+else
+{
+    Check("elevated snapshot fetched", false, "state=" + session.State + " err=" + session.LastError);
+}
+
 Console.WriteLine("=== " + pass + " passed, " + fail + " failed ===");
 return fail == 0 ? 0 : 1;

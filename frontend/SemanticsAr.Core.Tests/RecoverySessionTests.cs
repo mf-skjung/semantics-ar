@@ -27,10 +27,10 @@ public sealed class RecoverySessionTests
             return PreservedError;
         }
 
-        public RecoveryOutcome Recover(RecoverableItem item)
+        public RecoveryOutcome Recover(RecoverableItem item, string targetPath)
         {
             return OnRecover?.Invoke(item)
-                ?? new RecoveryOutcome(item, RecoveryOutcomeKind.RestoredVerified, 0, ElevatedError.None);
+                ?? new RecoveryOutcome(item, RecoveryOutcomeKind.RestoredVerified, 0, ElevatedError.None) { TargetPath = targetPath };
         }
 
         public ElevatedError SetMode(uint mode) => ElevatedError.None;
@@ -40,6 +40,14 @@ public sealed class RecoverySessionTests
         public void Dispose() => Disposed = true;
     }
 
+    private static IReadOnlyList<RestoreRequest> Plan(IEnumerable<RecoverableItem> items)
+    {
+        List<RestoreRequest> plan = new();
+        foreach (RecoverableItem item in items)
+            plan.Add(new RestoreRequest(item, item.ProvenancePath));
+        return plan;
+    }
+
     private static RecoverableItem Definitive(string path) =>
         new() { Rung = CertaintyRung.Definitive, ProvenancePath = path, KeyId = new byte[32] };
 
@@ -47,7 +55,7 @@ public sealed class RecoverySessionTests
         new() { Rung = CertaintyRung.Bounded, ProvenancePath = path, Offset = 0, Length = 16 };
 
     [Fact]
-    public void Begin_AggregatesDefinitiveThenBounded()
+    public void Begin_AggregatesDefinitiveThenBounded_AndReleasesChannel()
     {
         FakeChannel channel = new()
         {
@@ -63,28 +71,34 @@ public sealed class RecoverySessionTests
         Assert.Equal(CertaintyRung.Definitive, session.Items[0].Rung);
         Assert.Equal(CertaintyRung.Definitive, session.Items[1].Rung);
         Assert.Equal(CertaintyRung.Bounded, session.Items[2].Rung);
+        Assert.True(channel.Disposed);
     }
 
     [Fact]
-    public void Execute_ProducesReport()
+    public void Execute_ReElevatesAndProducesReport()
     {
-        FakeChannel channel = new()
+        int opens = 0;
+        RecoverySession session = new(() =>
         {
-            Catalog = [Definitive("a")],
-            OnRecover = item => new RecoveryOutcome(item, RecoveryOutcomeKind.RestoredVerified, 0, ElevatedError.None),
-        };
-        RecoverySession session = new(() => channel);
+            opens++;
+            return new FakeChannel
+            {
+                Catalog = [Definitive("a")],
+                OnRecover = item => new RecoveryOutcome(item, RecoveryOutcomeKind.RestoredVerified, 0, ElevatedError.None),
+            };
+        });
         session.Begin();
 
-        session.Execute(session.Items);
+        session.Execute(Plan(session.Items));
 
+        Assert.Equal(2, opens);
         Assert.Equal(RecoverySessionState.Reported, session.State);
         Assert.Single(session.Report);
         Assert.Equal(RecoveryOutcomeKind.RestoredVerified, session.Report[0].Kind);
     }
 
     [Fact]
-    public void Begin_AccessDenied_IsUnavailableAndDisposes()
+    public void Begin_AccessDenied_IsUnavailableAndReleasesChannel()
     {
         FakeChannel channel = new() { CatalogError = ElevatedError.AccessDenied };
         RecoverySession session = new(() => channel);
@@ -108,7 +122,26 @@ public sealed class RecoverySessionTests
     }
 
     [Fact]
-    public void Close_DisposesAndResets()
+    public void Execute_ConsentDeclined_ReturnsToBrowsing()
+    {
+        int opens = 0;
+        RecoverySession session = new(() =>
+        {
+            opens++;
+            if (opens == 1)
+                return new FakeChannel { Catalog = [Definitive("a")] };
+            throw new OperationCanceledException();
+        });
+        session.Begin();
+
+        session.Execute(Plan(session.Items));
+
+        Assert.Equal(RecoverySessionState.Browsing, session.State);
+        Assert.Empty(session.Report);
+    }
+
+    [Fact]
+    public void Close_Resets()
     {
         FakeChannel channel = new() { Catalog = [Definitive("a")] };
         RecoverySession session = new(() => channel);
@@ -117,7 +150,6 @@ public sealed class RecoverySessionTests
         session.Close();
 
         Assert.Equal(RecoverySessionState.Idle, session.State);
-        Assert.True(channel.Disposed);
         Assert.Empty(session.Items);
     }
 }

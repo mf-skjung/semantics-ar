@@ -120,7 +120,7 @@ static int RunServer(void)
     DWORD cookie = 0;
     hr = CoRegisterClassObject(CLSID_SarElevatedControl, factory,
                                CLSCTX_LOCAL_SERVER,
-                               REGCLS_MULTIPLEUSE | REGCLS_SUSPENDED, &cookie);
+                               REGCLS_SINGLEUSE | REGCLS_SUSPENDED, &cookie);
     if (SUCCEEDED(hr))
         hr = CoResumeClassObjects();
     if (SUCCEEDED(hr))

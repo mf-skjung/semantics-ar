@@ -1,6 +1,6 @@
 namespace SemanticsAr.Core.Domain;
 
-public sealed record RecoverableItem
+public sealed record RecoverableItem : IIncidentSource
 {
     public required CertaintyRung Rung { get; init; }
     public required string ProvenancePath { get; init; }
@@ -12,4 +12,6 @@ public sealed record RecoverableItem
     public ulong Size { get; init; }
     public ulong CaptureTime { get; init; }
     public ulong ActorStartKey { get; init; }
+
+    public DateTimeOffset Timestamp => RestorePlanner.Anchor(CaptureTime) ?? DateTimeOffset.MinValue;
 }

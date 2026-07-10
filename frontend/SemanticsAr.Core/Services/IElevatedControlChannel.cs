@@ -8,7 +8,7 @@ public interface IElevatedControlChannel : IDisposable
 
     ElevatedError LoadPreserved(out IReadOnlyList<RecoverableItem> items);
 
-    RecoveryOutcome Recover(RecoverableItem item);
+    RecoveryOutcome Recover(RecoverableItem item, string targetPath);
 
     ElevatedError SetMode(uint mode);
 

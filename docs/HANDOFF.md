@@ -1,220 +1,254 @@
-# semantics-ar — FRONTEND HANDOFF
+# semantics-ar — FRONTEND HANDOFF (2026-07-10, rewrite)
 
-> **This handoff is optimized for the frontend workstream, which is the active work.**
-> The backend (driver + service, units T1–T3) is **complete, VM-verified, and sealed** — do
-> not modify it; treat `docs/CONSTITUTION.md` as fixed. This document is a rewrite: the prior
-> whole-project handoff remains in git history if you need it.
->
-> **Governing documents, in precedence order — obey them, amend them there first, never
-> silently substitute an easier design:**
-> 1. `docs/CONSTITUTION.md` — what the system proves and does (authoritative, RATIFIED).
-> 2. `docs/EXPERIENCE_CHARTER.md` — how it is presented to a human (RATIFIED, subordinate).
-> 3. `docs/FRONTEND_DESIGN.md` — the frontend spine, v1.1 RATIFIED (subordinate to both). Its
->    **Appendix A** is the Slice-1 build & VM-verification record.
->
-> The visual target is the owner-approved contract-aware mock:
-> `frontend/mocks/recovery-and-budget.v1.html` (open it; read its `README.md`).
+> **Read this first, then the governing docs.** This is a full reset of the prior handoff. It
+> reflects the state after the **elevated Recovery vertical was hardened and VM-verified** and,
+> critically, after the **owner-approved mock was reconciled against the code** and found to
+> define a **different information architecture** than the prose docs. A successor picking this up
+> cold must internalize §2 (what the target actually is) before writing any UI.
 
----
+## 0. GOVERNING DOCUMENTS — precedence order (obey; amend there first, never silently substitute)
 
-## 0. BINDING RULES (non-negotiable)
+1. `docs/CONSTITUTION.md` — what the system proves/does (RATIFIED, authoritative).
+2. `docs/EXPERIENCE_CHARTER.md` — how it is presented to a human (RATIFIED, subordinate).
+3. `docs/FRONTEND_DESIGN.md` — the frontend spine, v1.1 RATIFIED (subordinate to both).
+4. **`frontend/mocks/recovery-and-budget.v1.html` — the owner-approved VISUAL/IA target.** Where
+   the mock and FRONTEND_DESIGN's prose disagree on **information architecture or a hero-flow
+   interaction**, **the mock wins** (HANDOFF binding rule 6; it is "the visual target"). Open it,
+   read `frontend/mocks/README.md`, and toggle its "Show data provenance" overlay — every value
+   traces to a wire field or a **PRECONDITION** (amber) tag naming an unshipped backend field.
 
-1. **Code has NO comments.** Write code that reads like the surrounding code.
-2. **No dead / compatibility / fallback code.** The project has never shipped — no migration
-   code, no schema bumps, no compat shims. Every line is used.
-3. **VM-verify every nontrivial change** against the running backend in `SarTarget`. Review does
-   not substitute — every real defect this session (event-class gap, toast spam, the phantom
-   deploy interaction) was caught only by *running*, not by reading.
-4. **Honesty guardrails** (Constitution / Charter / FRONTEND_DESIGN): never surface key material,
-   IVs, verification tags, or preserved plaintext (I.12); never disclose a phantom/decoy identity
-   (I.11); expose **no detection knob** — the only user-tunable value is the budget
-   (retention + capacity); calm by default, no scareware; absolute words ("verified",
-   "byte-for-byte") are scoped to the per-file mechanism, never the product.
-5. **The two-plane split is enforced by TYPE.** Posture-plane DTOs carry no path and no free text
-   (enum/numeric only); anything itemized or consequential goes over the elevated pipe. This is a
-   proof obligation (FRONTEND_DESIGN XIII.4), not a convention.
-6. **Reuse what genuinely fits the ratified design; discard what does not.** Do not preserve
-   structure, naming, or flow by inertia. The existing `frontend/` largely fits — verify against
-   the current wire (`frontend/sarapi/include/sarapi.h`) before trusting any file.
-7. **The exemption anchor stays content-hash ∧ certificate-subject** (FRONTEND_DESIGN X.3). Do
-   NOT relax it to signer-only / min-version, and do not silently auto-heal an exemption on app
-   update — that was reviewed and rejected as unconstitutional. Re-affirm is calm and manual.
+## 1. BINDING RULES (non-negotiable)
 
----
-
-## 1. WHERE THINGS STAND (2026-07-10)
-
-- **Ratified specs:** `CONSTITUTION.md`, `EXPERIENCE_CHARTER.md`, `FRONTEND_DESIGN.md` (v1.1).
-- **Mock:** `frontend/mocks/recovery-and-budget.v1.html` — Recovery + Budget/Exemption hero
-  flows, contract-aware (a "Show data provenance" toggle maps every value to a wire field or a
-  named precondition). Note: the mock says "PROTECT mode" as a neutral placeholder; the real
-  modes are **AUDIT / ENFORCE**.
-- **Slice 1 (posture plane): DONE and VM-verified 9/0.** See §3.
-- **Everything else: not started.** The itemized/elevated hero flows, the backend projection
-  amendments, packaging/signing, onboarding, and the operational tier are the bulk of the
-  remaining work. See §4.
+1. **Code has NO comments.** Match the surrounding code's idiom.
+2. **No dead / compatibility / fallback / migration / schema-version code.** The project has never
+   shipped. If you find such traces, a past implementer erred — **remove** them.
+3. **Reuse only what genuinely fits the ratified design + the mock.** Verify against the current
+   wire (`frontend/sarapi/include/sarapi.h`, `common/include/semantics_ar/*.h`) **and the mock**
+   before trusting any inherited file. The frontend was built *after* the Constitution's "rewrite
+   as-if-original" (git `7a28d45`) and against the current backend (elevated Recovery was VM 19/0
+   at git `1a5e70a`), so it is **not legacy-coupled** — but it *is* mock-misaligned on IA (§2).
+4. **Honesty guardrails:** never surface key material, IVs, verification tags, or preserved
+   plaintext (Charter I.12); never disclose a phantom/decoy identity (I.11); expose **no detection
+   knob** — the only user-tunable value is the budget (retention time + capacity); calm by default,
+   no scareware; absolute words ("verified", "byte-for-byte") scope to the per-file mechanism.
+5. **The two-plane split is enforced by TYPE** (FRONTEND_DESIGN XIII.4). Posture-plane DTOs carry
+   no path and no free text (enum/numeric only); anything itemized/consequential goes over the
+   elevated pipe. Proven by the `sarapi` boundary + `SemanticsAr.Verify` artifacts.
+6. **The exemption anchor stays content-hash ∧ certificate-subject** (FRONTEND_DESIGN X.3). NEVER
+   relax to signer-only / min-version; no silent auto-heal on update.
+7. **Verification cadence (owner's standing directive):** heavy verification (VM runs, interactive
+   GUI) is **batched at the end of implementation**, not per-slice. Per-slice keep only the cheap
+   gates: `dotnet build` 0 errors + `dotnet test` green. Design + optional FABLE5 code-review per
+   slice is fine; the comprehensive review/VM/GUI pass is one end-of-implementation batch.
 
 ---
 
-## 2. ARCHITECTURE & STACK (as ratified, as built)
+## 2. THE TARGET IS 3 SURFACES (mock), NOT 5 (prose). Internalize this.
 
-- **Topology (FRONTEND_DESIGN II.3):**
-  - `frontend/sarapi/` — native C, owns the binary wire for **both** planes; already implements
-    the posture read, the events stream, the elevated control path, and the III.7 client-side
-    server-is-SYSTEM check (`server_identity.c`). Built as `sarapi.dll`.
-  - `frontend/SemanticsAr.Core/` — .NET library: `NativePostureReader`, `PostureService`
-    (polling + stale tolerance + `AuditAcknowledged`), `PostureEvaluator` (verdict per V.4),
-    `JournalService` (events: background reconnect, (gen,seq) dedup, gap detection), redaction
-    DTOs (`SarApiPosture` 40B, `SarApiEvent`, both no-path), and the elevated-channel scaffolding
-    (`ElevatedControlChannel`, `NativeMethods.Com`) for the itemized plane.
-  - `frontend/SemanticsAr.App/` — WPF, **standard-user**: composition in `App.xaml.cs`
-    (posture → Home + tray; events → `ToastNotifier`), `TrayIconController`, `ThemePalette`
-    (WPF-UI), `ProcessHardening`, the surfaces/viewmodels.
-  - `frontend/elevation-host/` — COM local server (elevated) for the itemized plane; not yet
-    wired/verified.
-  - `frontend/SemanticsAr.Verify/` — self-contained headless harness that drives Core against
-    the live backend (the Slice-1 VM-verification vehicle).
-- **Stack (ratified, present in `SemanticsAr.App.csproj`):** .NET 10, WPF, **WPF-UI 4.3.0**,
-  CommunityToolkit.Mvvm 8.4.0, **H.NotifyIcon.Wpf 2.4.1**, Microsoft.WindowsAppSDK.
-  Framework-dependent deployment.
-- **Wire (three pipes):** posture (`\\.\pipe\SemanticsAr.Posture`, session-readable, no path),
-  events (`\\.\pipe\SemanticsAr.Events`, redacted stream), control (elevated, SYSTEM+Admins,
-  ECDSA handshake). Headers: `common/include/semantics_ar/{protocol.h,posture.h}` and
-  `frontend/sarapi/include/sarapi.h`. Protocol version = 1.
-  - The service's pipe DACLs (authoritative, `service/control.c`): control =
-    `D:P(A;;GA;;;SY)(A;;GA;;;BA)` (elevated only); posture/events =
-    `D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)` (read-only to Interactive Users, no
-    `FILE_CREATE_PIPE_INSTANCE`, `FILE_FLAG_FIRST_PIPE_INSTANCE` anti-squat).
+`FRONTEND_DESIGN` Part VII describes **five** surfaces (Home, Recovery, Activity, Response/Policy,
+Settings). **The owner-approved mock has three nav items:**
 
----
+- **Home** — posture hero: verdict, DEFINITIVE/BOUNDED counts, recovery-window health, **copy pools
+  (protected/probation)**, component health, coverage line, a "window shorter than target" amber
+  notice → deep-links to Budget, and a "most recent incident" card → deep-links to Recovery.
+- **Recovery** — certainty-ladder legend; **incident cards** (expandable, per-item, ladder-ranked);
+  a **flat BOUNDED list** for copies not tied to an incident; a healthy empty-state. Preview modal
+  and Report modal (see §4).
+- **Budget & exemptions** — budget hero (achieved-window vs target, sparkline, cache-%); **ranked
+  per-app attribution list** (share / time-impact / bytes, expandable to file-type breakdown, an
+  "Exempt this app" button per row); **"Exemptions & trust"** (staleness re-affirm cards +
+  exemption log with revoke); **"Budget settings"** (target-window stepper + cache-ceiling stepper).
 
-## 3. SLICE 1 — DONE (posture plane)
+**The mock FOLDS:** Settings → "Budget settings" inside Budget; exemption management → "Exemptions
+& trust" inside Budget; Activity/Detections → incidents inside Recovery + Home's "recent incident"
+(no separate Activity nav). **Mode switching UI and Onboarding are OUT of this mock's scope** — the
+mock shows mode as a read-only sidebar chip only; those flows exist in the prose docs
+(FRONTEND_DESIGN VI.2 ENFORCE friction, VIII.5 onboarding) but are **not yet visually mocked**, so
+design them from the docs when reached and keep them consistent with the mock's language.
 
-**Built:** `sarapi.dll`; Core aligned to §V.4 (acknowledged AUDIT collapses to green/neutral;
-`PostureService.AuditAcknowledged` added); `SemanticsAr.Verify` harness. Full frontend builds
-0 errors; Core unit tests 69/69.
-
-**VM-verified 9/9 PASS against `SarTarget`:** sarapi ABI compatible; posture DTO is a fixed
-40-byte frame with **no path-capable field** (II.2, proven by reflection + size); event DTO
-no-path; posture read **OK** (session-readable; III.7 server-is-SYSTEM passed); verdict =
-**Amber/AuditMode** (correct unacknowledged-AUDIT, V.4); protocol version matches (no skew);
-service running; driver connected; **events pipe connected + 238 events flowed** (incl.
-`ModeChanged`). Closes the core of XIII.4(a)/(b) at the Core layer against the real backend.
-
-**Fixed this session:** `JournalEventClass` + `sarapi.h` extended with `BlockInjection=8`,
-`ExemptRevoked=10` (driver emits these; enum stopped at 7). `ToastNotifier` now coalesces
-detection events in a 3s window into one count-aware toast per class (anti-habituation, V.1);
-`BLOCK_INJECTION` and housekeeping classes stay silent by design (verified against the 238-event
-flood → 0 toasts).
-
-**Remaining Slice-1 increments (App presentation, over the VM-verified Core):**
-- Wire the §V.4 **acknowledge-AUDIT** action to `PostureService.AuditAcknowledged` in the Home
-  surface.
-- Aesthetic polish of the Home hero + tray glyph to the mock's certainty-ladder language.
-- Run the **actual WPF GUI** in the VM (or an interactive session) for the owner's visual pass —
-  only the Core seam has been run against the real backend so far.
-- The medium-IL **interactive** IU-DACL runtime proof (FRONTEND_DESIGN XV.3 residual — currently
-  source-verified; Run-1 passed via the admin/BA grant, not the IU grant).
+> **Consequence for the current code:** `frontend/SemanticsAr.App/ViewModels/MainViewModel.cs`
+> currently wires **5 surfaces** (Home, Recovery, and three `PlaceholderViewModel`s named Activity
+> / Response / Settings). **This is wrong per the mock.** The first realignment task (§5.A) is to
+> restructure it to the 3 mock surfaces and delete the placeholders (`PlaceholderViewModel`,
+> `PlaceholderView.*`).
 
 ---
 
-## 4. REMAINING WORK, PRIORITIZED
+## 3. WHAT IS DONE (VM-verified) AND WHERE IT STANDS
 
-**A. Finish Slice-1 App increments** (§3, small).
+### 3.1 Posture plane (Slice 1) — DONE, VM 9/0
+`sarapi.dll`; `SemanticsAr.Core` (`NativePostureReader`, `PostureService`, `PostureEvaluator`,
+`JournalService`/`NativeEventReader`); `SemanticsAr.App` Home + tray + `ToastNotifier`. 40-byte
+no-path posture frame; redacted event stream; III.7 server-is-SYSTEM check passes.
 
-**B. Backend Constitution-projection amendments** — these gate the itemized surfaces; each is a
-governed amendment (Const. III.1.3 discipline) + VM-verify, never invented in the UI:
-- **XII.2 per-copy app attribution — HIGHEST** (forward-accruing; every week of delay = a week of
-  "unattributed" data at launch). Needed for the Budget-attribution flow.
-- **XII.1 per-item pool status** (BOUNDED honest-by-pool). Until it lands, BOUNDED shows the
-  conservative probation-honest wording.
-- **XII.4 preserve actor key** (BOUNDED incident grouping; catalog already has it, preserve does
-  not).
-- **XII.3 integrity-halt posture signal** (drives the red + foreground-window tier).
+### 3.2 Elevated itemized plane + Recovery vertical — DONE, VM 13/0 (twice, this session)
+The elevated transport and the Recovery hero **mechanism** are built, unit-tested (86/86), and
+**VM-verified 13/0** against the live backend in `SarTarget` (activation → host→service
+server-is-SYSTEM → snapshot of 1748 real items → classification → single-use host exit → recover
+round-trip). Changes made this session (all build-green):
 
-**C. Slice 2+ — itemized / elevated plane (the mock's hero flows):**
-- **Recovery** (FRONTEND_DESIGN VIII): catalog + preserve queries over the elevated pipe via the
-  `elevation-host` COM moniker; incident grouping (DEFINITIVE by actor_start_key + capture_time,
-  already projected); preview → verify → loud report; **"modified since T" split, unchecked by
-  default** (the flagship safety moment).
-- **Budget attribution + exemption discovery** (IX/X): time-denominated header; sorted ranked
-  app list with bars + sparkline; exempt confirm (identity inline, ladder-terms consequence,
-  quantified cost); calm staleness re-affirm; interpreter hard-stop; "unattributed" bucket first.
-- **Elevation model** (III): one elevation fetches an itemized snapshot the standard-user app
-  browses without re-elevation; each mutating action = its own fresh consent; no resident
-  elevated broker; client verifies server=SYSTEM.
+- **B1** — `ElevationMoniker.Activate` now requests `IID_ISarElevatedControl` directly and pins the
+  proxy to `RPC_C_IMP_LEVEL_IDENTIFY` via `CoSetProxyBlanket` (the blanket must sit on the
+  interface proxy, not IUnknown), keeping the UAC-cancel translation. Closes FRONTEND_DESIGN
+  III.7(b). (`ElevationMoniker.cs`, `NativeMethods.Com.cs`.)
+- **B2** — elevation host registers `REGCLS_SINGLEUSE` (was MULTIPLEUSE): serves exactly the one
+  activation that spawned it, then exits → no unconsented re-bind by a same-session process.
+  (`elevation-host/src/host_main.cpp`.)
+- **B3** — `RecoverySession` releases the elevated channel **after** the snapshot (host exits) and
+  **re-elevates per mutating action** (III.1/III.3); reentrancy guarded by a UI-thread `_busy`
+  flag on `Begin`/`Confirm`/`Close`. (`RecoverySession.cs`, `RecoveryViewModel.cs`.)
+- **B4** — `RestorePlanner.Classify` classifies each item (Additive / DeletedSince / ModifiedSince /
+  Blocked) via `Win32FileProbe`, which stats the provenance path through the **`\\?\GLOBALROOT`**
+  bridge (see §6 path contract). Nullable FILETIME anchor guard; reparse→ModifiedSince; access-
+  denied→conservative ModifiedSince. (`RestorePlanner.cs`, `Win32FileProbe.cs`.)
+- **B5** — `RestorePlanner.SideBySidePath` builds a `_RESTORED_<stamp>` sibling with a 259-char
+  budget + collision uniquify. **NOTE: this per-item sibling model DIVERGES from the mock — see
+  §5.B; it must be reconciled to the mock's destination model.**
+- **B8** — `RecoverableItem : IIncidentSource`; Recovery groups DEFINITIVE by the existing
+  `IncidentGrouper` (actor-key, `TimeSpan.MaxValue`) and keeps every `ActorStartKey==0` item
+  (all BOUNDED) as a flat list — **no item is ever dropped** (partition is purely by actor key).
+- **In-place-only-on-opt-in invariant** (III.6 absolute): a restore writes **in-place only** when
+  `Rung==Definitive` (Oracle decrypts ciphertext at the original path — verify-before-replace
+  guards it), OR the item is `DeletedSince` (no file to destroy), OR the user explicitly ticks
+  "Replace my current file". Everything else defaults to side-by-side. So mtime-classification
+  accuracy is never safety-load-bearing. **DEFINITIVE is always in-place** (the recover verb reads
+  ciphertext from the target path; a side-by-side target has no ciphertext → decline). This was
+  the VM-surfaced fix (kernel decline `-8`/`-5` on a DEFINITIVE side-by-side).
+- **recover-all** — `SelectAll`/`ClearSelection` commands added to Recovery browsing (VI.1.2).
+- **Harness** — `SemanticsAr.Verify/Program.cs` gained a Slice-2 elevated section (activate →
+  classify → single-use-host-exit → recover round-trip) that runs headless in the VM ceremony.
 
-**D. Onboarding hero flow** (VIII.5): pre-empt SmartScreen/driver-trust prompts; explain the two
-assets + coverage line; default AUDIT; pin the tray.
-
-**E. XV governance / execution gates:** legal claim clearance (X.1); posture DACL Logon-SID vs IU
-decision (XV.3); Administrator Protection re-verification incl. `TokenElevationTypeFull`
-semantics (XV.4); offboarding disposition (XV.6); multi-user ownership (XV.7); clock integrity
-(XV.8).
-
-**F. Packaging / signing & installer:** Authenticode-sign the app; installer detects + installs
-the .NET 10 Desktop Runtime as a prerequisite; the installer **writes new files, never
-bulk-deletes/overwrites a monitored directory** as a non-exempt process (see §6 phantom finding).
-
-**G. Operational DoD tier** (XIV): Windows-10 QA, High Contrast, pseudo-localization, performance
-budgets (idle memory, large-list virtualization with UIA active), crash dumps treated as
-sensitive (XI.2 — a dump can contain an itemized snapshot).
-
----
-
-## 5. HOW TO BUILD & VM-VERIFY (pick up cold)
-
-This machine has .NET 10 SDK, CMake, Visual Studio 2022, and Hyper-V. VM **`SarTarget`** runs the
-sealed backend.
-
-- **Build `sarapi.dll`:** `cmake --build build_fe --target sarapi --config Release` (uses the
-  repo-root `CMakeLists.txt` tree; driver/ELAM skip cleanly without WDK). Output:
-  `build_fe/frontend/sarapi/Release/sarapi.dll` — the App/Verify csproj link this. Do NOT
-  configure `sarapi/` standalone (its `CMakeLists.txt` has no `project()`).
-- **Build the frontend:** `dotnet build frontend/SemanticsAr.App/SemanticsAr.App.csproj -c
-  Release`. Tests: `dotnet test frontend/SemanticsAr.Core.Tests/SemanticsAr.Core.Tests.csproj`.
-- **Verify harness:** `dotnet publish frontend/SemanticsAr.Verify/SemanticsAr.Verify.csproj -c
-  Release -r win-x64 --self-contained true -p:PublishSingleFile=true` → `sarverify.exe` +
-  `sarapi.dll`.
-- **VM access:** PowerShell Direct —
-  `New-PSSession -VMName SarTarget -Credential (admin/admin)`. After a fresh boot the driver is
-  loaded but the **service is stopped**: `Start-Service semantics_ar_service`, then
-  `C:\sar\sarctl.exe mode audit` and `... budget <retention_100ns> <capacity_MB>` to populate
-  posture. A full backend (re)deploy uses the ceremony in `scripts/vm_verify_new.ps1` (restore
-  snapshot `clean-baseline-20260704`, deploy signed driver+service+sarctl+harnesses, load the
-  minifilter, start the service).
-- **Deploy the frontend into the VM as FEW new files** (the single-file `sarverify.exe` +
-  `sarapi.dll`) with `Copy-Item -ToSession`. Do NOT `Expand-Archive`/bulk-write into a monitored
-  directory (see §6). The clean VM has no .NET runtime → publish self-contained.
-- **`sarctl.exe`** (`C:\sar` in the VM) is the diagnostic CLI: `mode`, `budget`, `list`,
-  `preserve-list`, `events`, `recover`, `preserve-recover`, `whitelist-add/remove`, `resolve`,
-  `verdict`, `procquery`, `inflight`.
+### 3.3 NOT done / gated / never run
+- **The actual WPF GUI has never been run interactively.** All verification is the headless Core
+  seam + the harness. The owner visual pass (consent rhythm, modals, tray) is a batched end task.
+- **IA is still 5-surface in code** (§2) — realign first.
+- **Recovery destination model** diverges from the mock (§5.B).
+- **Budget & exemptions surface** — not started.
+- **Mode-switch flow, Onboarding** — not started (not in the mock; design from docs).
+- **Backend projection amendments** (§6.3) — not started.
+- **Installer / packaging, operational DoD tier** — not started.
 
 ---
 
-## 6. GOTCHAS / FINDINGS (do not relearn the hard way)
+## 4. RECOVERY & THE MOCK'S HERO FLOW (read the mock, then this)
 
-- **Phantom-witness directory seeding.** Creating a directory under a monitored volume gets
-  **protected decoy files** planted (Const. VIII); a non-exempt process's bulk delete/overwrite
-  there is **denied** (this breaks `Expand-Archive -Force`). New-file writes with distinct names
-  succeed — deploy two files individually. The app's normal new-file writes to its own storage
-  are fine; the **installer** must not bulk-delete a monitored dir.
-- **Event volume.** `BLOCK_INJECTION` (class 8) can flood (238 in ~7 s). It is silent by design
-  (no toast string) — keep high-volume classes silent/aggregated; never per-event toast (V.1).
-- **`runas /trustlevel` is not a clean medium-IL test.** It yields a SAFER-restricted token that
-  still reports HIGH integrity and cannot `OpenProcess` the SYSTEM service, so the III.7 check
-  returns `SERVER_UNTRUSTED` (a false negative). Use a real standard user / interactive logon /
-  linked token for the medium-IL IU-DACL proof.
-- **`_Static_assert`** in the C clients needs `/std:c11` if you compile them directly (the
-  CMake target already sets C11).
-- **Warnings** `MVVMTK0045` (WinRT-AOT advisory on `[ObservableProperty]` fields) are harmless
-  for WPF; not an error.
+The mock's Recovery preview (`#ov-preview`) is the target interaction:
+- **Two destination modes (radio):** "Restore to original locations" (in-place, verify-before-
+  replace; **default**) OR "Copy to a folder instead" (`C:\Recovered\<date>\` — originals never
+  touched).
+- **Two item groups:** "Unchanged since the incident" (checked) and "Modified since the incident"
+  (**unchecked by default**, "Restoring discards newer content — left unchecked for you").
+- **Report modal:** "X of Y restored, byte-for-byte verified · Z declined (reason)", per-item
+  VERIFIED/DECLINED tags, "kept copies unchanged", a recovery-log id.
+
+The current code implements DEFINITIVE-in-place + modified-unchecked correctly, but expresses
+"keep both" as **per-item `_RESTORED_` siblings** (B5) rather than the mock's **destination-mode
+radio + whole-batch recovery folder**. Reconcile to the mock (§5.B).
 
 ---
 
-## 7. DEFINITION OF DONE (per slice)
+## 5. NEXT WORK, PRIORITIZED (realign to the mock first)
 
-A slice is done only when it satisfies the Charter Part XI and Constitution Part XI conformance
-checklists **and is VM-verified against the running backend**, including the operational tier
-(FRONTEND_DESIGN XIV). Prove, don't assert (XIII.4): the no-path and no-prompt guarantees are
-test artifacts, not review claims.
+### A. Realign IA to the mock's 3 surfaces — DO FIRST, clear-cut
+Restructure `MainViewModel` to Home / Recovery / **Budget & exemptions**; delete
+`PlaceholderViewModel.cs`, `Views/PlaceholderView.*`, `ViewModels/PlaceholderViewModel` wiring.
+No backend dependency. Build-verify.
+
+### B. Reconcile Recovery destination model to the mock — needs care (touches VM-verified code)
+Replace the per-item `_RESTORED_` sibling default with the mock's model: a destination radio
+(**Original locations** | **Copy to a folder** `C:\Recovered\<date>\`) plus modified-unchecked.
+Keep the in-place-only-on-opt-in invariant and DEFINITIVE-always-in-place. **Backend limitation:**
+"Copy to a folder" needs the recover verb to read ciphertext from the original and write plaintext
+to a *different* path; the current verb uses one path for read+write, so **folder-copy works for
+BOUNDED (store→folder) but not DEFINITIVE**. Until a `recover-to-alternate-dest` verb exists
+(§6.3), honestly degrade: folder-copy applies to BOUNDED; DEFINITIVE is original-locations only.
+`RestorePlanner.SideBySidePath` can be retired or repurposed for the folder-path builder.
+
+### C. Build the **Budget & exemptions** surface (the mock's second hero)
+Budget hero + ranked attribution list + Exemptions & trust + Budget settings. Verbs that already
+exist on the elevated pipe: `SetBudget`, `SetMode`, `ResolveIdentity`, `WhitelistAdd/Remove`
+(the last three are on `ISarElevatedControl` but **not yet surfaced through**
+`IElevatedControlChannel` — add them). Exempt confirm modal (resolved identity inline + consequence
+in ladder terms + quantified cost), interpreter hard-stop refuse modal, changed-publisher warning,
+staleness re-affirm. **Honest degradation** where backend fields are missing (§6.3): app attribution
+(XII.2), per-item pool (XII.1), preserve actor key (XII.4), **exemption-record read (XII.5)**,
+quantified cost (needs XII.2). The mock's provenance overlay shows exactly which values are
+PRECONDITION-gated.
+
+### D. Backend projection amendments (§6.3) — governed, then their dependent frontend features.
+### E. Mode-switch flow + Onboarding (from docs; not mocked).
+### F. Installer + Authenticode(app) + the `SemanticsAr*` self-protection handling (§6.4) + operational DoD tier (XIV).
+### G. THE batched verification: interactive GUI visual pass + full VM harness + XII wire checks + comprehensive review → fix.
+
+---
+
+## 6. GROUND TRUTH (facts established by source-reading + VM this session)
+
+### 6.1 The wire (three pipes, protocol version 1)
+Headers: `common/include/semantics_ar/{protocol.h,posture.h}`, `frontend/sarapi/include/sarapi.h`.
+Pipes: posture (`\\.\pipe\SemanticsAr.Posture`, session-readable, no path), events (redacted),
+control (elevated, SYSTEM+Admins, ECDSA handshake). Identity verdict enum (`service/identity.h`):
+`VERIFIED=0, UNSIGNED=1, HASH_FAILED=2, PATH_FAILED=3, ERROR=4`.
+
+### 6.2 Provenance path contract (confirmed from `driver/capture.c`, `service/recovery.c`, `engine`)
+Catalog/preserve provenance and the recover `target_path` are **NT device paths**
+(`\Device\HarddiskVolumeN\...`, from `FltGetFileNameInformation(FLT_FILE_NAME_NORMALIZED)`). To
+open one from user mode (client stat, or the service's atomic replace), prefix **`\\?\GLOBALROOT`**
+(the client uses this; the service's own code uses `\\.\GLOBALROOT` — use `\\?\` in .NET: it is
+verbatim, avoids trailing-dot mangling and MAX_PATH). Oracle (DEFINITIVE) recovery **reads the
+ciphertext from `target_path`**, decrypts, `sar_recover_verify` recomputes the capture-time sample
+tag and **declines on mismatch** (verify-before-replace), then replaces atomically → DEFINITIVE is
+inherently in-place.
+
+### 6.3 Backend projection amendments the frontend needs (governed, Const III.1.3 discipline)
+- **XII.1** per-item pool status on `preserve_entry` (protected/probation) — BOUNDED firm-date honesty.
+- **XII.2** per-copy app attribution on preserve holds (**forward-accruing; file early**) — Budget attribution + exempt quantified cost.
+- **XII.4** `actor_start_key` on `preserve_entry` — BOUNDED incident grouping (else flat list).
+- **XII.5 (NEW this session)** exemption-record **read** projection — the protocol has whitelist
+  add/remove/resolve but **no way to enumerate current exemptions** or their version/hash/signer
+  diffs; the mock's exemption log + staleness re-affirm need it.
+- **recover-to-alternate-dest verb (NEW this session)** — for the mock's "Copy to a folder" on
+  DEFINITIVE items (read ciphertext from original, write plaintext elsewhere).
+
+### 6.4 GOTCHAS
+- **`SemanticsAr*` self-protection write-deny.** The driver denies user-mode creation of any file
+  whose name begins with `SemanticsAr` (CamelCase) on the monitored volume, anywhere
+  (`semantics_ar_*` and neutral names pass). → The product's own frontend binaries
+  (`SemanticsAr.App.exe`, `SemanticsArElevationHost.exe`) cannot be installed on a monitored volume
+  **after** the driver loads. Packaging must install pre-driver-load or on an exempt path. For VM
+  tests, deploy the host under a neutral name (RegServer records whatever path); the `.tlb` name is
+  hardcoded in `elevation-host/src/registration.cpp` (`kTlbFile`) — if you must deploy it, rename
+  there too (it was reverted to canonical this session).
+- **Phantom seeding** (Const VIII): creating a new dir under a monitored volume plants protected
+  decoys; a non-exempt bulk delete/overwrite there is denied. Deploy **individual new files**, never
+  `Expand-Archive -Force` into a monitored dir.
+- **`BLOCK_INJECTION` (event class 8) floods** and is silent by design (no toast string).
+- **`runas /trustlevel` is not a clean medium-IL test** (SAFER token reports HIGH IL → III.7 false
+  negative). Use a real standard user / interactive / linked token.
+- **MVVMTK0045** WinRT-AOT advisories on `[ObservableProperty]` are harmless for WPF.
+
+---
+
+## 7. HOW TO BUILD & VM-VERIFY
+
+Machine has .NET 10 SDK, CMake, VS 2022, Hyper-V. VM **`SarTarget`** runs the sealed backend
+(snapshot `clean-baseline-20260704`). CMake tree already configured at `build_fe/`.
+
+- **sarapi.dll:** `cmake --build build_fe --target sarapi --config Release` → `build_fe/frontend/sarapi/Release/sarapi.dll`.
+- **elevation host:** `cmake --build build_fe --target sar_elevation_host --config Release` → `build_fe/frontend/elevation-host/Release/SemanticsArElevationHost.exe` (+ `.../sar_elevation_host.dir/Release/SemanticsArElevation.tlb`).
+- **frontend:** `dotnet build frontend/SemanticsAr.App/SemanticsAr.App.csproj -c Release`. Tests: `dotnet test frontend/SemanticsAr.Core.Tests/SemanticsAr.Core.Tests.csproj -c Release` (currently **86/86**).
+- **verify harness:** `dotnet publish frontend/SemanticsAr.Verify/SemanticsAr.Verify.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true` → `.../publish/sarverify.exe` + `sarapi.dll`.
+- **VM ceremony (this session, works):** `New-PSSession -VMName SarTarget -Credential (admin/admin)`
+  (runs High-IL admin → elevation moniker activates without a prompt). Ensure `semantics_ar_service`
+  running; `C:\sar\sarctl.exe mode audit` + `... budget 604800 10240`. Deploy `sarverify.exe`,
+  `sarapi.dll`, and the host+tlb **under neutral names** (`sar_elevation_host.exe`,
+  `sar_elevation.tlb`) as individual files (Copy-Item -ToSession). `Start-Process
+  sar_elevation_host.exe RegServer -Wait` (registers CLSID/AppID/Elevation/Interface/TypeLib). Run
+  `sarverify.exe`; expect **13/0**. `scripts/vm_verify_new.ps1` is the full backend deploy ceremony
+  (reuse its Connect-VM / CopyToVM conventions).
+
+## 8. DEFINITION OF DONE (per slice)
+Charter Part XI + Constitution Part XI + FRONTEND_DESIGN XIV conformance, **and** — at the batched
+end — VM-verified against the running backend and visually owner-passed. Prove, don't assert: the
+no-path / no-prompt / verify-before-replace guarantees are test artifacts (`SemanticsAr.Verify`
++ the XIII.4 schema/negative tests), not review claims.
