@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using SemanticsAr.Core.Domain;
 using SemanticsAr.Core.Services;
@@ -33,7 +34,12 @@ public partial class MainViewModel : ObservableObject
         _selectedSurface = Surfaces[0];
 
         posture.PostureChanged += (_, e) =>
-            Application.Current.Dispatcher.Invoke(() => ApplyMode(e.Verdict.Mode));
+        {
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null || dispatcher.HasShutdownStarted)
+                return;
+            dispatcher.BeginInvoke(() => ApplyMode(e.Verdict.Mode));
+        };
         if (posture.Current is PostureVerdict current)
             ApplyMode(current.Mode);
     }
@@ -48,9 +54,11 @@ public partial class MainViewModel : ObservableObject
 
     private void ApplyMode(PostureMode mode)
     {
+        bool wasEnabled = CanSwitchMode;
         _currentMode = mode;
         ModeLabel = ModeLabelFor(mode);
-        OnPropertyChanged(nameof(CanSwitchMode));
+        if (CanSwitchMode != wasEnabled)
+            OnPropertyChanged(nameof(CanSwitchMode));
     }
 
     private static string ModeLabelFor(PostureMode mode) => mode switch

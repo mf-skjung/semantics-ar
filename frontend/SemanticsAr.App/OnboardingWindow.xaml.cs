@@ -20,8 +20,17 @@ public partial class OnboardingWindow : FluentWindow
     {
         if (e.PropertyName == nameof(OnboardingViewModel.Completed) && _viewModel.Completed)
         {
-            OnboardingStore.MarkCompleted();
-            Close();
+            try
+            {
+                OnboardingStore.MarkCompleted();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                Close();
+            }
         }
     }
 }

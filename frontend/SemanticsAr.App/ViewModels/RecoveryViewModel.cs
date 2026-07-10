@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SemanticsAr.Core.Domain;
@@ -60,11 +61,16 @@ public partial class RecoveryViewModel : ObservableObject
         view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(RecoverableItemViewModel.GroupLabel)));
 
         posture.PostureChanged += (_, e) =>
-            Application.Current.Dispatcher.Invoke(() =>
+        {
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null || dispatcher.HasShutdownStarted)
+                return;
+            dispatcher.Invoke(() =>
             {
                 if (Stage == RecoveryStage.PreElevation)
                     Summary = BuildSummary(e.Verdict);
             });
+        };
     }
 
     public ObservableCollection<RecoverableItemViewModel> Items { get; } = new();

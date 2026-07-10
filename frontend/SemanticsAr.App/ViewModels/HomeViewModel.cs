@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using SemanticsAr.Core.Domain;
 using SemanticsAr.Core.Services;
@@ -51,7 +52,10 @@ public partial class HomeViewModel : ObservableObject
 
     private void OnPostureChanged(object? sender, PostureChangedEventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() => Apply(e.Verdict));
+        Dispatcher? dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted)
+            return;
+        dispatcher.Invoke(() => Apply(e.Verdict));
     }
 
     private void Apply(PostureVerdict v)
