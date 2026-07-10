@@ -159,19 +159,6 @@ public partial class BudgetViewModel : ObservableObject
         return $"{number} {ByteUnits[unit]}";
     }
 
-    private static string DescribeError(ElevatedError error) => error switch
-    {
-        ElevatedError.AccessDenied =>
-            "Elevation is required to read your recovery budget.",
-        ElevatedError.PipeUnavailable =>
-            "The protection service cannot be reached right now.",
-        ElevatedError.ServerUntrusted =>
-            "The control channel could not be verified as genuine. This action was refused.",
-        ElevatedError.VersionMismatch =>
-            "The app and the protection components are different versions.",
-        ElevatedError.Transport =>
-            "The control channel failed while reading your recovery budget.",
-        _ =>
-            "Your recovery budget is unavailable right now.",
-    };
+    private static string DescribeError(ElevatedError error) =>
+        ElevatedErrorText.Describe(error, "read your recovery budget");
 }

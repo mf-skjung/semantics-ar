@@ -291,19 +291,6 @@ public partial class RecoveryViewModel : ObservableObject
             : "No captured-key recoveries yet. Elevate to view held copies and restore.";
     }
 
-    private static string DescribeError(ElevatedError error) => error switch
-    {
-        ElevatedError.AccessDenied =>
-            "Elevation is required to view and restore recoverable files.",
-        ElevatedError.PipeUnavailable =>
-            "The protection service cannot be reached right now.",
-        ElevatedError.ServerUntrusted =>
-            "The control channel could not be verified as genuine. This action was refused.",
-        ElevatedError.VersionMismatch =>
-            "The app and the protection components are different versions.",
-        ElevatedError.Transport =>
-            "The control channel failed while reading recoverable files.",
-        _ =>
-            "Recovery is unavailable right now.",
-    };
+    private static string DescribeError(ElevatedError error) =>
+        ElevatedErrorText.Describe(error, "view and restore recoverable files");
 }
