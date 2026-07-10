@@ -227,27 +227,60 @@ static BOOLEAN SarFsControlIsKeyless(_In_ sar_destruct_member_t Member)
 }
 
 _IRQL_requires_max_(APC_LEVEL)
+static BOOLEAN SarWideCaselessComponent(_In_reads_(SChars) const WCHAR *S, _In_ USHORT SChars,
+                                        _In_ PCWSTR P)
+{
+    USHORT i;
+    for (i = 0; P[i] != 0; i++) {
+        WCHAR a, b;
+        if (i >= SChars)
+            return FALSE;
+        a = S[i];
+        b = P[i];
+        if (a >= L'A' && a <= L'Z') a = (WCHAR)(a + 32);
+        if (b >= L'A' && b <= L'Z') b = (WCHAR)(b + 32);
+        if (a != b)
+            return FALSE;
+    }
+    return i == SChars || S[i] == L'\\';
+}
+
+_IRQL_requires_max_(APC_LEVEL)
 static BOOLEAN SarNameIsOwnStore(_In_ PCUNICODE_STRING Name)
 {
-    static const WCHAR marker[] = L"SemanticsAr";
+    static const WCHAR drivers_store[] = L"\\System32\\drivers\\SemanticsAr";
+    static const WCHAR quarantine_store[] = L"\\SemanticsArQuarantine";
     USHORT nchars = (USHORT)(Name->Length / sizeof(WCHAR));
-    USHORT mlen = (USHORT)(RTL_NUMBER_OF(marker) - 1);
-    USHORT i, j;
+    USHORT rootchars;
+    USHORT slashes = 0;
+    USHORT vp = 0;
+    USHORT i;
 
-    if (nchars < mlen)
+    if (Name->Buffer == NULL)
         return FALSE;
-    for (i = 0; (USHORT)(i + mlen) <= nchars; i++) {
-        for (j = 0; j < mlen; j++) {
-            WCHAR a = Name->Buffer[i + j];
-            WCHAR b = marker[j];
-            if (a >= L'a' && a <= L'z') a = (WCHAR)(a - 32);
-            if (b >= L'a' && b <= L'z') b = (WCHAR)(b - 32);
-            if (a != b)
-                break;
-        }
-        if (j == mlen)
+
+    if (g_sar_sysroot_valid) {
+        rootchars = (USHORT)(g_sar_sysroot.Length / sizeof(WCHAR));
+        if (nchars > rootchars &&
+            RtlPrefixUnicodeString(&g_sar_sysroot, (PUNICODE_STRING)Name, TRUE) &&
+            SarWideCaselessComponent(Name->Buffer + rootchars, (USHORT)(nchars - rootchars),
+                                     drivers_store))
             return TRUE;
     }
+
+    for (i = 0; i < nchars; i++) {
+        if (Name->Buffer[i] == L'\\') {
+            slashes++;
+            if (slashes == 3) {
+                vp = i;
+                break;
+            }
+        }
+    }
+    if (vp != 0 &&
+        SarWideCaselessComponent(Name->Buffer + vp, (USHORT)(nchars - vp), quarantine_store))
+        return TRUE;
+
     return FALSE;
 }
 

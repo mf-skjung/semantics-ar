@@ -6,6 +6,7 @@ using SemanticsAr.App.Notifications;
 using SemanticsAr.App.ViewModels;
 using SemanticsAr.Core.Services;
 using Wpf.Ui.Appearance;
+using Wpf.Ui.Controls;
 
 namespace SemanticsAr.App;
 
@@ -25,6 +26,9 @@ public partial class App : Application
         ProcessHardening.Apply();
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+        if (!DisplayCapability.HardwareComposited)
+            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+
         ApplicationThemeManager.ApplySystemTheme();
         DesignTokens.Install();
 
@@ -35,6 +39,9 @@ public partial class App : Application
         _journal.EventReceived += OnJournalEventReceived;
 
         _window = new MainWindow();
+        _window.WindowBackdropType = DisplayCapability.SupportsMica
+            ? WindowBackdropType.Mica
+            : WindowBackdropType.None;
         _window.DataContext = new MainViewModel(_posture, OpenElevatedChannel);
         _window.Closing += OnWindowClosing;
         MainWindow = _window;

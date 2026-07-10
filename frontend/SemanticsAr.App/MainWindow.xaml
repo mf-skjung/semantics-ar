@@ -10,7 +10,6 @@
     Height="680"
     MinWidth="760"
     MinHeight="520"
-    WindowBackdropType="Mica"
     ExtendsContentIntoTitleBar="True">
 
     <ui:FluentWindow.Resources>
