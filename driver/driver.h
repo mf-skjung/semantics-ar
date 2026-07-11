@@ -46,6 +46,7 @@
 #define SAR_CAPTURE_HEAP_PER_CAP  (1u * 1024u * 1024u)
 #define SAR_CAPTURE_HEAP_MAX      64u
 #define SAR_CAPTURE_INFLIGHT_CAP  256
+#define SAR_MMAP_INFLIGHT_CAP     128
 #define SAR_PERSIST_DEBOUNCE_100NS (-50000000LL)
 #define SAR_SCANNED_CAPACITY       256u
 #define SAR_PRESERVE_RECORD_CAPACITY        65536u
@@ -97,6 +98,7 @@ typedef struct _SAR_POSTURE {
     BOOLEAN bypass_io_negotiated;
     BOOLEAN keystore_persistent;
     BOOLEAN keystore_tamper_detected;
+    BOOLEAN preserve_tamper_detected;
     BOOLEAN preserve_active;
     BOOLEAN phantom_active;
 } SAR_POSTURE, *PSAR_POSTURE;
@@ -122,6 +124,8 @@ typedef struct _SAR_GLOBALS {
     struct _SAR_EVENTLOG *eventlog;
     SAR_POSTURE posture;
     BOOLEAN process_notify_registered;
+    volatile LONG unloading;
+    EX_RUNDOWN_REF mmap_read_rundown;
 } SAR_GLOBALS, *PSAR_GLOBALS;
 
 extern SAR_GLOBALS g_sar;
@@ -140,5 +144,8 @@ NTSTATUS SarCommPortCreate(_In_ PFLT_FILTER Filter, _Outptr_ struct _SAR_COMM **
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 VOID SarCommPortClose(_Inout_ struct _SAR_COMM *Comm);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCommPortFree(_Inout_ struct _SAR_COMM *Comm);
 
 #endif
