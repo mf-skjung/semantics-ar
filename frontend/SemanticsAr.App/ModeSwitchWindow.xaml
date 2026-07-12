@@ -10,10 +10,13 @@
     mc:Ignorable="d"
     Title="Protection mode"
     Width="480"
-    SizeToContent="Height"
+    Background="{DynamicResource Sar.CanvasBrush}"
+    FontFamily="{StaticResource Sar.Fonts.Text}"
     ResizeMode="NoResize"
+    SizeToContent="Height"
+    UseLayoutRounding="True"
+    WindowBackdropType="None"
     WindowStartupLocation="CenterOwner"
-    WindowBackdropType="Mica"
     ExtendsContentIntoTitleBar="True">
 
     <ui:FluentWindow.Resources>
@@ -26,48 +29,81 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="Protection mode" />
+        <ui:TitleBar
+            Grid.Row="0"
+            Title="Protection mode"
+            Background="Transparent" />
 
-        <Grid Grid.Row="1" Margin="24,8,24,24">
+        <Grid Grid.Row="1" Margin="26,8,26,26">
             <StackPanel Visibility="{Binding ShowConfirm, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="20" FontWeight="SemiBold" Text="{Binding Title}" />
+                <TextBlock
+                    FontFamily="{StaticResource Sar.Fonts.Display}"
+                    FontSize="20"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource Sar.TextBrush}"
+                    Text="{Binding Title}" />
                 <TextBlock
                     Margin="0,12,0,0"
-                    Opacity="0.9"
+                    FontSize="13"
+                    Foreground="{DynamicResource Sar.MutedBrush}"
                     TextWrapping="Wrap"
                     Text="{Binding Consequence}" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
-                    <Button Padding="16,8" Content="Cancel" Click="Close_Click" />
-                    <ui:Button
+                <StackPanel
+                    Margin="0,22,0,0"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal">
+                    <Button
+                        Click="Close_Click"
+                        Content="Cancel"
+                        Style="{StaticResource Sar.OutlineButton}" />
+                    <Button
                         Margin="8,0,0,0"
-                        Padding="16,8"
-                        Appearance="Primary"
+                        Command="{Binding ConfirmCommand}"
                         Content="{Binding ConfirmLabel}"
-                        Command="{Binding ConfirmCommand}" />
+                        Style="{StaticResource Sar.PrimaryButton}" />
                 </StackPanel>
             </StackPanel>
 
             <StackPanel Visibility="{Binding ShowApplied, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="18" FontWeight="SemiBold" Text="Mode changed" />
-                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Text="{Binding ResultText}" />
-                <ui:Button
-                    Margin="0,22,0,0"
-                    HorizontalAlignment="Right"
-                    Padding="16,8"
-                    Appearance="Primary"
-                    Content="Done"
-                    Click="Close_Click" />
-            </StackPanel>
-
-            <StackPanel Visibility="{Binding ShowUnavailable, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="18" FontWeight="SemiBold" Text="Mode unchanged" />
-                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Text="{Binding ResultText}" />
+                <TextBlock
+                    FontFamily="{StaticResource Sar.Fonts.Display}"
+                    FontSize="18"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource Sar.TextBrush}"
+                    Text="Mode changed" />
+                <TextBlock
+                    Margin="0,12,0,0"
+                    FontSize="13"
+                    Foreground="{DynamicResource Sar.MutedBrush}"
+                    TextWrapping="Wrap"
+                    Text="{Binding ResultText}" />
                 <Button
                     Margin="0,22,0,0"
                     HorizontalAlignment="Right"
-                    Padding="16,8"
+                    Click="Close_Click"
+                    Content="Done"
+                    Style="{StaticResource Sar.PrimaryButton}" />
+            </StackPanel>
+
+            <StackPanel Visibility="{Binding ShowUnavailable, Converter={StaticResource B2V}}">
+                <TextBlock
+                    FontFamily="{StaticResource Sar.Fonts.Display}"
+                    FontSize="18"
+                    FontWeight="SemiBold"
+                    Foreground="{DynamicResource Sar.TextBrush}"
+                    Text="Mode unchanged" />
+                <TextBlock
+                    Margin="0,12,0,0"
+                    FontSize="13"
+                    Foreground="{DynamicResource Sar.MutedBrush}"
+                    TextWrapping="Wrap"
+                    Text="{Binding ResultText}" />
+                <Button
+                    Margin="0,22,0,0"
+                    HorizontalAlignment="Right"
+                    Click="Close_Click"
                     Content="Close"
-                    Click="Close_Click" />
+                    Style="{StaticResource Sar.OutlineButton}" />
             </StackPanel>
         </Grid>
     </Grid>

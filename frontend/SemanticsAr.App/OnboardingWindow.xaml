@@ -11,13 +11,28 @@
     Title="Welcome to semantics-ar"
     Width="560"
     Height="440"
+    Background="{DynamicResource Sar.CanvasBrush}"
+    FontFamily="{StaticResource Sar.Fonts.Text}"
     ResizeMode="NoResize"
+    UseLayoutRounding="True"
+    WindowBackdropType="None"
     WindowStartupLocation="CenterScreen"
-    WindowBackdropType="Mica"
     ExtendsContentIntoTitleBar="True">
 
     <ui:FluentWindow.Resources>
         <BooleanToVisibilityConverter x:Key="B2V" />
+        <Style x:Key="StepTitle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource Sar.Fonts.Display}" />
+            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource Sar.TextBrush}" />
+        </Style>
+        <Style x:Key="StepBody" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,14,0,0" />
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="Foreground" Value="{DynamicResource Sar.MutedBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
     </ui:FluentWindow.Resources>
 
     <Grid>
@@ -27,46 +42,62 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="Welcome to semantics-ar" />
+        <ui:TitleBar
+            Grid.Row="0"
+            Title="Welcome to semantics-ar"
+            Background="Transparent" />
 
-        <Grid Grid.Row="1" Margin="28,8,28,0">
+        <Grid Grid.Row="1" Margin="30,10,30,0">
             <StackPanel Visibility="{Binding ShowWelcome, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="22" FontWeight="SemiBold" Text="You're protected — here's what to expect" />
-                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding PlatformPreempt}" />
+                <TextBlock Style="{StaticResource StepTitle}" Text="You're protected — here's what to expect" />
+                <TextBlock Style="{StaticResource StepBody}" Text="{Binding PlatformPreempt}" />
             </StackPanel>
 
             <StackPanel Visibility="{Binding ShowAssets, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="22" FontWeight="SemiBold" Text="Two ways your files come back" />
-                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding TwoAssets}" />
-                <TextBlock Margin="0,14,0,0" FontSize="12.5" Opacity="0.75" TextWrapping="Wrap" Text="{Binding CoverageLine}" />
+                <TextBlock Style="{StaticResource StepTitle}" Text="Two ways your files come back" />
+                <TextBlock Style="{StaticResource StepBody}" Text="{Binding TwoAssets}" />
+                <TextBlock
+                    Margin="0,14,0,0"
+                    FontSize="12.5"
+                    Foreground="{DynamicResource Sar.FaintBrush}"
+                    TextWrapping="Wrap"
+                    Text="{Binding CoverageLine}" />
             </StackPanel>
 
             <StackPanel Visibility="{Binding ShowMode, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="22" FontWeight="SemiBold" Text="Starting in AUDIT" />
-                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding ModeIntro}" />
-                <TextBlock Margin="0,14,0,0" FontSize="12.5" Opacity="0.8" TextWrapping="Wrap" Text="{Binding EnforceFuture}" />
+                <TextBlock Style="{StaticResource StepTitle}" Text="Starting in AUDIT" />
+                <TextBlock Style="{StaticResource StepBody}" Text="{Binding ModeIntro}" />
+                <TextBlock
+                    Margin="0,14,0,0"
+                    FontSize="12.5"
+                    Foreground="{DynamicResource Sar.FaintBrush}"
+                    TextWrapping="Wrap"
+                    Text="{Binding EnforceFuture}" />
             </StackPanel>
 
             <StackPanel Visibility="{Binding ShowTray, Converter={StaticResource B2V}}">
-                <TextBlock FontSize="22" FontWeight="SemiBold" Text="Keep the verdict in view" />
-                <TextBlock Margin="0,14,0,0" Opacity="0.9" TextWrapping="Wrap" Text="{Binding TrayHelp}" />
+                <TextBlock Style="{StaticResource StepTitle}" Text="Keep the verdict in view" />
+                <TextBlock Style="{StaticResource StepBody}" Text="{Binding TrayHelp}" />
             </StackPanel>
         </Grid>
 
-        <Grid Grid.Row="2" Margin="28,16,28,24">
-            <TextBlock VerticalAlignment="Center" FontSize="12" Opacity="0.7" Text="{Binding StepLabel}" />
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Grid Grid.Row="2" Margin="30,16,30,26">
+            <TextBlock
+                VerticalAlignment="Center"
+                FontSize="12"
+                Foreground="{DynamicResource Sar.FaintBrush}"
+                Text="{Binding StepLabel}" />
+            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
                 <Button
-                    Padding="16,8"
-                    Content="Back"
                     Command="{Binding BackCommand}"
+                    Content="Back"
+                    Style="{StaticResource Sar.OutlineButton}"
                     Visibility="{Binding ShowBack, Converter={StaticResource B2V}}" />
-                <ui:Button
+                <Button
                     Margin="8,0,0,0"
-                    Padding="16,8"
-                    Appearance="Primary"
+                    Command="{Binding NextCommand}"
                     Content="{Binding PrimaryLabel}"
-                    Command="{Binding NextCommand}" />
+                    Style="{StaticResource Sar.PrimaryButton}" />
             </StackPanel>
         </Grid>
     </Grid>
