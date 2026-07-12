@@ -315,6 +315,19 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         Mode: AUDIT"** against the live engine (`build_verify/gui_home.png`) — the correct posture, where
         before the fix it showed red "status could not be trusted / MODE UNKNOWN". The "built → working
         product" gate is visually met for Home; Recovery/Budget/Exemptions render as nav surfaces.
+      - **Bug C (fixed, `6568557`):** on the live run all three ELEVATED surfaces (Recovery / Budget /
+        Exemptions) showed "unavailable". Root cause: the COM elevation host's type library
+        (`SemanticsArElevation.tlb`) was emitted only into the MIDL intermediate dir, never colocated
+        with the exe and never deployed; `/RegServer`'s `LoadTypeLibEx` failed but was wrapped in
+        `if (SUCCEEDED(...))` so `SarRegisterServer` silently skipped `RegisterTypeLib` and still
+        returned S_OK — the interface had no registered type library, so `CoGetObject` on the elevation
+        moniker failed with **TYPE_E_LIBNOTREGISTERED (0x8002801D)** and every elevated surface fell
+        back to "unavailable". Fix: registration.cpp returns the HRESULT on `LoadTypeLibEx` failure
+        (fail loud); CMake POST_BUILD colocates the .tlb with the exe; vm_run_gui deploys it. **VM-
+        confirmed:** with the .tlb deployed + `/RegServer` re-run, TypeLib registers and
+        `CoGetObject("Elevation:Administrator!new:{CLSID}")` returns **hr=0x0 ACTIVATED OK**. The host
+        statically links the sarapi control client + Segment-2 owner-check, so its channel to the O:SY
+        control pipe works too. (App chrome now also shows "AUDIT MODE", not "MODE UNKNOWN".)
       - **REMAINING before Segment 2 closes:** exercise the remaining surfaces live end-to-end —
         Recovery (induce incident → recover → **byte-for-byte** restore), Budget bars, Exemptions
         add/remove/lapsed, mode control. Backends are separately VM-verified (vm_verify_new FN=0,
