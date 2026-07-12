@@ -62,6 +62,10 @@ public partial class BudgetViewModel : ObservableObject
     private string _oldestText = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTimeline))]
+    private string _earliestShort = string.Empty;
+
+    [ObservableProperty]
     private string _unavailableText = string.Empty;
 
     [ObservableProperty]
@@ -86,6 +90,8 @@ public partial class BudgetViewModel : ObservableObject
     public ObservableCollection<BudgetSegment> Segments { get; } = new();
 
     public bool ShowMeter => Stage == BudgetStage.Loaded && Segments.Count > 0;
+
+    public bool HasTimeline => EarliestShort.Length > 0;
 
     private static SolidColorBrush Frozen(string hex)
     {
@@ -154,6 +160,7 @@ public partial class BudgetViewModel : ObservableObject
         AchievedWindowText = string.Empty;
         HeldText = string.Empty;
         OldestText = string.Empty;
+        EarliestShort = string.Empty;
         UnavailableText = string.Empty;
         EmptyText = string.Empty;
         IsEmpty = false;
@@ -212,6 +219,10 @@ public partial class BudgetViewModel : ObservableObject
 
         OldestText = attribution.OldestCopy is { } oldest
             ? $"Oldest kept copy: {oldest.LocalDateTime:MMM d, yyyy}"
+            : string.Empty;
+
+        EarliestShort = attribution.OldestCopy is { } earliest
+            ? $"back to {earliest.LocalDateTime:MMM d}"
             : string.Empty;
 
         Apps.Clear();

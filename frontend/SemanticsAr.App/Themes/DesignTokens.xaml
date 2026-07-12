@@ -65,6 +65,12 @@
         <GradientStop Offset="1" Color="#00B45309" />
     </LinearGradientBrush>
 
+    <LinearGradientBrush x:Key="Sar.RewindBandBrush" StartPoint="0,0.5" EndPoint="1,0.5" po:Freeze="True">
+        <GradientStop Offset="0" Color="#12B45309" />
+        <GradientStop Offset="0.32" Color="#D9A15A" />
+        <GradientStop Offset="1" Color="#C9832F" />
+    </LinearGradientBrush>
+
     <DropShadowEffect x:Key="Sar.Shadow.Card" BlurRadius="16" ShadowDepth="1" Direction="270" Color="#1C1B1A" Opacity="0.06" />
     <DropShadowEffect x:Key="Sar.Shadow.Large" BlurRadius="48" ShadowDepth="10" Direction="270" Color="#1C1B1A" Opacity="0.18" />
 

@@ -1,0 +1,55 @@
+<UserControl
+    x:Class="SemanticsAr.App.Controls.RewindTimeline"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Name="TimelineRoot">
+
+    <StackPanel>
+        <Grid Height="30">
+            <Rectangle
+                Height="1"
+                VerticalAlignment="Center"
+                Fill="{DynamicResource Sar.HairBrush}" />
+            <Border
+                Height="14"
+                VerticalAlignment="Center"
+                CornerRadius="7"
+                Background="{DynamicResource Sar.RewindBandBrush}" />
+            <Viewbox
+                Width="14"
+                Height="14"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Center">
+                <Canvas Width="16" Height="16">
+                    <Path Data="{StaticResource Sar.Glyph.Hourglass}" Fill="{DynamicResource Sar.BndBrush}" />
+                </Canvas>
+            </Viewbox>
+            <Rectangle
+                Width="2"
+                Height="24"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Fill="{DynamicResource Sar.TextBrush}" />
+        </Grid>
+
+        <DockPanel Margin="0,6,0,0">
+            <TextBlock
+                DockPanel.Dock="Right"
+                FontSize="11.5"
+                FontWeight="SemiBold"
+                Foreground="{DynamicResource Sar.TextBrush}"
+                Text="Today" />
+            <TextBlock
+                FontSize="11.5"
+                Foreground="{DynamicResource Sar.MutedBrush}"
+                Text="{Binding EarliestLabel, ElementName=TimelineRoot}" />
+        </DockPanel>
+
+        <TextBlock
+            Margin="0,8,0,0"
+            FontSize="11.5"
+            Foreground="{DynamicResource Sar.FaintBrush}"
+            TextWrapping="Wrap"
+            Text="Changes before the left edge can't be restored. The oldest copies are nearest to expiring." />
+    </StackPanel>
+</UserControl>
