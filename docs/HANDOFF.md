@@ -476,6 +476,34 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
           and an uncaught throw would reach `DispatcherUnhandledException` → crash. App builds 0 errors.
           (Deferred, cosmetic: bind Close's `CanExecute` to `!_busy` so it visibly disables during a long
           dead-network probe — UX, not correctness.)
+      - **[Frontier] Bug-D-class sweep of the other session-backed view-models (FABLE5 review + fixes).**
+        A fresh FABLE5 pass over `BudgetViewModel` + `PolicyViewModel` (against sources) found:
+        * **Budget — HIGH, real UI-thread freeze, worse than Recovery's** because it re-fires on every
+          range ComboBox change. `BudgetSession.Compute` (`BudgetAttribution.Build`) makes ~4-5 passes over
+          ALL kept copies + per-item classify/alloc — order 100-500 ms at 100k copies, multi-second at 1M,
+          synchronously from both `Begin` and `OnSelectedRangeChanged`. **FIXED:** `Begin` is now
+          `async Task`; a new `RecomputeAsync` runs `Compute` + `BuildTrend` in `Task.Run` (both read only
+          immutable POCO snapshots — the COM channel dies inside `BudgetSession.Begin`; `PointCollection`
+          is `Freeze()`d so it is legal to build off-thread) and marshals `ApplyAttribution` back to the
+          dispatcher. `OnSelectedRangeChanged` (a `partial void`, can't be async and mustn't drop
+          concurrent flips) uses a **latest-wins `_computeVersion` token + a captured-session-reference
+          guard** so a range flip mid-compute discards the stale result and a concurrent `Close` can't have
+          its `_session=null` repopulated. Added the same `Begin` stage guard as Recovery.
+        * **Policy — MEDIUM correctness, not a freeze** (exemptions are user-curated, few — sync load kept).
+          Its add flow re-`Begin`'d after a successful `Add`, causing a **third elevation consent** (the view
+          promises "once per visit") and a real bug: if the user cancelled that refresh consent, the
+          exemption was really added but the session went `Idle` → `SyncFromSession` fell to `default` →
+          stage downgraded to PreElevation showing an **empty list** despite "Exemption added." **FIXED:**
+          after `Add==Added`, append the row **locally** (built from `_pendingIdentity` captured in
+          `StartExempt` + `_pendingPath`, `MatchState=Matching`) instead of re-`Begin` — no extra consent,
+          no downgrade. Added the missing `_busy` guard to `CancelExempt`.
+        * **App-wide (FABLE5 Q4) — the `_busy` re-entrancy guard was invisible to the UI** (plain field, no
+          `CanExecute`), so buttons stayed enabled during the exact windows re-entrancy is possible (UAC
+          consent pump, file-picker modal, blocking STA COM) and clicks silently no-op'd. **FIXED in Budget +
+          Policy:** promoted to `[ObservableProperty] IsBusy` + `[NotifyCanExecuteChangedFor]` on the
+          session-mutating commands (`CanExecute = NotBusy`), so buttons visibly disable. (Recovery retains
+          its working `_busy` bool from Bug D; retrofit optional.) App builds 0 errors. **Verify next:** GUI
+          exercise of Budget range-flips with many copies + Policy add/remove (VM GUI harness is flaky, §6).
       - **Bug D (prior IN-PROGRESS notes, kept for provenance).**
         Owner observed: navigating to Recovery and clicking "View & recover" spikes resources and
         temporarily freezes the app when there are many recoverable items. This is a REAL responsiveness

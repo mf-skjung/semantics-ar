@@ -20,7 +20,14 @@ public partial class PolicyViewModel : ObservableObject
     private readonly Func<string?> _pickApp;
     private ExemptionSession? _session;
     private string _pendingPath = string.Empty;
-    private bool _busy;
+    private ResolvedIdentity? _pendingIdentity;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(BeginCommand))]
+    [NotifyCanExecuteChangedFor(nameof(AddByBrowseCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmExemptActionCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
+    private bool _isBusy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPreElevation))]
@@ -81,12 +88,12 @@ public partial class PolicyViewModel : ObservableObject
     public bool ShowEmpty => Stage == PolicyStage.List && Exemptions.Count == 0;
     public bool CanConfirm => ConfirmVerified;
 
-    [RelayCommand]
+    private bool NotBusy => !IsBusy;
+
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void Begin()
     {
-        if (_busy)
-            return;
-        _busy = true;
+        IsBusy = true;
         try
         {
             StatusText = string.Empty;
@@ -96,14 +103,14 @@ public partial class PolicyViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
     [RelayCommand]
     private void Close()
     {
-        if (_busy)
+        if (IsBusy)
             return;
         _session?.Close();
         _session = null;
@@ -113,12 +120,10 @@ public partial class PolicyViewModel : ObservableObject
         Stage = PolicyStage.PreElevation;
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void AddByBrowse()
     {
-        if (_busy)
-            return;
-        _busy = true;
+        IsBusy = true;
         try
         {
             string? path = _pickApp();
@@ -128,53 +133,65 @@ public partial class PolicyViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
     [RelayCommand]
     private void CancelExempt()
     {
+        if (IsBusy)
+            return;
         _pendingPath = string.Empty;
+        _pendingIdentity = null;
         StatusText = string.Empty;
         EnsureListStage();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void ConfirmExemptAction()
     {
-        if (_busy || _session is null || _pendingPath.Length == 0)
+        if (_session is null || _pendingPath.Length == 0 || _pendingIdentity is null)
             return;
 
-        _busy = true;
+        IsBusy = true;
         try
         {
             ExemptionAdd add = _session.Add(_pendingPath);
             StatusText = DescribeAdd(add);
-            _pendingPath = string.Empty;
             if (add.Result == ExemptionAddResult.Added)
             {
-                _session.Begin();
-                SyncFromSession();
+                Exemptions.Add(new ExemptionRowViewModel(new Exemption
+                {
+                    ImagePath = _pendingPath,
+                    CertSubject = _pendingIdentity.CertSubject,
+                    ContentHash = _pendingIdentity.ContentHash,
+                    FirstSeen = DateTimeOffset.Now,
+                    MatchState = ExemptionMatchState.Matching,
+                }));
+                OnPropertyChanged(nameof(ShowEmpty));
+                Stage = PolicyStage.List;
             }
             else
             {
                 EnsureListStage();
             }
+            _pendingPath = string.Empty;
+            _pendingIdentity = null;
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void Remove(ExemptionRowViewModel? row)
     {
-        if (_busy || _session is null || row is null || !row.CanRemove)
+        if (_session is null || row is null || !row.CanRemove)
             return;
 
-        _busy = true;
+        IsBusy = true;
         try
         {
             ElevatedError err = _session.Remove(row.ImagePath);
@@ -189,15 +206,15 @@ public partial class PolicyViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
     public void BeginExempt(string imagePath, string costText)
     {
-        if (_busy)
+        if (IsBusy)
             return;
-        _busy = true;
+        IsBusy = true;
         try
         {
             _session ??= new ExemptionSession(_channelFactory);
@@ -205,7 +222,7 @@ public partial class PolicyViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
@@ -229,6 +246,7 @@ public partial class PolicyViewModel : ObservableObject
         }
 
         _pendingPath = imagePath;
+        _pendingIdentity = identity;
         ConfirmName = LeafName(imagePath);
         ConfirmPath = imagePath;
         ConfirmSigner = identity.CertSubject.Length > 0 ? identity.CertSubject : "Unknown publisher";

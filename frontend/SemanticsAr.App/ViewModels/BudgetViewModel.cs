@@ -23,7 +23,12 @@ public partial class BudgetViewModel : ObservableObject
     private readonly Func<IElevatedControlChannel> _channelFactory;
     private readonly Action<string, string>? _onExempt;
     private BudgetSession? _session;
-    private bool _busy;
+    private int _computeVersion;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(BeginCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CloseCommand))]
+    private bool _isBusy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPreElevation))]
@@ -77,31 +82,47 @@ public partial class BudgetViewModel : ObservableObject
     public bool ShowApps => Stage == BudgetStage.Loaded && !IsEmpty;
     public bool ShowTrend => TrendPoints.Count > 1;
 
-    [RelayCommand]
-    private void Begin()
+    private bool NotBusy => !IsBusy;
+
+    [RelayCommand(CanExecute = nameof(NotBusy))]
+    private async Task Begin()
     {
-        if (_busy)
+        if (Stage is not (BudgetStage.PreElevation or BudgetStage.Unavailable))
             return;
 
-        _busy = true;
+        IsBusy = true;
         try
         {
             _session = new BudgetSession(_channelFactory);
             _session.Begin();
-            SyncFromSession();
+
+            switch (_session.State)
+            {
+                case BudgetSessionState.Loaded:
+                    await RecomputeAsync();
+                    Stage = BudgetStage.Loaded;
+                    break;
+
+                case BudgetSessionState.Unavailable:
+                    UnavailableText = ElevatedErrorText.Describe(_session.LastError, "read your recovery budget");
+                    Stage = BudgetStage.Unavailable;
+                    break;
+
+                default:
+                    Stage = BudgetStage.PreElevation;
+                    break;
+            }
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void Close()
     {
-        if (_busy)
-            return;
-
+        _computeVersion++;
         _session?.Close();
         _session = null;
         Apps.Clear();
@@ -118,42 +139,40 @@ public partial class BudgetViewModel : ObservableObject
     partial void OnSelectedRangeChanged(BudgetRange value)
     {
         if (_session?.State == BudgetSessionState.Loaded)
-            Recompute();
+            _ = RecomputeAsync();
     }
 
-    private void SyncFromSession()
+    private async Task RecomputeAsync()
     {
-        if (_session is null)
+        BudgetSession? session = _session;
+        if (session is null)
+            return;
+
+        int version = ++_computeVersion;
+        BudgetRange range = SelectedRange;
+        BudgetAttribution attribution;
+        PointCollection trend;
+        try
         {
-            Stage = BudgetStage.PreElevation;
+            (attribution, trend) = await Task.Run(() =>
+            {
+                BudgetAttribution a = session.Compute(range, DateTimeOffset.Now);
+                return (a, BuildTrend(a.Trend));
+            });
+        }
+        catch
+        {
             return;
         }
 
-        switch (_session.State)
-        {
-            case BudgetSessionState.Loaded:
-                Recompute();
-                Stage = BudgetStage.Loaded;
-                break;
-
-            case BudgetSessionState.Unavailable:
-                UnavailableText = ElevatedErrorText.Describe(_session.LastError, "read your recovery budget");
-                Stage = BudgetStage.Unavailable;
-                break;
-
-            default:
-                Stage = BudgetStage.PreElevation;
-                break;
-        }
-    }
-
-    private void Recompute()
-    {
-        if (_session is null)
+        if (version != _computeVersion || !ReferenceEquals(session, _session))
             return;
 
-        BudgetAttribution attribution = _session.Compute(SelectedRange, DateTimeOffset.Now);
+        ApplyAttribution(attribution, trend);
+    }
 
+    private void ApplyAttribution(BudgetAttribution attribution, PointCollection trend)
+    {
         IsEmpty = attribution.Apps.Count == 0;
         EmptyText = attribution.TotalCopyCount == 0
             ? "No kept copies are standing by yet. When apps replace read originals, the copies held for you will show up here, grouped by the app that caused them."
@@ -175,7 +194,7 @@ public partial class BudgetViewModel : ObservableObject
         foreach (AppImpact impact in attribution.Apps)
             Apps.Add(new AppImpactRowViewModel(impact, attribution.AchievedWindow, attribution.Range, _onExempt));
 
-        TrendPoints = BuildTrend(attribution.Trend);
+        TrendPoints = trend;
     }
 
     private static PointCollection BuildTrend(IReadOnlyList<TrendPoint> trend)
