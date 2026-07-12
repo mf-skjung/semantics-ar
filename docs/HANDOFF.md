@@ -22,7 +22,26 @@
   the demo attack on `C:\SarDemo\Sandbox` produced **0 kept copies** even in AUDIT — the driver may not
   monitor that path, which would also break the recovery demo (see the deferred item in §9).
 
-- **BUG A — CRITICAL RE-INTERPRETATION (2026-07-13, latest — READ THIS FIRST):** After converting
+- **BUG A — RESOLVED (mostly): the dialog is NOT hanging (CPU-proven).** Decisive test: after clicking the
+  mode chip, the app process CPU delta over 4s was **375 ms (idle, not spinning)** — a real layout hang would
+  peg a core. So **`ModeSwitchWindow` OPENS FINE as a normal modal dialog and simply waits for input**; every
+  "hang" I saw was the UIA driver failing to find/close the modal dialog (so `ShowDialog()` blocked as modals
+  do) — a test-harness artifact, NOT a product bug. The whole Viewbox/FluentWindow/DataContext chase below was
+  a false trail; **all those edits are reverted (clean tree).**
+  **What is STILL UNVERIFIED (do this next):** my tests only OPENED the dialog; they never clicked **Confirm**
+  (the UIA driver couldn't locate the modal dialog window — try `TreeScope.Descendants` from root, or find the
+  owned window via the main window, or match a Window whose Name is empty/‘Protection mode’). The owner's
+  reported "crash on switching" is most likely EITHER (i) an older build (like Bug B, already fixed), OR
+  (ii) the **Confirm → `ModeControlViewModel.Apply` → `ElevatedControlChannel.SetMode` → COM elevation** path
+  (a real UAC prompt + SetMode round-trip, which my silent-elevation VM + un-clickable dialog never exercised).
+  **NEXT: drive Confirm** (set `ConsentPromptBehaviorAdmin=0` is already done on SarTarget so elevation is
+  silent; find + invoke the "Adopt ENFORCE"/"Switch to AUDIT" button), then check: app stays alive, no app.log
+  exception, and the **home chip flips to "ENFORCE MODE"** (mode actually changed). `Apply` already wraps
+  SetMode in try/catch so a hard crash is unlikely — but VERIFY the switch actually WORKS end-to-end and the
+  posture updates. If it works, Bug A is fully closed. Only if Confirm genuinely fails, root-cause the elevated
+  SetMode path. **Do NOT trust the blind UIA "window not found" as evidence of a hang — CPU/screenshot is the
+  arbiter.**
+- **BUG A — CRITICAL RE-INTERPRETATION (2026-07-13, superseded by the CPU test above):** After converting
   `ModeSwitchWindow` to a **plain `<Window>`** (no FluentWindow) AND `DataContext = null` AND placeholder
   `<Border>`s instead of pictograms, the UIA harness STILL reports the same "hang" (ShowDialog doesn't
   return, `windows-of-proc=0`, app alive). **A plain WPF Window with only static Borders/TextBlocks
