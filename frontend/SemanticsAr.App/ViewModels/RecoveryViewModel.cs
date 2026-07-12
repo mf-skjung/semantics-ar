@@ -86,7 +86,7 @@ public partial class RecoveryViewModel : ObservableObject
     public bool ShowUnavailable => Stage == RecoveryStage.Unavailable;
 
     [RelayCommand]
-    private void Begin()
+    private async Task Begin()
     {
         if (_busy)
             return;
@@ -96,7 +96,23 @@ public partial class RecoveryViewModel : ObservableObject
         {
             _session = new RecoverySession(_channelFactory);
             _session.Begin();
-            SyncFromSession();
+
+            switch (_session.State)
+            {
+                case RecoverySessionState.Browsing:
+                    await PopulateItemsAsync(_session.Items);
+                    Stage = RecoveryStage.Browsing;
+                    break;
+
+                case RecoverySessionState.Unavailable:
+                    UnavailableText = DescribeError(_session.LastError);
+                    Stage = RecoveryStage.Unavailable;
+                    break;
+
+                default:
+                    Stage = RecoveryStage.PreElevation;
+                    break;
+            }
         }
         finally
         {
@@ -234,53 +250,35 @@ public partial class RecoveryViewModel : ObservableObject
         Stage = RecoveryStage.PreElevation;
     }
 
-    private void SyncFromSession()
+    private async Task PopulateItemsAsync(IReadOnlyList<RecoverableItem> snapshot)
     {
-        if (_session is null)
-        {
-            Stage = RecoveryStage.PreElevation;
-            return;
-        }
+        IFileProbe probe = _probe;
+        List<(RecoverableItem Model, RestoreDisposition Disposition, string Label)> rows =
+            await Task.Run(() => ClassifyRows(snapshot, probe));
 
-        switch (_session.State)
-        {
-            case RecoverySessionState.Browsing:
-                BuildItems(_session.Items);
-                Stage = RecoveryStage.Browsing;
-                break;
-
-            case RecoverySessionState.Unavailable:
-                UnavailableText = DescribeError(_session.LastError);
-                Stage = RecoveryStage.Unavailable;
-                break;
-
-            default:
-                Stage = RecoveryStage.PreElevation;
-                break;
-        }
+        Items.Clear();
+        ICollectionView view = CollectionViewSource.GetDefaultView(Items);
+        using (view.DeferRefresh())
+            foreach ((RecoverableItem model, RestoreDisposition disposition, string label) in rows)
+                Items.Add(new RecoverableItemViewModel(model, disposition, label));
     }
 
-    private void BuildItems(IReadOnlyList<RecoverableItem> snapshot)
+    private static List<(RecoverableItem Model, RestoreDisposition Disposition, string Label)> ClassifyRows(
+        IReadOnlyList<RecoverableItem> snapshot, IFileProbe probe)
     {
-        Items.Clear();
+        List<(RecoverableItem, RestoreDisposition, string)> rows = new(snapshot.Count);
 
-        IEnumerable<RecoverableItem> grouped = snapshot.Where(i => i.ActorStartKey != 0);
-
-        foreach (Incident incident in IncidentGrouper.Group(grouped, TimeSpan.MaxValue))
+        foreach (Incident incident in IncidentGrouper.Group(snapshot.Where(i => i.ActorStartKey != 0), TimeSpan.MaxValue))
         {
             string label = $"Incident · {incident.FirstSeen.LocalDateTime:g}";
             foreach (RecoverableItem member in incident.Members.Cast<RecoverableItem>())
-                Items.Add(MakeItem(member, label));
+                rows.Add((member, RestorePlanner.Classify(member, probe), label));
         }
 
         foreach (RecoverableItem item in snapshot.Where(i => i.ActorStartKey == 0))
-            Items.Add(MakeItem(item, "Held copies"));
-    }
+            rows.Add((item, RestorePlanner.Classify(item, probe), "Held copies"));
 
-    private RecoverableItemViewModel MakeItem(RecoverableItem model, string label)
-    {
-        RestoreDisposition disposition = RestorePlanner.Classify(model, _probe);
-        return new RecoverableItemViewModel(model, disposition, label);
+        return rows;
     }
 
     private static RecoveryOutcome Decline(RecoverableItem item, RecoveryDeclineReason reason) =>

@@ -328,7 +328,25 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         `CoGetObject("Elevation:Administrator!new:{CLSID}")` returns **hr=0x0 ACTIVATED OK**. The host
         statically links the sarapi control client + Segment-2 owner-check, so its channel to the O:SY
         control pipe works too. (App chrome now also shows "AUDIT MODE", not "MODE UNKNOWN".)
-      - **Bug D (IN PROGRESS — Recovery view is a resource hog / freezes the UI with many items).**
+      - **Bug D (FIXED — Recovery view is a resource hog / freezes the UI with many items).**
+        Both root causes addressed and the App builds clean (0 errors).
+        * **B (render) FIXED:** `RecoveryView.xaml` Browsing ListBox now carries
+          `ScrollViewer.CanContentScroll="True"` + `VirtualizingPanel.IsVirtualizing="True"` +
+          `IsVirtualizingWhenGrouping="True"` + `VirtualizationMode="Recycling"` + `ScrollUnit="Pixel"`,
+          so grouped rows are UI-virtualized (only visible containers realized/recycled). The bounded
+          DockPanel gives the ListBox a finite height so the ScrollViewer engages.
+        * **A (load freeze) FIXED:** `RecoveryViewModel.Begin()` is now `async Task`. COM stays on the
+          STA UI thread (`_session.Begin()` — the two SafeArray bulk calls, no RPC_E_WRONG_THREAD risk);
+          only the filesystem-bound work — `IncidentGrouper.Group` + per-item `RestorePlanner.Classify`
+          (Win32FileProbe) — moves to `Task.Run` via the new static `ClassifyRows(snapshot, probe)`
+          (pure, no UI/COM touch). Results marshal back and `PopulateItemsAsync` bulk-adds inside
+          `ICollectionView.DeferRefresh()` so the grouped view regroups ONCE, not per-Add (kills the
+          O(n²)). `SyncFromSession`/`BuildItems`/`MakeItem` removed (folded in). `Win32FileProbe` is
+          stateless so the off-thread classify is safe. Selection survives virtualization because
+          `IsSelected` lives on the VM (SelectAll/Preview iterate `Items` VMs, not containers).
+        * Verify by navigating to Recovery with many items (VM UIAutomation nav is flaky — §6; owner can
+          drive it in VMConnect). Committed.
+      - **Bug D (prior IN-PROGRESS notes, kept for provenance).**
         Owner observed: navigating to Recovery and clicking "View & recover" spikes resources and
         temporarily freezes the app when there are many recoverable items. This is a REAL responsiveness
         defect (not just VM slowness). Two root causes, both confirmed by reading the code:
