@@ -19,6 +19,7 @@ typedef enum {
 
 typedef struct {
     HANDLE   port;
+    HANDLE   stop_event;
     void    *sign_key;
     void    *sign_provider;
     uint32_t mode;

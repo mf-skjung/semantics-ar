@@ -87,6 +87,12 @@ sar_comm_status_t sar_comm_connect(sar_comm_client_t *client,
     if (FAILED(hr) || port == INVALID_HANDLE_VALUE)
         return SAR_COMM_ERR_CONNECT;
 
+    client->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!client->stop_event) {
+        CloseHandle(port);
+        return SAR_COMM_ERR_CONNECT;
+    }
+
     client->port = port;
     InterlockedExchange(&client->running, 1);
     return SAR_COMM_OK;
@@ -98,17 +104,61 @@ static sar_comm_status_t sar_comm_recv_message(sar_comm_client_t *client,
                                                uint32_t *out_length)
 {
     sar_filter_message_t msg;
-    HRESULT hr;
-    uint32_t type;
+    HRESULT    hr;
+    OVERLAPPED ov;
+    HANDLE     ev;
+    DWORD      bytes = 0;
+    BOOL       completed = FALSE;
+    uint32_t   type;
 
     if (capacity > SAR_COMM_RECV_BUFFER)
         capacity = SAR_COMM_RECV_BUFFER;
 
+    /* Overlapped receive so a shutdown wakes the inbound loop immediately. The port handle is async
+     * (FilterConnectCommunicationPort was called with dwOptions=0), so FilterGetMessage returns
+     * ERROR_IO_PENDING and signals ov.hEvent on completion. A dedicated per-call event is required:
+     * a NULL event would make GetOverlappedResult wait on the port handle, which also signals for the
+     * concurrent outbound FilterSendMessage calls on the same handle. */
+    ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!ev)
+        return SAR_COMM_ERR_TRANSPORT;
+
     memset(&msg, 0, sizeof(msg));
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = ev;
+
     hr = FilterGetMessage(client->port, &msg.fltHeader,
-                          FIELD_OFFSET(sar_filter_message_t, payload) + capacity,
-                          NULL);
-    if (FAILED(hr))
+                          FIELD_OFFSET(sar_filter_message_t, payload) + capacity, &ov);
+    if (hr == HRESULT_FROM_WIN32(ERROR_IO_PENDING)) {
+        HANDLE waits[2];
+        DWORD  w;
+
+        waits[0] = ev;
+        waits[1] = client->stop_event;
+        w = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        if (w == WAIT_OBJECT_0) {
+            completed = GetOverlappedResult(client->port, &ov, &bytes, FALSE);
+        } else if (w == WAIT_OBJECT_0 + 1) {
+            /* Shutdown. Cancel our own pended get (targeted, so concurrent FilterSendMessage on the
+             * same handle is untouched), then drain: the completion always signals ev, and a message
+             * may have won the race and been delivered into msg - if so, dispatch it once. */
+            CancelIoEx(client->port, &ov);
+            WaitForSingleObject(ev, INFINITE);
+            completed = GetOverlappedResult(client->port, &ov, &bytes, FALSE);
+            if (!completed) {
+                CloseHandle(ev);
+                return SAR_COMM_ERR_STOPPED;
+            }
+        } else {
+            CloseHandle(ev);
+            return SAR_COMM_ERR_TRANSPORT;
+        }
+    } else if (SUCCEEDED(hr)) {
+        completed = TRUE;
+    }
+
+    CloseHandle(ev);
+    if (!completed)
         return SAR_COMM_ERR_TRANSPORT;
 
     {
@@ -350,8 +400,11 @@ sar_comm_status_t sar_comm_run(sar_comm_client_t *client,
 
 void sar_comm_stop(sar_comm_client_t *client)
 {
-    if (client)
-        InterlockedExchange(&client->running, 0);
+    if (!client)
+        return;
+    InterlockedExchange(&client->running, 0);
+    if (client->stop_event)
+        SetEvent(client->stop_event);
 }
 
 void sar_comm_close(sar_comm_client_t *client)
@@ -361,6 +414,10 @@ void sar_comm_close(sar_comm_client_t *client)
     if (client->port != INVALID_HANDLE_VALUE && client->port != NULL) {
         CloseHandle(client->port);
         client->port = INVALID_HANDLE_VALUE;
+    }
+    if (client->stop_event) {
+        CloseHandle(client->stop_event);
+        client->stop_event = NULL;
     }
     if (client->sign_key) {
         NCryptFreeObject((NCRYPT_KEY_HANDLE)client->sign_key);

@@ -59,10 +59,11 @@ static DWORD WINAPI sar_control_handler(DWORD control, DWORD event_type,
     case SERVICE_CONTROL_STOP:
     case SERVICE_CONTROL_SHUTDOWN:
         sar_set_status(SERVICE_STOP_PENDING, NO_ERROR, 5000);
+        /* sar_comm_stop signals the client stop event; the inbound loop wakes and cancels its own
+         * pended FilterGetMessage (targeted). A blanket CancelIoEx(port, NULL) here would also abort
+         * concurrent outbound FilterSendMessage calls on the shared handle, so it is intentionally
+         * not used. */
         sar_comm_stop(&g_service.comm);
-        if (g_service.comm.port != INVALID_HANDLE_VALUE
-            && g_service.comm.port != NULL)
-            CancelIoEx(g_service.comm.port, NULL);
         if (g_service.stop_event)
             SetEvent(g_service.stop_event);
         return NO_ERROR;

@@ -366,13 +366,25 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         (already signaled, so the worker exits on its own; own-process service ⇒ process exit reclaims);
         `sar_control_listener_stop` skips `DeleteCriticalSection` on a stuck stop (a stuck worker may still own
         `g_recover_lock`/`g_control_lock`; the static CS is left initialized so its eventual Leave is defined).
-        **Found (not yet fixed):** clean service stop measures ~15 s because `sar_comm_recv_message` uses a
-        **synchronous** `FilterGetMessage` (`commclient.c:108`, `lpOverlapped=NULL`) in the `sar_comm_run`
-        inbound loop, which `CancelIoEx` does not promptly cancel; the loop exits only late. This is
-        orthogonal to recover (it runs *before* the pipe stops in the shutdown order, so it does not mis-fire
-        leak-on-stuck) and is now *safe* (leak-on-stuck), just slow. Frontier fix in progress: convert the
-        inbound recv to overlapped `FilterGetMessage` + wait on a stop event (mirroring `sar_pipe_recv`),
-        pending a FABLE5 review because it touches the verdict-notify inbound channel.
+        **Prompt-shutdown FIX (was ~15 s):** `sar_comm_recv_message` used a **synchronous** `FilterGetMessage`
+        (`lpOverlapped=NULL`) in the `sar_comm_run` inbound loop; the one-shot `CancelIoEx` race (reader not
+        yet parked when the cancel fires → `ERROR_NOT_FOUND`, next get blocks) left the loop stuck, so the
+        service took ~15 s to reach STOPPED. Converted to **overlapped `FilterGetMessage` + a persistent
+        manual-reset `stop_event`** on the client, waiting on `[completion, stop_event]` and, on shutdown,
+        doing a **targeted** `CancelIoEx(port, &ov)` + drain (dispatching a message that won the race). A
+        **fresh FABLE5** verified the pattern against the fltuser docs: the port is async by default
+        (`FilterConnectCommunicationPort` `dwOptions=0`; only `FLT_PORT_FLAG_SYNC_HANDLE` would break it), a
+        dedicated per-call event is mandatory (a NULL event makes `GetOverlappedResult` wait on the port
+        handle, which also signals for the concurrent outbound `FilterSendMessage`), and the blanket
+        `CancelIoEx(port, NULL)` in the stop handler had to go (it aborted concurrent sends) — all applied.
+        **VM-VERIFIED (`vm_verify_recover_isolation`, 8/0): clean service stop < 5 s** (was ~15 s), recover
+        byte-exact under a concurrent control-op storm, engine live, clean restart. **No verdict-channel
+        regression** (`vm_verify_new` 27/2/1): every FN=0 check passes and Salsa20/12 convicts+recovers BY
+        KEY; the 2 fails are the §8 documented **MMAP-ORACLE async-conviction flaky** (driver-internal
+        `Enc_K(pre)==post` proof — causally independent of the service recv change; it *alternated* with the
+        MMAP2 flaky of the prior run, the signature of the documented intermittents, not a regression). Capture
+        actor-attribution worked throughout (BY-KEY recovery depends on it), confirming the identity/verdict
+        inbound flow is intact.
       - **NON-ELEVATED FIX LIVE-CONFIRMED:** with the committed binaries deployed and the engine live,
         a genuine medium-integrity process (`runas /trustlevel:0x20000`, session 0 — avoids the flaky
         interactive-session/scheduled-task harness) ran `sarapi_posture_read` and got **result=0

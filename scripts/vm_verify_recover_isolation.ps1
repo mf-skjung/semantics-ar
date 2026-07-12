@@ -65,14 +65,18 @@ $body = {
         & C:\sar\stream_transform.exe chacha 20 resident $dir "$n" 5 2>&1 | Out-Null
         Start-Sleep -Milliseconds 600
 
-        # control-op storm concurrent with the recover pass
+        # control-op storm concurrent with the recover pass. Use ops that return a deterministic
+        # success (status / preserve-list / mode) - NOT whitelist-add of an untrusted binary, whose
+        # non-zero "identity not verified" is a valid logical result, not a concurrency failure.
         $ctl = Start-Job -ScriptBlock {
             $ok = $true; $c = 0
             for ($j = 0; $j -lt 40; $j++) {
-                if ((& C:\sar\sarctl.exe status 2>&1) -notmatch 'mode|status|drv|svc|captured') { }
+                if ((& C:\sar\sarctl.exe status 2>&1) -notmatch 'mode|drv|svc|captured') { $ok = $false }
                 & C:\sar\sarctl.exe preserve-list 2>&1 | Out-Null
-                & C:\sar\sarctl.exe whitelist-add C:\sar\stream_transform.exe 2>&1 | Out-Null
-                & C:\sar\sarctl.exe whitelist-remove C:\sar\stream_transform.exe 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { $ok = $false }
+                & C:\sar\sarctl.exe list 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { $ok = $false }
+                & C:\sar\sarctl.exe mode audit 2>&1 | Out-Null
                 if ($LASTEXITCODE -ne 0) { $ok = $false }
                 $c += 4
             }
