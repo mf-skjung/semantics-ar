@@ -453,10 +453,42 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         whether to enable PPL by default (production: yes; the `-NoProtect` switch is for dev installs).
       - **DoD REMAINING:** clean install+uninstall smoke on a fresh `clean-baseline` VM via PowerShell
         Direct (batched with the driver-fix recovery regression). Not yet run.
-- [ ] Segment 4 — hardening / soak + known-limitation resolution + service-stop robustness + untimed
-      FilterSendMessage (above).
-- Owner-only pending: Part XII ratification; push (4 unpushed: `3f84a64`, `e5246f1`, `97f0247`,
-  `477b498`); MS cert.
+- [~] **Segment 4 — hardening / soak.** The untimed-`FilterSendMessage` item is resolved above
+      (driver lock fix SHIP `84d991c`; residual owner-deferred). The three session-5 **known limitations**
+      are analysed at code level below and **owner-deferred** (none is a stopgap-fixable bug; two are
+      deliberate security-model choices that must not be weakened autonomously):
+      * **Whitelist does not survive a driver reload.** The whitelist lives in `State->whitelist` (driver,
+        in-memory; `driver/state.c`). The service forwards ADD/REMOVE to the driver
+        (`control.c:185 sar_control_send_whitelist`) but keeps **no persisted copy**, so a driver reload
+        starts empty and nothing re-pushes. Resolving it properly = a new persistence subsystem — either
+        driver-side (a MAC'd/anti-rollback store like keystore/preserve) or service-side (persist exemptions
+        + replay on reconnect/handshake). Both are **un-discussed new architecture** (template rule: never
+        add un-discussed content) and the limitation is explicitly "in-memory by design". **Owner-defer:**
+        decide whether reload-survival is a product requirement; if yes, the service-side persist+replay is
+        the smaller change (the service already owns the control channel and re-handshakes on reconnect).
+      * **Remove-by-path only clears still-matching exemptions.** Exemptions are keyed by **strong identity**
+        (image_path + cert_subject + content_hash). Remove re-evaluates the *current* file at the given path
+        (`control.c:174 sar_identity_evaluate`) to reconstruct that identity, then removes the matching entry
+        (`state.c:154 SarStateWhitelistRemove`→`sar_whitelist_remove`). If the file changed or is gone since
+        it was exempted, the re-evaluated identity won't match → the stale entry persists. This is
+        **intended** (identity-keyed, not path-string-keyed — a path-string remove would let a swapped
+        binary drop another binary's exemption). **Owner-defer:** the correct product answer is a
+        remove-by-index/enumerate-then-remove UX (the enumerate path `SAR_CTL_OP_WHITELIST_LIST` already
+        returns each entry's identity) rather than weakening the key. Do **not** change the key model
+        autonomously (security-relevant, prohibition 4).
+      * **Interpreter refusal is name-based.** `sar_identity_is_interpreter(image_path)` is a name/path
+        check; the service refuses to ADD an interpreter to the whitelist (`control.c:179`,
+        `SAR_CTL_RESULT_INTERPRETER`). It is **backstopped in the driver** at apply time
+        (`state.c:351 SarIdentityIsInterpreter` in the verdict-apply guard), so a renamed interpreter that
+        slips the name check is still caught before it can be granted trust. **Owner-defer / acceptable:**
+        the defense-in-depth apply-time guard makes the name-based front check adequate; a content/behaviour-
+        based interpreter classifier is a research-grade enhancement, not a correctness gap.
+      * **Remaining Segment-4 work (needs a healthy VM):** long-running soak/stress (the original wedge was
+        concurrency-latent), and service-stop robustness under rapid driver reload (the `Restart-Service`
+        double-action transient wedge noted under Segment 1 — the probe was fixed; the service-side
+        robustness itself is still to be exercised under soak).
+- Owner-only pending: Part XII ratification; **`git push`** (many unpushed commits this drive — latest
+  `1590616`; run `git log --oneline origin/main..HEAD` for the full set); MS driver cert.
 - *Record every commit hash + one line of what it closed here as you go. If your context was
   compressed, this section is where you find yourself.*
 
