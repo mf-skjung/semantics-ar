@@ -20,23 +20,17 @@
                 Style="{StaticResource Sar.PageSubtitle}"
                 Text="{Binding Summary}" />
 
-            <controls:CertaintyChip Rung="Definitive" Margin="0,18,0,0" />
-            <TextBlock
-                Margin="30,4,0,0"
-                MaxWidth="560"
+            <Border
+                Margin="0,20,0,0"
+                Padding="24"
+                MaxWidth="600"
                 HorizontalAlignment="Left"
-                Opacity="0.8"
-                TextWrapping="Wrap"
-                Text="The encryption key was captured. The original is restored and each file is verified before it replaces anything." />
-
-            <controls:CertaintyChip Rung="Bounded" Margin="0,16,0,0" />
-            <TextBlock
-                Margin="30,4,0,0"
-                MaxWidth="560"
-                HorizontalAlignment="Left"
-                Opacity="0.8"
-                TextWrapping="Wrap"
-                Text="A copy was held before destruction, recoverable within a bounded, expiring window." />
+                Background="{DynamicResource Sar.SurfaceBrush}"
+                BorderBrush="{DynamicResource Sar.HairBrush}"
+                BorderThickness="1"
+                CornerRadius="14">
+                <controls:CertaintyLadder />
+            </Border>
 
             <Button
                 Margin="0,24,0,0"
