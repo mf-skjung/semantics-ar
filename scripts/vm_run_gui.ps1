@@ -44,6 +44,8 @@ $freshApi = Join-Path $Repo "build_win\frontend\sarapi\Release\sarapi.dll"
 if (Test-Path $freshApi) { Copy-Item $freshApi (Join-Path $PublishDir "sarapi.dll") -Force }
 $elevHost = Join-Path $Repo "build_win\frontend\elevation-host\Release\SemanticsArElevationHost.exe"
 if (Test-Path $elevHost) { Copy-Item $elevHost (Join-Path $PublishDir "SemanticsArElevationHost.exe") -Force }
+$elevTlb = Join-Path $Repo "build_win\frontend\elevation-host\Release\SemanticsArElevation.tlb"
+if (Test-Path $elevTlb) { Copy-Item $elevTlb (Join-Path $PublishDir "SemanticsArElevation.tlb") -Force }
 Assert "publish produced SemanticsAr.App.exe" (Test-Path (Join-Path $PublishDir "SemanticsAr.App.exe"))
 Assert "ABI-matched sarapi.dll present" (Test-Path (Join-Path $PublishDir "sarapi.dll"))
 

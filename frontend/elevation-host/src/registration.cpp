@@ -128,10 +128,11 @@ HRESULT SarRegisterServer(void)
         PathAppendW(tlb, kTlbFile);
 
         ITypeLib *lib = NULL;
-        if (SUCCEEDED(LoadTypeLibEx(tlb, REGKIND_NONE, &lib))) {
-            RegisterTypeLib(lib, tlb, NULL);
-            lib->Release();
-        }
+        HRESULT   hrTlb = LoadTypeLibEx(tlb, REGKIND_NONE, &lib);
+        if (FAILED(hrTlb))
+            return hrTlb;
+        RegisterTypeLib(lib, tlb, NULL);
+        lib->Release();
     }
 
     return S_OK;

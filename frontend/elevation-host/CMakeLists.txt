@@ -44,3 +44,9 @@ target_compile_options(sar_elevation_host PRIVATE
 target_link_options(sar_elevation_host PRIVATE
     /ENTRY:wWinMainCRTStartup
     /guard:cf /guard:ehcont /CETCOMPAT /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT)
+
+add_custom_command(TARGET sar_elevation_host POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_BINARY_DIR}/sar_elevation_host.dir/$<CONFIG>/SemanticsArElevation.tlb"
+        "$<TARGET_FILE_DIR:sar_elevation_host>/SemanticsArElevation.tlb"
+    VERBATIM)
