@@ -13,12 +13,11 @@
     <Grid Margin="32">
 
         <StackPanel Visibility="{Binding ShowPreElevation, Converter={StaticResource B2V}}">
-            <TextBlock FontSize="28" FontWeight="SemiBold" Text="Recovery" />
+            <TextBlock Style="{StaticResource Sar.PageTitle}" Text="Recovery" />
             <TextBlock
-                Margin="0,12,0,0"
+                Margin="0,8,0,0"
                 MaxWidth="620"
-                Opacity="0.85"
-                TextWrapping="Wrap"
+                Style="{StaticResource Sar.PageSubtitle}"
                 Text="{Binding Summary}" />
 
             <controls:CertaintyChip Rung="Definitive" Margin="0,18,0,0" />
@@ -40,9 +39,9 @@
             <Button
                 Margin="0,24,0,0"
                 HorizontalAlignment="Left"
-                Padding="16,8"
+                Command="{Binding BeginCommand}"
                 Content="View &amp; recover"
-                Command="{Binding BeginCommand}" />
+                Style="{StaticResource Sar.PrimaryButton}" />
         </StackPanel>
 
         <DockPanel Visibility="{Binding ShowBrowsing, Converter={StaticResource B2V}}">

@@ -17,19 +17,18 @@
     <Grid Margin="32">
 
         <StackPanel Visibility="{Binding ShowPreElevation, Converter={StaticResource B2V}}">
-            <TextBlock FontSize="28" FontWeight="SemiBold" Text="Recovery budget" />
+            <TextBlock Style="{StaticResource Sar.PageTitle}" Text="Recovery budget" />
             <TextBlock
-                Margin="0,12,0,0"
+                Margin="0,8,0,0"
                 MaxWidth="640"
-                Opacity="0.85"
-                TextWrapping="Wrap"
+                Style="{StaticResource Sar.PageSubtitle}"
                 Text="{Binding Summary}" />
             <Button
                 Margin="0,24,0,0"
                 HorizontalAlignment="Left"
-                Padding="16,8"
+                Command="{Binding BeginCommand}"
                 Content="Open budget"
-                Command="{Binding BeginCommand}" />
+                Style="{StaticResource Sar.PrimaryButton}" />
         </StackPanel>
 
         <DockPanel Visibility="{Binding ShowLoaded, Converter={StaticResource B2V}}">
@@ -37,26 +36,24 @@
                 <Button
                     DockPanel.Dock="Right"
                     VerticalAlignment="Top"
-                    Padding="16,8"
+                    Command="{Binding CloseCommand}"
                     Content="Close"
-                    Command="{Binding CloseCommand}" />
-                <TextBlock FontSize="28" FontWeight="SemiBold" Text="Recovery budget" />
+                    Style="{StaticResource Sar.OutlineButton}" />
+                <TextBlock Style="{StaticResource Sar.PageTitle}" Text="Recovery budget" />
             </DockPanel>
 
             <ScrollViewer Margin="0,20,0,0" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
 
-                    <Border
-                        Padding="28"
-                        CornerRadius="12"
-                        BorderThickness="1"
-                        BorderBrush="{DynamicResource Status.Neutral.Brush}">
+                    <ContentControl Padding="26,24" Style="{StaticResource Sar.Card}">
                         <StackPanel>
-                            <TextBlock FontSize="15" Opacity="0.8" Text="You can restore back to" />
+                            <TextBlock
+                                FontSize="13"
+                                Foreground="{DynamicResource Sar.MutedBrush}"
+                                Text="You can restore back to" />
                             <TextBlock
                                 Margin="0,6,0,0"
-                                FontSize="38"
-                                FontWeight="SemiBold"
+                                Style="{StaticResource Sar.BigNumber}"
                                 Text="{Binding AchievedWindowText}" />
                             <TextBlock Margin="0,14,0,0" FontSize="14" Opacity="0.85" Text="{Binding HeldText}" />
                             <TextBlock Margin="0,4,0,0" FontSize="13" Opacity="0.7" Text="{Binding OldestText}" />
@@ -69,9 +66,9 @@
                                         <Canvas Width="560" Height="64">
                                             <Polyline
                                                 Points="{Binding TrendPoints}"
-                                                Stroke="{DynamicResource Status.Neutral.Brush}"
-                                                StrokeThickness="2"
-                                                StrokeLineJoin="Round" />
+                                                Stroke="{DynamicResource Sar.AccentBrush}"
+                                                StrokeLineJoin="Round"
+                                                StrokeThickness="2" />
                                         </Canvas>
                                     </Viewbox>
                                     <TextBlock
@@ -82,34 +79,42 @@
                                 </StackPanel>
                             </Border>
                         </StackPanel>
-                    </Border>
+                    </ContentControl>
 
-                    <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
-                        <RadioButton
-                            GroupName="range"
-                            Content="24 hours"
-                            IsChecked="{Binding SelectedRange, Converter={StaticResource EnumBool}, ConverterParameter=Last24Hours}"
-                            AutomationProperties.Name="Last 24 hours" />
-                        <RadioButton
-                            Margin="16,0,0,0"
-                            GroupName="range"
-                            Content="7 days"
-                            IsChecked="{Binding SelectedRange, Converter={StaticResource EnumBool}, ConverterParameter=Last7Days}"
-                            AutomationProperties.Name="Last 7 days" />
-                        <RadioButton
-                            Margin="16,0,0,0"
-                            GroupName="range"
-                            Content="All time"
-                            IsChecked="{Binding SelectedRange, Converter={StaticResource EnumBool}, ConverterParameter=AllTime}"
-                            AutomationProperties.Name="All time" />
-                    </StackPanel>
+                    <Border
+                        Margin="0,20,0,0"
+                        Padding="2"
+                        HorizontalAlignment="Left"
+                        Background="{DynamicResource Sar.Surface3Brush}"
+                        CornerRadius="8">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton
+                                Content="24 hours"
+                                GroupName="range"
+                                Style="{StaticResource Sar.Segment}"
+                                IsChecked="{Binding SelectedRange, Converter={StaticResource EnumBool}, ConverterParameter=Last24Hours}"
+                                AutomationProperties.Name="Last 24 hours" />
+                            <RadioButton
+                                Content="7 days"
+                                GroupName="range"
+                                Style="{StaticResource Sar.Segment}"
+                                IsChecked="{Binding SelectedRange, Converter={StaticResource EnumBool}, ConverterParameter=Last7Days}"
+                                AutomationProperties.Name="Last 7 days" />
+                            <RadioButton
+                                Content="All time"
+                                GroupName="range"
+                                Style="{StaticResource Sar.Segment}"
+                                IsChecked="{Binding SelectedRange, Converter={StaticResource EnumBool}, ConverterParameter=AllTime}"
+                                AutomationProperties.Name="All time" />
+                        </StackPanel>
+                    </Border>
 
                     <Border
                         Margin="0,16,0,0"
                         Padding="24"
                         CornerRadius="12"
                         BorderThickness="1"
-                        BorderBrush="{DynamicResource Status.Neutral.Brush}"
+                        BorderBrush="{DynamicResource Sar.HairBrush}"
                         Visibility="{Binding IsEmpty, Converter={StaticResource B2V}}">
                         <TextBlock Opacity="0.8" TextWrapping="Wrap" Text="{Binding EmptyText}" />
                     </Border>
@@ -126,7 +131,7 @@
                                     Padding="4"
                                     CornerRadius="10"
                                     BorderThickness="1"
-                                    BorderBrush="{DynamicResource Status.Neutral.Brush}">
+                                    BorderBrush="{DynamicResource Sar.HairBrush}">
                                     <StackPanel>
                                         <Button
                                             HorizontalContentAlignment="Stretch"
@@ -151,7 +156,7 @@
                                                     Height="38"
                                                     VerticalAlignment="Center"
                                                     CornerRadius="19"
-                                                    Background="{DynamicResource Status.Neutral.Brush}">
+                                                    Background="{DynamicResource Sar.HairBrush}">
                                                     <TextBlock
                                                         HorizontalAlignment="Center"
                                                         VerticalAlignment="Center"
