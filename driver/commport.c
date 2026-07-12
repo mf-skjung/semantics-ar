@@ -135,6 +135,9 @@ static NTSTATUS SarIssueChallenge(_Inout_ PSAR_COMM Comm)
     NTSTATUS status;
     sar_hs_result_t hs;
 
+    if (Comm->client_port == NULL)
+        return STATUS_PORT_DISCONNECTED;
+
     status = BCryptGenRandom(NULL, nonce, SAR_HS_NONCE_SIZE,
                              BCRYPT_USE_SYSTEM_PREFERRED_RNG);
     if (!NT_SUCCESS(status))
@@ -826,5 +829,13 @@ VOID SarCommPortClose(_Inout_ struct _SAR_COMM *Comm)
         FltCloseCommunicationPort(Comm->server_port);
         Comm->server_port = NULL;
     }
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID SarCommPortFree(_Inout_ struct _SAR_COMM *Comm)
+{
+    if (Comm == NULL)
+        return;
+
     ExFreePoolWithTag(Comm, SAR_POOL_TAG_COMM);
 }

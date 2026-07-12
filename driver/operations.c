@@ -106,6 +106,21 @@ BOOLEAN SarTargetExempt(_In_ PCUNICODE_STRING Normalized)
 }
 
 _IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarPathUnderSystemRoot(_In_ PCUNICODE_STRING Normalized)
+{
+    USHORT nchars, rootchars;
+
+    if (!g_sar_sysroot_valid || Normalized == NULL || Normalized->Buffer == NULL)
+        return FALSE;
+    if (!RtlPrefixUnicodeString(&g_sar_sysroot, (PUNICODE_STRING)Normalized, TRUE))
+        return FALSE;
+
+    nchars = (USHORT)(Normalized->Length / sizeof(WCHAR));
+    rootchars = (USHORT)(g_sar_sysroot.Length / sizeof(WCHAR));
+    return (BOOLEAN)(nchars == rootchars || Normalized->Buffer[rootchars] == L'\\');
+}
+
+_IRQL_requires_max_(APC_LEVEL)
 static BOOLEAN SarStreamExemptTarget(_In_ PCFLT_RELATED_OBJECTS FltObjects,
                                      _In_opt_ PFLT_CALLBACK_DATA Data)
 {

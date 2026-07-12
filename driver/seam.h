@@ -105,4 +105,7 @@ VOID SarSeamWriteRelease(_Inout_ PSAR_WRITE_SEAM_REQUEST Request);
 _IRQL_requires_max_(APC_LEVEL)
 BOOLEAN SarTargetExempt(_In_ PCUNICODE_STRING Normalized);
 
+_IRQL_requires_max_(APC_LEVEL)
+BOOLEAN SarPathUnderSystemRoot(_In_ PCUNICODE_STRING Normalized);
+
 #endif

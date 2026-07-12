@@ -137,9 +137,26 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(Flags);
 
+    InterlockedExchange(&g_sar.unloading, 1);
+
     SarObGuardUnregister();
     SarPhantomImageNotifyUnregister();
     SarProcessNotifyUnregister();
+
+    if (g_sar.comm != NULL)
+        SarCommPortClose(g_sar.comm);
+
+    ExWaitForRundownProtectionRelease(&g_sar.mmap_read_rundown);
+
+    if (g_sar.filter != NULL) {
+        FltUnregisterFilter(g_sar.filter);
+        g_sar.filter = NULL;
+    }
+
+    if (g_sar.comm != NULL) {
+        SarCommPortFree(g_sar.comm);
+        g_sar.comm = NULL;
+    }
 
     if (g_sar.phantom != NULL) {
         SarPhantomDestroy(g_sar.phantom);
@@ -159,16 +176,6 @@ static NTSTATUS SarFilterUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags)
     if (g_sar.keystore != NULL) {
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
-    }
-
-    if (g_sar.comm != NULL) {
-        SarCommPortClose(g_sar.comm);
-        g_sar.comm = NULL;
-    }
-
-    if (g_sar.filter != NULL) {
-        FltUnregisterFilter(g_sar.filter);
-        g_sar.filter = NULL;
     }
 
     if (g_sar.eventlog != NULL) {
@@ -261,6 +268,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
 
     RtlZeroMemory(&g_sar, sizeof(g_sar));
     g_sar.driver_object = DriverObject;
+    ExInitializeRundownProtection(&g_sar.mmap_read_rundown);
 
     SarSeamCoverageReset();
 
@@ -322,6 +330,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
     status = SarKeystoreCreate(g_sar.filter, &g_sar.posture, &g_sar.keystore);
     if (!NT_SUCCESS(status)) {
         SarCommPortClose(g_sar.comm);
+        SarCommPortFree(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
@@ -349,6 +358,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
+        SarCommPortFree(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
@@ -382,6 +392,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
+        SarCommPortFree(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);
@@ -411,6 +422,7 @@ NTSTATUS DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING Regi
         SarKeystoreDestroy(g_sar.keystore);
         g_sar.keystore = NULL;
         SarCommPortClose(g_sar.comm);
+        SarCommPortFree(g_sar.comm);
         g_sar.comm = NULL;
         SarProcessNotifyUnregister();
         FltUnregisterFilter(g_sar.filter);

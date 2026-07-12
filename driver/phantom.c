@@ -1266,6 +1266,11 @@ SarPhantomPreDirControl(_Inout_ PFLT_CALLBACK_DATA Data,
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
+    if (SarPathUnderSystemRoot(&nameInfo->Name)) {
+        FltReleaseFileNameInformation(nameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     {
         PSAR_PHANTOM_ENUM_CONTEXT ectx = NULL;
         ULONG mask;
