@@ -96,12 +96,12 @@ function Test-Com {
     [bool](Get-ItemProperty ("HKLM:\SOFTWARE\Classes\CLSID\$ComClsid\LocalServer32") -ErrorAction SilentlyContinue)
 }
 function Get-PublishedInf {
-    # the pnputil OriginalName -> published oemNN.inf mapping, for a clean /delete-driver
+    # the published oemNN.inf for our package, for a clean /delete-driver. Parse by literal file
+    # names, not by field labels — pnputil's labels are localized, the .inf values are not.
     $enum = & pnputil /enum-drivers 2>$null | Out-String
-    $blocks = $enum -split "(?m)^Published Name:\s*"
-    foreach ($b in $blocks) {
-        if ($b -match 'Original Name:\s*semantics_ar\.inf') {
-            if ($b -match '^\s*(oem\d+\.inf)') { return $Matches[1] }
+    foreach ($block in ($enum -split "(?m)^\s*$")) {
+        if ($block -match 'semantics_ar\.inf' -and $block -match '(oem\d+\.inf)') {
+            return $Matches[1]
         }
     }
     return $null
@@ -166,10 +166,14 @@ function Invoke-Install {
         if (-not (Test-Filter)) { Fail 'minifilter did not attach after load' }
         Log 'minifilter loaded' 'OK'
 
-        # 4 ─ user service (own-process; name must be SemanticsAr to match the dispatch table + PPL)
+        # 4 ─ user service (own-process; name must be SemanticsAr to match the dispatch table + PPL).
+        #     New-Service passes the binary path straight to the CreateService API (no shell re-parse),
+        #     so the embedded quotes survive — a quoted ImagePath is required because the install path
+        #     contains a space (avoids the unquoted-service-path weakness and PS 5.1 native-arg mangling).
         if (-not (Get-Svc $UserService)) {
             $bin = '"{0}"' -f (Join-Path $InstallRoot $ServiceExe)
-            Invoke-Native 'sc.exe' @('create', $UserService, 'binPath=', $bin, 'type=', 'own', 'start=', 'auto', 'DisplayName=', 'semantics-ar') | Out-Null
+            New-Service -Name $UserService -BinaryPathName $bin -DisplayName 'semantics-ar' `
+                        -StartupType Automatic | Out-Null
             $rollback.Push({ & sc.exe stop $UserService 2>$null | Out-Null; & sc.exe delete $UserService 2>$null | Out-Null })
             Log 'user service created' 'OK'
         }
