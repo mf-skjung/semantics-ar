@@ -287,6 +287,12 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
 
 ## 9. PROGRESS LEDGER — **update this as you close each segment (your durable memory)**
 
+- **TREE HEALTH (last checked this drive):** all suites GREEN — native `test_*` = 563/0 (chassis 81,
+  preserve 34, engine 77, recover 97, keystore 12, capture 54, gate 22, phantom 133, handshake_crypto 17,
+  keystore_mgr 15, schedule 11); frontend `Core.Tests` = 159/0; App + service + driver build 0 errors.
+  This drive's frontier hardening (recover lock split, service-stop robustness, prompt shutdown, frontend
+  responsiveness sweep) is VM-verified and regression-clean; the broad cross-path soak is 22/0 on a fresh
+  host (the earlier wedge was host degradation, not a bug — see the Segment-4 soak note).
 - [x] mmap writeback deadlock — **DONE, committed `3f84a64`**, FABLE5 ship, 29/0/1.
 - [x] **Segment 1 — XII.3 integrity-halt — DONE.** Two commits:
       - `e5246f1` feat: XII.3 integrity-halt posture flag (path-free enum → red foreground tier) +
