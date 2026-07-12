@@ -22,6 +22,21 @@
   the demo attack on `C:\SarDemo\Sandbox` produced **0 kept copies** even in AUDIT — the driver may not
   monitor that path, which would also break the recovery demo (see the deferred item in §9).
 
+- **BUG A — DECISIVELY NARROWED (2026-07-13, latest):** the mode dialog hangs on `ShowDialog()` **even with
+  `DataContext = null` AND placeholder `<Border>`s instead of pictograms.** So the cause is **NEITHER content,
+  bindings, DataContext, ModeControlViewModel, pictograms, Viewbox, SizeToContent, NOR WindowStartupLocation** —
+  it is the **`ui:FluentWindow` shell + `ShowDialog()` (modal) itself** (Wpf.Ui 4.3.0). Note: `MainWindow` is also
+  a FluentWindow but is shown via `Show()` (works); `ModeSwitchWindow` and `OnboardingWindow` use `ShowDialog()`
+  (hang). **THE FIX to try/verify (do this first on the VM):** convert `ModeSwitchWindow` (and `OnboardingWindow`)
+  from `ui:FluentWindow` to a plain WPF `<Window>` — remove the `ui:` root, the `<ui:TitleBar>`,
+  `ExtendsContentIntoTitleBar`, `WindowBackdropType` — keeping the same content (a normal titlebar is fine for a
+  small modal). If a plain `Window` opens without hanging, that's the root cause + fix. (Cheaper first probes if
+  you want to keep FluentWindow: try removing just `ExtendsContentIntoTitleBar="True"`, or `Show()` instead of
+  `ShowDialog()` with a manual modal disable — but the plain-Window conversion is the clean fix.) **After it
+  opens, RESTORE the ModePictograms + normal DataContext** (both proven innocent) and re-verify the mode actually
+  toggles Audit↔Enforce. The current uncommitted tree has the bisection edits (null DataContext in
+  `MainWindow.ModeChip_Click`, placeholder Borders + CenterScreen + fixed Height in `ModeSwitchWindow.xaml`,
+  LayoutTransform in `OnboardingWindow.xaml`) — REVERT/reconcile these once the real fix lands.
 - **BUG A UPDATE (CORRECTED — the Viewbox/ModePictogram theory below is WRONG).** Bisection on the VM:
   with **both ModePictograms replaced by plain placeholder `<Border>`s, the dialog STILL HANGS** the same
   way (ShowDialog never returns, windows-of-proc=0, app alive, resists taskkill). So the hang is **NOT the
