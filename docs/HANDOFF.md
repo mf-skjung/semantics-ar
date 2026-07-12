@@ -8,6 +8,79 @@
 
 ---
 
+## ⚡ ACTIVE TASK (2026-07-13, owner asleep — do this to completion, do NOT ask) ⚡
+
+**Two live functional bugs the owner just reported on the running app. The mandate is FULL
+FUNCTIONALITY, not merely "no crash": mode switching must actually switch; Open budget must
+actually show the budget.** Drive to frontier quality autonomously, then update this block + §9.
+
+1. **Switching AUDIT MODE ↔ ENFORCE MODE crashes the app.** Path: the mode chip in `MainWindow`
+   (`MainViewModel.CreateModeControl`) opens `ModeSwitchWindow` (which I recently changed — it now
+   renders TWO `Controls/ModePictogram` with a `DataTrigger` on `IsEnforceAdoption`) →
+   `ViewModels/ModeControlViewModel.Confirm` → `Apply()` → `ElevatedControlChannel.SetMode(uint)`.
+   `Apply` already catches OCE/COMException/generic, so the crash is likely NOT there — suspect
+   (a) `ModeSwitchWindow`/`ModePictogram` render or the DataTrigger, (b) the post-switch
+   `PostureChanged` cascade, or (c) something the global handler can't catch (a non-dispatcher
+   thread — but SetMode is UI-thread). **Root-cause via VM repro + app.log; do not guess.**
+2. **Open budget shows a "not supported / 지원하지 않음" message.** On my VM the fixed build showed
+   the correct empty budget ("no kept copies yet"), so the owner's environment differs. `ElevatedErrorText`
+   has no literal "unsupported" — the closest is **VersionMismatch** ("The app and the protection
+   components are different versions") or the generic `_ => "Could not … right now."`. STRONG hypothesis:
+   the elevated read (`BudgetSession.Begin` → `channel.LoadPreserved/LoadAppIdentities`) returns
+   **VersionMismatch** because the app DLLs and the installed elevation host / driver protocol don't
+   match — likely because a kit was built/deployed with mismatched pieces, OR the `sarapi`/COM protocol
+   version constant differs. **Confirm the exact ElevatedError via app.log/UI and fix the real cause so
+   Budget LOADS.** (Both bugs go through the elevated COM channel + `SemanticsArElevationHost.exe` — a
+   shared root cause is plausible.)
+
+**How to reproduce on the VM (this is the proven loop — reuse it):** SarTarget VM (Hyper-V, Gen2,
+Secure Boot off, admin/admin, snapshot `clean-baseline-20260704`). The GUI needs an interactive
+session + silent elevation:
+- Restore snapshot; `Start-VM`; poll PS Direct (`Invoke-Command -VMName SarTarget -Credential admin/admin`).
+- Deploy the kit zip (`dist-demokit\SarDemoKit.zip`) to `C:\`, expand to `C:\SarDemoKit`, run
+  `Start-SarDemo.ps1 -NoElevate -Assume -IAmSure` (no-reboot install, baseline already test-signed).
+- **Fast iterate the app without a full kit rebuild:** rebuild `SemanticsAr.App.csproj`, copy the two
+  managed DLLs (`SemanticsAr.App.dll`, `SemanticsAr.Core.dll`) from
+  `frontend/SemanticsAr.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/` into
+  `C:\Program Files\semantics-ar\` (via `C:\SarDemo\` — host guard blocks `C:\`-root `-Force` writes;
+  `C:\SarDemo` must exist first, it's created by install). BUT if the bug is in the **elevation host /
+  driver**, you must rebuild+reinstall those, not just the app DLLs.
+- Interactive-session driver: set autologon (`HKLM\...\Winlogon` AutoAdminLogon/DefaultUserName/
+  DefaultPassword=admin) + **silent admin elevation** (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\
+  Policies\System\ConsentPromptBehaviorAdmin=0`) so the COM elevation runs with no UAC dialog; register
+  an `AtLogon`, `RunLevel Highest`, `LogonType Interactive` scheduled task running a UIA script from
+  `C:\SarDemo\*.ps1`; clean-reboot the guest (`Restart-Computer -Force` INSIDE the guest — NEVER
+  `Restart-VM -Force`, a hard reset drops the pending BCD/registry writes). The task drives UIA:
+  find window Name `semantics-ar`, select nav ListItem, invoke the button, dump visible Text + app-alive
+  + `%LOCALAPPDATA%\semantics-ar\app.log` to a `C:\SarDemo\*.txt` you poll. **Wait ≥30s after launch**
+  (cold start + fresh-DLL JIT). Skip onboarding: set `HKCU\Software\MetaForensics\SemanticsAr\
+  OnboardingCompleted=1`. Restore the snapshot when done. Scratchpad had `DriveBudget.ps1`/`DriveAll.ps1`
+  as templates.
+- **Diagnostics:** the app logs unhandled/caught faults to `%LOCALAPPDATA%\semantics-ar\app.log`
+  (`App.LogUnhandled` + `BudgetViewModel.Begin`'s catch writes the full stack). For the mode crash, add
+  the same catch-logging to `ModeControlViewModel.Confirm`/`Apply` if the stack isn't captured, rebuild
+  the app DLL, redeploy, repro, read the stack — that's exactly how the Open-Budget `ArgumentException`
+  (cross-thread PointCollection) was root-caused.
+
+**Key files:** `ViewModels/ModeControlViewModel.cs`, `ModeSwitchWindow.xaml(.cs)`, `Controls/ModePictogram.xaml(.cs)`,
+`Core/Services/ElevatedControlChannel.cs` (SetMode/LoadPreserved/LoadAppIdentities + the COM interop
+`ISarElevatedControl`), `Core/Services/BudgetSession.cs`, `Core/Domain/ElevatedErrorText.cs`, the
+elevation host `frontend/elevation-host/` + `SemanticsArElevationHost.exe`, and the protocol/version
+constants in `common/include/semantics_ar/` (a VersionMismatch means a protocol-version mismatch between
+app, host, and driver — check these are consistent, and that the kit packages a matched set).
+
+**State when this was written:** all prior FABLE5-audited hardening is committed+pushed
+(`3c97b50` robustness pass; `479572b` empty-trend freeze = the first Open-Budget crash fix;
+`3d61582` elevated-read crash-safety). Kit rebuilt at 0.9.3. VM restored to clean baseline. The
+crash-safety layers mean these two bugs likely now surface as graceful error states / a still-catchable
+crash rather than silent death — use that + app.log to root-cause. **Follow the owner's standing rule:
+Fable5 must review your fixes and you must reach full agreement (critically, not blindly) before you
+commit; close EVERY error case so the features WORK, not just survive.** When both features fully work
+on the VM (mode actually toggles Audit/Enforce and the app reflects it; Budget loads real data after an
+attack + shows the meter/timeline), update this block to "RESOLVED" and record it in §9.
+
+---
+
 ## 0. IF YOU ARE PICKING THIS UP FRESH, OR YOUR CONTEXT WAS COMPRESSED — DO THIS FIRST
 
 Your conversation does **not** terminate at the context limit; it gets **compressed**. If you notice
