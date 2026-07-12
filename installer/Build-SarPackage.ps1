@@ -27,7 +27,10 @@
 param(
     [string]$Dest,
     [string]$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
-    [switch]$SkipPublish
+    [switch]$SkipPublish,
+    # Demo-only: publish the app self-contained so the target needs no .NET runtime. Drops a
+    # marker file the installer's runtime gate honours. The shipping payload stays framework-dependent.
+    [switch]$SelfContainedApp
 )
 $ErrorActionPreference = 'Stop'
 
@@ -52,11 +55,22 @@ Write-Host "assembling payload -> $Dest" -ForegroundColor Cyan
 if (Test-Path $Dest) { Remove-Item $Dest -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $appOut, $drvOut | Out-Null
 
-# ── app: framework-dependent publish, then overlay the ABI-matched native surface ──────────────
+# ── app: publish (framework-dependent by default; self-contained for demo kits), then overlay
+#    the ABI-matched native surface ──────────────
 if (-not $SkipPublish) {
-    & dotnet publish (Join-Path $Repo 'frontend\SemanticsAr.App\SemanticsAr.App.csproj') `
-        -c Release -o $appOut --nologo -v quiet
+    $publishArgs = @(
+        (Join-Path $Repo 'frontend\SemanticsAr.App\SemanticsAr.App.csproj'),
+        '-c', 'Release', '-o', $appOut, '--nologo', '-v', 'quiet'
+    )
+    if ($SelfContainedApp) {
+        $publishArgs += @('--self-contained', 'true', '-p:SelfContained=true', '-p:PublishSingleFile=false')
+    }
+    & dotnet publish @publishArgs
     if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+    if ($SelfContainedApp) {
+        # Marker the installer's runtime gate honours (skips the .NET runtime requirement).
+        Set-Content -Path (Join-Path $appOut '.self-contained') -Value 'self-contained publish; no .NET runtime prerequisite' -Encoding ASCII
+    }
 }
 Copy-Item (Join-Path $bwin 'frontend\sarapi\Release\sarapi.dll')                       $appOut -Force
 Copy-Item (Join-Path $bwin 'frontend\elevation-host\Release\SemanticsArElevationHost.exe') $appOut -Force

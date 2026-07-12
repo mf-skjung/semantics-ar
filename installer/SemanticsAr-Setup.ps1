@@ -124,7 +124,11 @@ function Invoke-Install {
     $drvSrc = Join-Path $Source 'driver'
     if (-not (Test-Path (Join-Path $appSrc $AppExe)))    { Fail "payload app\$AppExe not found under $Source" }
     if (-not (Test-Path (Join-Path $drvSrc "$DriverService.inf"))) { Fail "payload driver\$DriverService.inf not found under $Source" }
-    if (-not (Test-DesktopRuntime)) {
+    # A self-contained payload (marker dropped by Build-SarPackage -SelfContainedApp) carries its
+    # own runtime, so the .NET gate is skipped. Framework-dependent payloads still require it.
+    if (Test-Path (Join-Path $appSrc '.self-contained')) {
+        Log 'self-contained app payload - skipping .NET Desktop Runtime check'
+    } elseif (-not (Test-DesktopRuntime)) {
         Fail '.NET 10 Desktop Runtime (Microsoft.WindowsDesktop.App 10.x) is required and was not found.'
     }
     Log "installing to $InstallRoot"
