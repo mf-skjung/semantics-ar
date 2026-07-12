@@ -29,10 +29,10 @@ public partial class MainViewModel : ObservableObject
 
         Surfaces =
         [
-            new SurfaceItem("Home", Home),
-            new SurfaceItem("Recovery", new RecoveryViewModel(posture, channelFactory)),
-            new SurfaceItem("Recovery budget", new BudgetViewModel(channelFactory, RequestExempt)),
-            new SurfaceItem("Exemptions", _policy),
+            new SurfaceItem("Home", Home, Wpf.Ui.Controls.SymbolRegular.Home24),
+            new SurfaceItem("Recovery", new RecoveryViewModel(posture, channelFactory), Wpf.Ui.Controls.SymbolRegular.ArrowClockwise24),
+            new SurfaceItem("Recovery budget", new BudgetViewModel(channelFactory, RequestExempt), Wpf.Ui.Controls.SymbolRegular.DataHistogram24),
+            new SurfaceItem("Exemptions", _policy, Wpf.Ui.Controls.SymbolRegular.ShieldKeyhole24),
         ];
 
         _selectedSurface = Surfaces[0];
