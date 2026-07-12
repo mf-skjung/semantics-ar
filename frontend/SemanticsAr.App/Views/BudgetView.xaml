@@ -2,6 +2,7 @@
     x:Class="SemanticsAr.App.Views.BudgetView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:SemanticsAr.App.Controls"
     xmlns:vm="clr-namespace:SemanticsAr.App.ViewModels"
     xmlns:conv="clr-namespace:SemanticsAr.App.Converters"
     d:DataContext="{d:DesignInstance Type=vm:BudgetViewModel}"
@@ -118,6 +119,56 @@
                         Visibility="{Binding IsEmpty, Converter={StaticResource B2V}}">
                         <TextBlock Opacity="0.8" TextWrapping="Wrap" Text="{Binding EmptyText}" />
                     </Border>
+
+                    <ContentControl
+                        Margin="0,16,0,0"
+                        Padding="24,20"
+                        Style="{StaticResource Sar.Card}"
+                        Visibility="{Binding ShowMeter, Converter={StaticResource B2V}}">
+                        <StackPanel>
+                            <TextBlock
+                                FontSize="11"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource Sar.MutedBrush}"
+                                Text="WHAT'S USING IT" />
+                            <TextBlock
+                                Margin="0,6,0,0"
+                                FontSize="14"
+                                Foreground="{DynamicResource Sar.TextBrush}"
+                                Text="{Binding HeldText}" />
+                            <controls:StackMeter
+                                Height="10"
+                                Margin="0,14,0,0"
+                                Segments="{Binding Segments}"
+                                AutomationProperties.Name="Held storage by application" />
+                            <ItemsControl Margin="0,14,0,0" ItemsSource="{Binding Segments}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="0,3">
+                                            <Ellipse
+                                                Width="9"
+                                                Height="9"
+                                                VerticalAlignment="Center"
+                                                Fill="{Binding Brush}" />
+                                            <TextBlock
+                                                DockPanel.Dock="Right"
+                                                VerticalAlignment="Center"
+                                                FontSize="12.5"
+                                                Foreground="{DynamicResource Sar.MutedBrush}"
+                                                Text="{Binding Detail}" />
+                                            <TextBlock
+                                                Margin="9,0,12,0"
+                                                VerticalAlignment="Center"
+                                                FontSize="12.5"
+                                                TextTrimming="CharacterEllipsis"
+                                                Foreground="{DynamicResource Sar.TextBrush}"
+                                                Text="{Binding Label}" />
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ContentControl>
 
                     <ItemsControl
                         Margin="0,12,0,0"

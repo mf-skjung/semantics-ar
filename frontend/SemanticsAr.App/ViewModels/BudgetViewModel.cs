@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using SemanticsAr.App.Controls;
 using SemanticsAr.Core.Domain;
 using SemanticsAr.Core.Services;
 
@@ -20,6 +22,15 @@ public partial class BudgetViewModel : ObservableObject
     private const double TrendHeight = 64;
     private const double TrendPad = 6;
 
+    private static readonly SolidColorBrush[] SegmentBrushes =
+    [
+        Frozen("#2563EB"),
+        Frozen("#BE185D"),
+        Frozen("#7C3AED"),
+    ];
+
+    private static readonly SolidColorBrush OtherBrush = Frozen("#C6C2BD");
+
     private readonly Func<IElevatedControlChannel> _channelFactory;
     private readonly Action<string, string>? _onExempt;
     private BudgetSession? _session;
@@ -35,6 +46,7 @@ public partial class BudgetViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(ShowLoaded))]
     [NotifyPropertyChangedFor(nameof(ShowUnavailable))]
     [NotifyPropertyChangedFor(nameof(ShowApps))]
+    [NotifyPropertyChangedFor(nameof(ShowMeter))]
     private BudgetStage _stage = BudgetStage.PreElevation;
 
     [ObservableProperty]
@@ -70,6 +82,17 @@ public partial class BudgetViewModel : ObservableObject
     }
 
     public ObservableCollection<AppImpactRowViewModel> Apps { get; } = new();
+
+    public ObservableCollection<BudgetSegment> Segments { get; } = new();
+
+    public bool ShowMeter => Stage == BudgetStage.Loaded && Segments.Count > 0;
+
+    private static SolidColorBrush Frozen(string hex)
+    {
+        SolidColorBrush brush = new((Color)ColorConverter.ConvertFromString(hex));
+        brush.Freeze();
+        return brush;
+    }
 
     public string Summary =>
         "How far back you can restore, and which activity is spending that window. "
@@ -126,6 +149,7 @@ public partial class BudgetViewModel : ObservableObject
         _session?.Close();
         _session = null;
         Apps.Clear();
+        Segments.Clear();
         TrendPoints = new();
         AchievedWindowText = string.Empty;
         HeldText = string.Empty;
@@ -194,7 +218,49 @@ public partial class BudgetViewModel : ObservableObject
         foreach (AppImpact impact in attribution.Apps)
             Apps.Add(new AppImpactRowViewModel(impact, attribution.AchievedWindow, attribution.Range, _onExempt));
 
+        BuildSegments(attribution);
+
         TrendPoints = trend;
+    }
+
+    private void BuildSegments(BudgetAttribution attribution)
+    {
+        Segments.Clear();
+        if (attribution.TotalBytes > 0)
+        {
+            List<AppImpact> ordered = attribution.Apps
+                .Where(a => a.Bytes > 0)
+                .OrderByDescending(a => a.Bytes)
+                .ToList();
+
+            int colored = Math.Min(SegmentBrushes.Length, ordered.Count);
+            ulong shown = 0;
+            for (int i = 0; i < colored; i++)
+            {
+                Segments.Add(new BudgetSegment
+                {
+                    Brush = SegmentBrushes[i],
+                    Weight = ordered[i].Bytes,
+                    Label = ordered[i].DisplayName,
+                    Detail = BudgetFormat.Bytes(ordered[i].Bytes),
+                });
+                shown += ordered[i].Bytes;
+            }
+
+            if (attribution.TotalBytes > shown)
+            {
+                ulong rest = attribution.TotalBytes - shown;
+                Segments.Add(new BudgetSegment
+                {
+                    Brush = OtherBrush,
+                    Weight = rest,
+                    Label = colored > 0 ? "Other apps" : "All apps",
+                    Detail = BudgetFormat.Bytes(rest),
+                });
+            }
+        }
+
+        OnPropertyChanged(nameof(ShowMeter));
     }
 
     private static PointCollection BuildTrend(IReadOnlyList<TrendPoint> trend)
