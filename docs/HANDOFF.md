@@ -328,6 +328,35 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         `CoGetObject("Elevation:Administrator!new:{CLSID}")` returns **hr=0x0 ACTIVATED OK**. The host
         statically links the sarapi control client + Segment-2 owner-check, so its channel to the O:SY
         control pipe works too. (App chrome now also shows "AUDIT MODE", not "MODE UNKNOWN".)
+      - **Bug D (IN PROGRESS — Recovery view is a resource hog / freezes the UI with many items).**
+        Owner observed: navigating to Recovery and clicking "View & recover" spikes resources and
+        temporarily freezes the app when there are many recoverable items. This is a REAL responsiveness
+        defect (not just VM slowness). Two root causes, both confirmed by reading the code:
+        * **B (render, the big one, quick fix):** `frontend/SemanticsAr.App/Views/RecoveryView.xaml` the
+          Browsing `<ListBox>` (~line 60, ItemsSource=Items) uses `GroupStyle` grouping but sets NO
+          `VirtualizingPanel.IsVirtualizingWhenGrouping="True"` — WPF DISABLES UI virtualization for
+          grouped lists by default, so every item's visual container is realized at once. The ListBox is
+          inside a `DockPanel` (ShowBrowsing, ~line 48) which is bounded, so virtualization WILL work once
+          enabled. FIX: add `VirtualizingPanel.IsVirtualizingWhenGrouping="True"`,
+          `VirtualizingPanel.VirtualizationMode="Recycling"`, `ScrollViewer.CanContentScroll="True"` to
+          that ListBox (Preview/Report ListBoxes are small, optional).
+        * **A (load freeze):** `RecoveryViewModel.Begin()` (`RecoveryViewModel.cs:88`, a `[RelayCommand]`)
+          runs SYNCHRONOUSLY on the UI thread: `_session.Begin()` (RecoverySession.cs:32 — two bulk COM
+          calls `LoadCatalog`+`LoadPreserved`, large SafeArray marshalling) then `BuildItems`
+          (RecoveryViewModel.cs:263) which per item calls `RestorePlanner.Classify(model, Win32FileProbe)`
+          (a FILESYSTEM probe per item) and `Items.Add(...)` into a grouped `CollectionViewSource`
+          (RecoveryViewModel.cs:60-61 GroupDescriptions) — each Add re-groups → O(n²). FIX: make the load
+          async — `Task.Run` the enumeration + per-item classification OFF the UI thread, then marshal the
+          finished list back and bulk-populate (build a `List`, then reset the ObservableCollection once
+          instead of per-item Add so the grouped view regroups once). COM threading caveat: the elevated
+          channel RCW is created on the STA UI thread; calling `LoadCatalog/LoadPreserved` from a
+          background thread may throw RPC_E_WRONG_THREAD unless the interface is marshalled
+          (CoMarshalInterThreadInterfaceInStream / a fresh activation on the worker) — simplest safe split
+          is: do the COM calls on the UI thread (they return quickly for reasonable N), but move the
+          per-item `Win32FileProbe` classification + grouping/materialisation to `Task.Run`, then bulk-add
+          on the dispatcher. Start with B (trivial + biggest win), then measure whether A is still needed.
+        * Verify by navigating to Recovery with many items (VM UIAutomation nav is flaky — §6; the owner
+          can drive it in VMConnect, or reason + a targeted micro-benchmark). Not yet committed.
       - **REMAINING before Segment 2 closes:** exercise the remaining surfaces live end-to-end —
         Recovery (induce incident → recover → **byte-for-byte** restore), Budget bars, Exemptions
         add/remove/lapsed, mode control. Backends are separately VM-verified (vm_verify_new FN=0,
