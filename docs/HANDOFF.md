@@ -305,9 +305,12 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
       - **[Seg-4 follow-up]** The only remaining infinite wait is the **untimed `FilterSendMessage`**
         (`service/commclient.c:172`) into the driver status query — now insulated, hunt with a service
         dump next wedge (the preserve-lock family is the suspect).
-      - **REMAINING before Segment 2 closes:** (1) a clean non-elevated live capture of Home showing a
-        GOOD posture (blocked now by **VM-HOST degradation from repeated snapshot/reboot cycles** — §6;
-        let the host drain, then ONE restore); (2) exercise the remaining surfaces live end-to-end —
+      - **NON-ELEVATED FIX LIVE-CONFIRMED:** with the committed binaries deployed and the engine live,
+        a genuine medium-integrity process (`runas /trustlevel:0x20000`, session 0 — avoids the flaky
+        interactive-session/scheduled-task harness) ran `sarapi_posture_read` and got **result=0
+        (SARAPI_OK), elevated=False, svc=1 drv=1 mode=audit** — valid AMBER posture, no SERVER_UNTRUSTED,
+        no hang. The earlier "hang" was the degraded VM + Limited-task-not-executing, not the code.
+      - **REMAINING before Segment 2 closes:** exercise the remaining surfaces live end-to-end —
         Recovery (induce incident → recover → **byte-for-byte** restore), Budget bars, Exemptions
         add/remove/lapsed, mode control. Backends are separately VM-verified (vm_verify_new FN=0,
         vm_verify_exemption 12/0, vm_verify_attribution 8/0) and the app VMs are Core.Tests 159/0; the gap
