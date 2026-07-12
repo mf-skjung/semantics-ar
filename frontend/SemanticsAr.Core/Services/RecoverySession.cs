@@ -97,15 +97,39 @@ public sealed class RecoverySession
             return;
 
         List<RecoveryOutcome> outcomes = new(plan.Count);
-        using (channel)
+        try
         {
-            State = RecoverySessionState.Executing;
-            foreach (RestoreRequest request in plan)
-                outcomes.Add(channel.Recover(request.Item, request.TargetPath));
+            using (channel)
+            {
+                State = RecoverySessionState.Executing;
+                foreach (RestoreRequest request in plan)
+                {
+                    // Isolate each restore: a fault on one item must not lose the record of items
+                    // already restored, nor abort the remaining plan. Every planned item gets an
+                    // outcome, so the report the user sees is always accurate.
+                    try
+                    {
+                        outcomes.Add(channel.Recover(request.Item, request.TargetPath));
+                    }
+                    catch (Exception ex)
+                    {
+                        ElevatedError err = ex is COMException com
+                            ? ElevatedErrors.FromHResult(com.HResult)
+                            : ElevatedError.Unknown;
+                        outcomes.Add(new RecoveryOutcome(request.Item, RecoveryOutcomeKind.ChannelError, 0, err)
+                        {
+                            TargetPath = request.TargetPath,
+                        });
+                    }
+                }
+            }
         }
-
-        Report = outcomes;
-        State = RecoverySessionState.Reported;
+        finally
+        {
+            // Always publish what happened and leave a terminal state - never stuck at Executing.
+            Report = outcomes;
+            State = RecoverySessionState.Reported;
+        }
     }
 
     public void Close()

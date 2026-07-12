@@ -53,7 +53,21 @@ internal sealed class ToastNotifier : IDisposable
             .AddText("The protected recovery store failed its integrity check. Recovery can no longer be "
                 + "guaranteed. Open semantics-ar and investigate this device.")
             .BuildNotification();
-        AppNotificationManager.Default.Show(notification);
+        Show(notification);
+    }
+
+    // The notification platform (WpnService / AppNotificationManager) can fail at runtime with a
+    // COMException; this runs on a timer/threadpool thread, so an escape would be an unhandled
+    // threadpool exception that terminates the process. Never let a toast failure kill the app.
+    private static void Show(AppNotification notification)
+    {
+        try
+        {
+            AppNotificationManager.Default.Show(notification);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private void Flush()
@@ -76,7 +90,7 @@ internal sealed class ToastNotifier : IDisposable
                 .AddText(title)
                 .AddText(body)
                 .BuildNotification();
-            AppNotificationManager.Default.Show(notification);
+            Show(notification);
         }
     }
 

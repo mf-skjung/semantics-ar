@@ -61,7 +61,23 @@ public sealed class PostureService : IDisposable
 
     public PostureVerdict Poll()
     {
-        SarApiResult result = _reader.Read(out SarApiPosture posture);
+        // Runs on a timer thread. The native read (a P/Invoke into sarapi.dll) can throw -
+        // DllNotFoundException if the library is absent, EntryPointNotFoundException on ABI drift,
+        // or SEHException on a native fault. An escape here is an unhandled threadpool exception
+        // that terminates the process, so degrade to a transport failure and let Resolve surface
+        // an "unavailable" verdict instead.
+        SarApiResult result;
+        SarApiPosture posture = default;
+        try
+        {
+            result = _reader.Read(out posture);
+        }
+        catch
+        {
+            result = SarApiResult.TransportError;
+            posture = default;
+        }
+
         PostureVerdict verdict = Resolve(result, in posture);
         Publish(verdict);
         return verdict;

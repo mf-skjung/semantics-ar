@@ -101,6 +101,11 @@ public partial class PolicyViewModel : ObservableObject
             _session.Begin();
             SyncFromSession();
         }
+        catch (Exception)
+        {
+            UnavailableText = ElevatedErrorText.Describe(ElevatedError.Unknown, "read your exemptions");
+            Stage = PolicyStage.Unavailable;
+        }
         finally
         {
             IsBusy = false;

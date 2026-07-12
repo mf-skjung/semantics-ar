@@ -47,15 +47,34 @@ public sealed class ExemptionSession
             return;
         }
 
-        using (channel)
+        try
         {
-            ElevatedError err = channel.LoadExemptions(out IReadOnlyList<Exemption> items);
-            if (err != ElevatedError.None)
+            using (channel)
             {
-                Fail(err);
-                return;
+                ElevatedError err = channel.LoadExemptions(out IReadOnlyList<Exemption> items);
+                if (err != ElevatedError.None)
+                {
+                    Fail(err);
+                    return;
+                }
+                Exemptions = items;
             }
-            Exemptions = items;
+        }
+        catch (OperationCanceledException)
+        {
+            State = ExemptionSessionState.Idle;
+            return;
+        }
+        catch (COMException comEx)
+        {
+            Fail(ElevatedErrors.FromHResult(comEx.HResult));
+            return;
+        }
+        catch
+        {
+            // Never leave the session stuck in Elevating (which would no-op every future Begin).
+            Fail(ElevatedError.Unknown);
+            return;
         }
 
         State = ExemptionSessionState.Loaded;
@@ -76,10 +95,23 @@ public sealed class ExemptionSession
             return null;
         }
 
-        using (channel)
+        try
         {
-            error = channel.ResolveIdentity(imagePath, out ResolvedIdentity? identity);
-            return identity;
+            using (channel)
+            {
+                error = channel.ResolveIdentity(imagePath, out ResolvedIdentity? identity);
+                return identity;
+            }
+        }
+        catch (COMException comEx)
+        {
+            error = ElevatedErrors.FromHResult(comEx.HResult);
+            return null;
+        }
+        catch
+        {
+            error = ElevatedError.Unknown;
+            return null;
         }
     }
 
@@ -91,8 +123,19 @@ public sealed class ExemptionSession
         if (channel is null)
             return new ExemptionAdd(ExemptionAddResult.ChannelError, 0, openErr);
 
-        using (channel)
-            return channel.WhitelistAdd(imagePath);
+        try
+        {
+            using (channel)
+                return channel.WhitelistAdd(imagePath);
+        }
+        catch (COMException comEx)
+        {
+            return new ExemptionAdd(ExemptionAddResult.ChannelError, 0, ElevatedErrors.FromHResult(comEx.HResult));
+        }
+        catch
+        {
+            return new ExemptionAdd(ExemptionAddResult.ChannelError, 0, ElevatedError.Unknown);
+        }
     }
 
     public ElevatedError Remove(string imagePath)
@@ -103,8 +146,19 @@ public sealed class ExemptionSession
         if (channel is null)
             return openErr;
 
-        using (channel)
-            return channel.WhitelistRemove(imagePath, out _);
+        try
+        {
+            using (channel)
+                return channel.WhitelistRemove(imagePath, out _);
+        }
+        catch (COMException comEx)
+        {
+            return ElevatedErrors.FromHResult(comEx.HResult);
+        }
+        catch
+        {
+            return ElevatedError.Unknown;
+        }
     }
 
     public void Close()

@@ -13,6 +13,24 @@ public static class IncidentGrouper
         if (count == 0)
             return [];
 
+        // With an unbounded window, "within adjacencyWindow" is always true, so grouping degenerates
+        // to "same actor". Do that directly in O(n) rather than the O(n^2) pairwise union below - the
+        // recovery view groups the whole snapshot with TimeSpan.MaxValue, where n^2 would hang the UI.
+        if (adjacencyWindow == TimeSpan.MaxValue)
+        {
+            Dictionary<ulong, List<IIncidentSource>> byKey = [];
+            foreach (IIncidentSource record in eligible)
+            {
+                if (!byKey.TryGetValue(record.ActorStartKey, out List<IIncidentSource>? bucket))
+                {
+                    bucket = [];
+                    byKey[record.ActorStartKey] = bucket;
+                }
+                bucket.Add(record);
+            }
+            return BuildIncidents(byKey.Values);
+        }
+
         int[] parent = new int[count];
         for (int i = 0; i < count; i++)
             parent[i] = i;
@@ -44,8 +62,13 @@ public static class IncidentGrouper
             members.Add(eligible[i]);
         }
 
-        List<Incident> incidents = new(groups.Count);
-        foreach (List<IIncidentSource> members in groups.Values)
+        return BuildIncidents(groups.Values);
+    }
+
+    private static IReadOnlyList<Incident> BuildIncidents(IEnumerable<List<IIncidentSource>> groups)
+    {
+        List<Incident> incidents = [];
+        foreach (List<IIncidentSource> members in groups)
         {
             members.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
             incidents.Add(new Incident(

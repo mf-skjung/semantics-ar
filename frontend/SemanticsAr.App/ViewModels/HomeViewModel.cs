@@ -75,7 +75,7 @@ public partial class HomeViewModel : ObservableObject
         Dispatcher? dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.HasShutdownStarted)
             return;
-        dispatcher.Invoke(() => Apply(e.Verdict));
+        dispatcher.BeginInvoke(() => Apply(e.Verdict));
     }
 
     private void Apply(PostureVerdict v)
@@ -142,6 +142,10 @@ public partial class HomeViewModel : ObservableObject
             "Recording, not blocking",
             "You are in AUDIT. Attacks are recorded and recoverable, but not blocked. "
             + "Switch to ENFORCE to block."),
+        PostureReason.AuditAcknowledged => (
+            "Recording, not blocking",
+            "You are in AUDIT and have acknowledged it. Attacks are recorded and recoverable, "
+            + "but not blocked. Switch to ENFORCE to block."),
         PostureReason.DriverDisconnected => (
             "Not protecting",
             "The protection driver is not attached. New attacks are not being observed."),

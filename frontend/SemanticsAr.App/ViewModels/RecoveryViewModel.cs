@@ -70,7 +70,7 @@ public partial class RecoveryViewModel : ObservableObject
             Dispatcher? dispatcher = Application.Current?.Dispatcher;
             if (dispatcher is null || dispatcher.HasShutdownStarted)
                 return;
-            dispatcher.Invoke(() =>
+            dispatcher.BeginInvoke(() =>
             {
                 if (Stage == RecoveryStage.PreElevation)
                     Summary = BuildSummary(e.Verdict);
@@ -129,6 +129,12 @@ public partial class RecoveryViewModel : ObservableObject
                     Stage = RecoveryStage.PreElevation;
                     break;
             }
+        }
+        catch (Exception)
+        {
+            Items.Clear();
+            UnavailableText = DescribeError(ElevatedError.Unknown);
+            Stage = RecoveryStage.Unavailable;
         }
         finally
         {
@@ -244,6 +250,11 @@ public partial class RecoveryViewModel : ObservableObject
                 foreach (RecoveryOutcome outcome in _session.Report)
                     Report.Add(new RecoveryOutcomeViewModel(outcome));
             Stage = RecoveryStage.Report;
+        }
+        catch (Exception)
+        {
+            UnavailableText = DescribeError(ElevatedError.Unknown);
+            Stage = RecoveryStage.Unavailable;
         }
         finally
         {

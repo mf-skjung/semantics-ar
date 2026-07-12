@@ -102,7 +102,21 @@ public sealed class JournalService : IDisposable
     {
         while (!token.IsCancellationRequested)
         {
-            if (!ReadNext())
+            bool progressed;
+            try
+            {
+                progressed = ReadNext();
+            }
+            catch
+            {
+                // A native fault (missing/incompatible sarapi.dll, SEH) or a throwing EventReceived
+                // subscriber must not tear down this background thread and the process. Drop the
+                // connection and back off, then retry.
+                Disconnect();
+                progressed = false;
+            }
+
+            if (!progressed)
                 token.WaitHandle.WaitOne(reconnectDelay);
         }
     }

@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using SemanticsAr.Core.Domain;
@@ -82,7 +83,10 @@ internal sealed class TrayIconController : IDisposable
 
     private void OnPostureChanged(object? sender, PostureChangedEventArgs e)
     {
-        Application.Current.Dispatcher.Invoke(() => Update(e.Verdict));
+        Dispatcher? dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted)
+            return;
+        dispatcher.BeginInvoke(() => Update(e.Verdict));
     }
 
     private void Update(PostureVerdict verdict)

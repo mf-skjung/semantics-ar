@@ -23,6 +23,7 @@ public partial class App : Application
     private MainWindow? _window;
     private DateTimeOffset _startedAt;
     private int _integrityHalted;
+    private bool _initialized;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -33,7 +34,10 @@ public partial class App : Application
         DispatcherUnhandledException += (_, args) =>
         {
             LogUnhandled("dispatcher", args.Exception);
-            args.Handled = true;
+            // Swallow UI-thread faults once the app is up and running. During startup, do NOT swallow:
+            // a half-initialized, invisible process (ShutdownMode is OnExplicitShutdown) would linger
+            // with no window and no way to exit - let the failure terminate the process cleanly instead.
+            args.Handled = _initialized;
         };
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
@@ -72,6 +76,7 @@ public partial class App : Application
         _window.Show();
         _posture.Start(TimeSpan.FromMilliseconds(1500));
         _journal.Start(TimeSpan.FromSeconds(2));
+        _initialized = true;
 
         if (!OnboardingStore.IsCompleted())
             new OnboardingWindow(new OnboardingViewModel()) { Owner = _window }.ShowDialog();
@@ -108,7 +113,7 @@ public partial class App : Application
         Dispatcher dispatcher = Dispatcher;
         if (dispatcher.HasShutdownStarted)
             return;
-        dispatcher.Invoke(() =>
+        dispatcher.BeginInvoke(() =>
         {
             ShowMainWindow();
             _toast?.NotifyIntegrityHalt();

@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Media;
 
@@ -10,7 +11,24 @@ public sealed class StackMeter : FrameworkElement
         nameof(Segments),
         typeof(IEnumerable),
         typeof(StackMeter),
-        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, OnSegmentsChanged));
+
+    // AffectsRender only fires when the collection *reference* changes. The view-model reuses one
+    // ObservableCollection and mutates its contents (Clear + Add on a range switch), so subscribe to
+    // its change notifications and repaint, otherwise the bar keeps stale proportions.
+    private static void OnSegmentsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        StackMeter meter = (StackMeter)d;
+        if (e.OldValue is INotifyCollectionChanged oldIncc)
+            oldIncc.CollectionChanged -= meter.OnSegmentsCollectionChanged;
+        if (e.NewValue is INotifyCollectionChanged newIncc)
+            newIncc.CollectionChanged += meter.OnSegmentsCollectionChanged;
+    }
+
+    private void OnSegmentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        InvalidateVisual();
+    }
 
     public static readonly DependencyProperty GapProperty = DependencyProperty.Register(
         nameof(Gap),
