@@ -20,7 +20,7 @@
                 <ColumnDefinition Width="100*" />
                 <ColumnDefinition Width="0*" />
             </Grid.ColumnDefinitions>
-            <Grid Grid.Column="0" Height="64">
+            <Grid Grid.Column="0" Height="64" x:Name="DefRow">
                 <Rectangle
                     RadiusX="10"
                     RadiusY="10"
@@ -55,6 +55,13 @@
                             Text="Rebuilt from the captured key and checked byte-for-byte before anything is replaced." />
                     </StackPanel>
                 </DockPanel>
+                <Rectangle
+                    x:Name="DefStrike"
+                    Height="1.5"
+                    Margin="10,0"
+                    VerticalAlignment="Center"
+                    Fill="{DynamicResource Sar.RedBrush}"
+                    Visibility="Collapsed" />
             </Grid>
         </Grid>
 
@@ -65,7 +72,7 @@
                 <ColumnDefinition Width="86*" />
                 <ColumnDefinition Width="14*" />
             </Grid.ColumnDefinitions>
-            <Grid Grid.Column="0" Height="56">
+            <Grid Grid.Column="0" Height="56" x:Name="BndRow">
                 <Rectangle
                     RadiusX="10"
                     RadiusY="10"
@@ -109,6 +116,13 @@
                             Text="A copy was kept before the damage. It expires — restore it while the window is open." />
                     </StackPanel>
                 </DockPanel>
+                <Rectangle
+                    x:Name="BndStrike"
+                    Height="1.5"
+                    Margin="10,0"
+                    VerticalAlignment="Center"
+                    Fill="{DynamicResource Sar.RedBrush}"
+                    Visibility="Collapsed" />
             </Grid>
         </Grid>
 

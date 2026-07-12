@@ -14,9 +14,30 @@ public partial class CertaintyLadder : UserControl
     public static readonly DependencyProperty UnrecoverableCountProperty = DependencyProperty.Register(
         nameof(UnrecoverableCount), typeof(string), typeof(CertaintyLadder), new PropertyMetadata(string.Empty));
 
+    public static readonly DependencyProperty CollapsedProperty = DependencyProperty.Register(
+        nameof(Collapsed), typeof(bool), typeof(CertaintyLadder), new PropertyMetadata(false, OnCollapsedChanged));
+
     public CertaintyLadder()
     {
         InitializeComponent();
+    }
+
+    public bool Collapsed
+    {
+        get => (bool)GetValue(CollapsedProperty);
+        set => SetValue(CollapsedProperty, value);
+    }
+
+    private static void OnCollapsedChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        CertaintyLadder ladder = (CertaintyLadder)d;
+        bool collapsed = (bool)e.NewValue;
+        double opacity = collapsed ? 0.4 : 1.0;
+        Visibility strike = collapsed ? Visibility.Visible : Visibility.Collapsed;
+        ladder.DefRow.Opacity = opacity;
+        ladder.BndRow.Opacity = opacity;
+        ladder.DefStrike.Visibility = strike;
+        ladder.BndStrike.Visibility = strike;
     }
 
     public string DefinitiveCount
