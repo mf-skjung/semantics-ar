@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define SARAPI_ABI_VERSION 2u
+#define SARAPI_ABI_VERSION 3u
 
 #if defined(SARAPI_STATIC)
 #define SARAPI_API
@@ -45,6 +45,7 @@ typedef struct {
     uint32_t protocol_version;
     uint32_t service_running;
     uint32_t driver_connected;
+    uint32_t integrity_halt;
     uint32_t mode;
     uint64_t captured_key_count;
     uint32_t descents;

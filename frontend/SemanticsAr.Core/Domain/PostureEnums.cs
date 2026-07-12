@@ -42,6 +42,7 @@ public enum PreserveExpiry
 public enum PostureReason
 {
     Protected,
+    IntegrityHalt,
     AuditMode,
     AuditAcknowledged,
     DriverDisconnected,

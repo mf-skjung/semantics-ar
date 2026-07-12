@@ -8,7 +8,7 @@ namespace SemanticsAr.Core.Interop;
 
 internal static partial class NativeMethods
 {
-    internal const uint ExpectedAbiVersion = 2u;
+    internal const uint ExpectedAbiVersion = 3u;
 
     private const string Library = "sarapi";
 

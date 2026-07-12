@@ -289,9 +289,10 @@ static int cmd_status(void)
     }
     CloseHandle(pipe);
 
-    wprintf(L"service_running=%d driver_connected=%d mode=%ls captured=%llu\n",
+    wprintf(L"service_running=%d driver_connected=%d integrity_halt=%d mode=%ls captured=%llu\n",
             (frame.flags & SAR_POSTURE_FLAG_SERVICE_RUNNING) ? 1 : 0,
             (frame.flags & SAR_POSTURE_FLAG_DRIVER_CONNECTED) ? 1 : 0,
+            (frame.flags & SAR_POSTURE_FLAG_INTEGRITY_HALT) ? 1 : 0,
             frame.mode == SEMANTICS_AR_MODE_ENFORCE ? L"enforce" : L"audit",
             (unsigned long long)frame.captured_key_count);
     return 0;

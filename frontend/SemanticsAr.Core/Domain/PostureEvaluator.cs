@@ -35,6 +35,10 @@ public static class PostureEvaluator
         PreserveHealth health = (PreserveHealth)p.PreserveHealth;
         PreserveExpiry expiry = (PreserveExpiry)p.OldestExpiryBucket;
 
+        if (p.IntegrityHalt != 0)
+            return new PostureVerdict(PostureLevel.Red, PostureReason.IntegrityHalt,
+                mode, true, p.CapturedKeyCount, false, descents, health, expiry, IntegrityHalt: true);
+
         if (p.ServiceRunning == 0)
             return new PostureVerdict(PostureLevel.Red, PostureReason.ServiceNotRunning,
                 mode, true, p.CapturedKeyCount, false, descents, health, expiry);

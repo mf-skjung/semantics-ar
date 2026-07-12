@@ -9,4 +9,5 @@ public readonly record struct PostureVerdict(
     bool IsStale,
     PostureDescent Descents,
     PreserveHealth PreserveHealth,
-    PreserveExpiry OldestProtectedExpiry);
+    PreserveExpiry OldestProtectedExpiry,
+    bool IntegrityHalt = false);

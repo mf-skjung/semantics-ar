@@ -310,6 +310,8 @@ static NTSTATUS SarHandleGetStatus(_Inout_ PSAR_COMM Comm,
     }
 
     reply.capture_inflight = (uint64_t)SarCaptureInflight(g_sar.capture);
+    reply.integrity_halt = (g_sar.posture.keystore_tamper_detected ||
+                            g_sar.posture.preserve_tamper_detected) ? 1u : 0u;
 
     RtlCopyMemory(OutputBuffer, &reply, sizeof(reply));
     *ReturnLength = (ULONG)sizeof(reply);

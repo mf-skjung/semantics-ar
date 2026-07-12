@@ -133,6 +133,7 @@ typedef struct {
     uint32_t preserve_protected_count;
     uint32_t preserve_probation_count;
     uint64_t capture_inflight;
+    uint32_t integrity_halt;
 } semantics_ar_status_reply_t;
 
 typedef struct {

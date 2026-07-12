@@ -6,7 +6,7 @@
 #include "semantics_ar/posture.h"
 #include "semantics_ar/protocol.h"
 
-_Static_assert(sizeof(sarapi_posture_t) == 40, "sarapi_posture_t layout");
+_Static_assert(sizeof(sarapi_posture_t) == 48, "sarapi_posture_t layout");
 _Static_assert(sizeof(sar_posture_frame_t) == 40, "sar_posture_frame_t layout");
 
 #define SARAPI_BUSY_WAIT_MS     2000u
@@ -101,6 +101,8 @@ sarapi_result_t __cdecl sarapi_posture_read(sarapi_posture_t *out)
         (frame.flags & SAR_POSTURE_FLAG_SERVICE_RUNNING) ? 1u : 0u;
     out->driver_connected =
         (frame.flags & SAR_POSTURE_FLAG_DRIVER_CONNECTED) ? 1u : 0u;
+    out->integrity_halt =
+        (frame.flags & SAR_POSTURE_FLAG_INTEGRITY_HALT) ? 1u : 0u;
     out->mode = frame.mode;
     out->captured_key_count = frame.captured_key_count;
     out->descents = frame.descents;

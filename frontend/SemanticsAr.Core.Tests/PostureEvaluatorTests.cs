@@ -7,13 +7,14 @@ namespace SemanticsAr.Core.Tests;
 public sealed class PostureEvaluatorTests
 {
     private static SarApiPosture Frame(uint service, uint driver, uint mode,
-        ulong count = 0, uint descents = 0, uint health = 0, uint expiry = 0)
+        ulong count = 0, uint descents = 0, uint health = 0, uint expiry = 0, uint integrityHalt = 0)
     {
         return new SarApiPosture
         {
             ProtocolVersion = 1u,
             ServiceRunning = service,
             DriverConnected = driver,
+            IntegrityHalt = integrityHalt,
             Mode = mode,
             CapturedKeyCount = count,
             Descents = descents,
@@ -57,6 +58,24 @@ public sealed class PostureEvaluatorTests
     {
         PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1), true);
         Assert.Equal(PostureLevel.Green, v.Level);
+        Assert.Equal(PostureReason.Protected, v.Reason);
+    }
+
+    [Fact]
+    public void IntegrityHalt_IsRedAndDominatesEnforce()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1, 42, integrityHalt: 1), false);
+        Assert.Equal(PostureLevel.Red, v.Level);
+        Assert.Equal(PostureReason.IntegrityHalt, v.Reason);
+        Assert.True(v.IntegrityHalt);
+        Assert.True(v.ManagementAvailable);
+    }
+
+    [Fact]
+    public void NoIntegrityHalt_LeavesVerdictClear()
+    {
+        PostureVerdict v = PostureEvaluator.Evaluate(SarApiResult.Ok, Frame(1, 1, 1), false);
+        Assert.False(v.IntegrityHalt);
         Assert.Equal(PostureReason.Protected, v.Reason);
     }
 

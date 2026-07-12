@@ -90,6 +90,10 @@ public partial class HomeViewModel : ObservableObject
         PostureReason.Protected => (
             "Protected",
             "Enforcing. Destructive encryption is captured and blocked at the first instance."),
+        PostureReason.IntegrityHalt => (
+            "Protection may be compromised",
+            "The protected recovery store failed its integrity check — signs of tampering or "
+            + "rollback. Recovery from it can no longer be guaranteed. Investigate this device."),
         PostureReason.AuditMode => (
             "Recording, not blocking",
             "You are in AUDIT. Attacks are recorded and recoverable, but not blocked. "

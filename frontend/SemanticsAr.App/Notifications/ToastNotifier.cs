@@ -43,6 +43,19 @@ internal sealed class ToastNotifier : IDisposable
         }
     }
 
+    public void NotifyIntegrityHalt()
+    {
+        if (!_available)
+            return;
+
+        AppNotification notification = new AppNotificationBuilder()
+            .AddText("Protection may be compromised")
+            .AddText("The protected recovery store failed its integrity check. Recovery can no longer be "
+                + "guaranteed. Open semantics-ar and investigate this device.")
+            .BuildNotification();
+        AppNotificationManager.Default.Show(notification);
+    }
+
     private void Flush()
     {
         KeyValuePair<JournalEventClass, int>[] batch;

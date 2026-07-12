@@ -1,5 +1,7 @@
+using System.Threading;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using SemanticsAr.App.Design;
 using SemanticsAr.App.Interop;
 using SemanticsAr.App.Notifications;
@@ -18,6 +20,7 @@ public partial class App : Application
     private TrayIconController? _tray;
     private MainWindow? _window;
     private DateTimeOffset _startedAt;
+    private int _integrityHalted;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -47,6 +50,7 @@ public partial class App : Application
         MainWindow = _window;
 
         _tray = new TrayIconController(_posture, ShowMainWindow, Shutdown);
+        _posture.PostureChanged += OnPostureIntegrityChanged;
 
         _window.Show();
         _posture.Start(TimeSpan.FromMilliseconds(1500));
@@ -54,6 +58,27 @@ public partial class App : Application
 
         if (!OnboardingStore.IsCompleted())
             new OnboardingWindow(new OnboardingViewModel()) { Owner = _window }.ShowDialog();
+    }
+
+    private void OnPostureIntegrityChanged(object? sender, PostureChangedEventArgs e)
+    {
+        if (!e.Verdict.IntegrityHalt)
+        {
+            Interlocked.Exchange(ref _integrityHalted, 0);
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _integrityHalted, 1) == 1)
+            return;
+
+        Dispatcher dispatcher = Dispatcher;
+        if (dispatcher.HasShutdownStarted)
+            return;
+        dispatcher.Invoke(() =>
+        {
+            ShowMainWindow();
+            _toast?.NotifyIntegrityHalt();
+        });
     }
 
     private void OnJournalEventReceived(object? sender, JournalEventArgs e)

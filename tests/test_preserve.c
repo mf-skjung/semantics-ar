@@ -226,6 +226,76 @@ int main(void) {
         int rb = sar_preserve_verify(obuf, oneed, K, &anchor, NULL);
         CHECK(rb == SAR_PRES_ROLLBACK, "whole-store rollback to older generation detected");
         free(obuf);
+
+        sar_keystore_anchor_t behind;
+        behind.present = 1;
+        behind.generation = 8;
+        memcpy(behind.head_mac, hdr.head_mac, SEMANTICS_AR_MAC_SIZE);
+        uint64_t fc = 0;
+        int fv = sar_preserve_verify(buf, out_len, K, &behind, &fc);
+        CHECK(fv == SAR_PRES_OK && fc == count, "forward-generation advance is not a rollback");
+
+        uint8_t ebuf[sizeof(sar_preserve_header_t)];
+        size_t elen = 0;
+        int esret = sar_preserve_serialize(K, NULL, 0, 12, ebuf, sizeof(ebuf), &elen);
+        CHECK(esret == SAR_PRES_OK && elen == sizeof(sar_preserve_header_t), "serialize empty store OK");
+        int evret = sar_preserve_verify(ebuf, elen, K, NULL, NULL);
+        CHECK(evret == SAR_PRES_OK, "empty store with keyed head verifies (no false positive)");
+
+        sar_preserve_header_t forge;
+        memset(&forge, 0, sizeof(forge));
+        forge.magic = SEMANTICS_AR_PRESERVE_MAGIC;
+        forge.record_count = 0;
+        forge.generation = 0xFFFFFFFFFFFFFFFFull;
+        uint8_t fbuf[sizeof(sar_preserve_header_t)];
+        memcpy(fbuf, &forge, sizeof(forge));
+        int forged = sar_preserve_verify(fbuf, sizeof(fbuf), K, &anchor, NULL);
+        CHECK(forged == SAR_PRES_RECORD_MAC, "empty-index forgery with newer generation is rejected");
+
+        sar_preserve_header_t big;
+        memset(&big, 0, sizeof(big));
+        big.magic = SEMANTICS_AR_PRESERVE_MAGIC;
+        big.record_count = 0x8000000000000000ull;
+        big.generation = 10;
+        uint8_t bbuf[sizeof(sar_preserve_header_t)];
+        memcpy(bbuf, &big, sizeof(big));
+        int ov = sar_preserve_verify(bbuf, sizeof(bbuf), K, NULL, NULL);
+        CHECK(ov == SAR_PRES_TRUNCATED, "overflow record_count is rejected before any OOB read");
+
+        sar_preserve_header_t bumped;
+        memcpy(&bumped, buf, sizeof(bumped));
+        bumped.generation = hdr.generation + 1000;
+        uint8_t *gbuf = (uint8_t *)malloc(out_len);
+        memcpy(gbuf, buf, out_len);
+        memcpy(gbuf, &bumped, sizeof(bumped));
+        int gb = sar_preserve_verify(gbuf, out_len, K, NULL, NULL);
+        CHECK(gb == SAR_PRES_RECORD_MAC, "generation-field bump without re-MAC is detected");
+        free(gbuf);
+
+        sar_keystore_anchor_t samegen;
+        samegen.present = 1;
+        samegen.generation = 9;
+        memcpy(samegen.head_mac, hdr.head_mac, SEMANTICS_AR_MAC_SIZE);
+        samegen.head_mac[0] ^= 0x01;
+        int sg = sar_preserve_verify(buf, out_len, K, &samegen, NULL);
+        CHECK(sg == SAR_PRES_ROLLBACK, "same-generation head divergence is a rollback");
+
+        uint8_t *abuf = (uint8_t *)malloc(out_len + 1);
+        memcpy(abuf, buf, out_len);
+        abuf[out_len] = 0x00;
+        int cm = sar_preserve_verify(abuf, out_len + 1, K, NULL, NULL);
+        CHECK(cm == SAR_PRES_COUNT_MISMATCH, "trailing byte is a count mismatch");
+        free(abuf);
+
+        sar_preserve_header_t moreh;
+        memcpy(&moreh, buf, sizeof(moreh));
+        moreh.record_count = count + 1;
+        uint8_t *mbuf = (uint8_t *)malloc(out_len);
+        memcpy(mbuf, buf, out_len);
+        memcpy(mbuf, &moreh, sizeof(moreh));
+        int tr = sar_preserve_verify(mbuf, out_len, K, NULL, NULL);
+        CHECK(tr == SAR_PRES_TRUNCATED, "inflated record_count is truncated");
+        free(mbuf);
         free(buf);
     }
 

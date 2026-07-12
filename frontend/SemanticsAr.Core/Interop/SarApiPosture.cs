@@ -8,6 +8,7 @@ public struct SarApiPosture
     public uint ProtocolVersion;
     public uint ServiceRunning;
     public uint DriverConnected;
+    public uint IntegrityHalt;
     public uint Mode;
     public ulong CapturedKeyCount;
     public uint Descents;

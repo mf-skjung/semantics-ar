@@ -584,6 +584,8 @@ static void sar_posture_serve(sar_pipe_conn_t *conn, void *vctx)
 
     if (cs == SAR_COMM_OK) {
         frame.flags |= SAR_POSTURE_FLAG_DRIVER_CONNECTED;
+        if (status.integrity_halt)
+            frame.flags |= SAR_POSTURE_FLAG_INTEGRITY_HALT;
         frame.mode = status.mode;
         frame.captured_key_count = status.captured_key_count;
         frame.preserve_health = sar_coarsen_health(status.preserve_used_bytes,

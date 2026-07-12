@@ -304,14 +304,6 @@ static VOID SarPresPersistIndex(_Inout_ PSAR_PRESERVE P)
         return;
     }
     rc = sar_preserve_serialize(P->mac_key, P->records, c, gen, buf, need, &out_len);
-    if (rc == SAR_PRES_OK) {
-        sar_preserve_header_t hdr;
-        RtlCopyMemory(&hdr, buf, sizeof(hdr));
-        P->generation = gen;
-        P->anchor.present = 1;
-        P->anchor.generation = gen;
-        RtlCopyMemory(P->anchor.head_mac, hdr.head_mac, SEMANTICS_AR_MAC_SIZE);
-    }
     FltReleasePushLock(&P->lock);
 
     if (rc != SAR_PRES_OK) {
@@ -326,10 +318,19 @@ static VOID SarPresPersistIndex(_Inout_ PSAR_PRESERVE P)
     }
 
     if (!NT_SUCCESS(SarStoreWriteAtomic(SAR_PRES_INDEXTMP, SAR_PRES_INDEX, buf, (ULONG)out_len,
-                                        SAR_POOL_TAG_PRESBUF)))
+                                        SAR_POOL_TAG_PRESBUF))) {
         InterlockedExchange(&P->dirty, 1);
-    else
+    } else {
+        sar_preserve_header_t hdr;
+        RtlCopyMemory(&hdr, buf, sizeof(hdr));
+        FltAcquirePushLockExclusive(&P->lock);
+        P->generation = gen;
+        P->anchor.present = 1;
+        P->anchor.generation = gen;
+        RtlCopyMemory(P->anchor.head_mac, hdr.head_mac, SEMANTICS_AR_MAC_SIZE);
+        FltReleasePushLock(&P->lock);
         SarPresWriteBlob(P);
+    }
 
     RtlSecureZeroMemory(buf, out_len);
     ExFreePoolWithTag(buf, SAR_POOL_TAG_PRESBUF);
@@ -537,6 +538,8 @@ VOID SarPreserveLoad(_Inout_ PSAR_PRESERVE Preserve)
     status = SarStoreReadAll(SAR_PRES_INDEX, SAR_POOL_TAG_PRESBUF, SAR_PRESERVE_MAX_INDEX_FILE,
                              &fbuf, &flen);
     if (NT_SUCCESS(status) && fbuf != NULL && flen >= sizeof(sar_preserve_header_t)) {
+        BOOLEAN prior_present = Preserve->anchor.present ? TRUE : FALSE;
+        UINT64 prior_gen = prior_present ? Preserve->anchor.generation : 0;
         vr = sar_preserve_verify(fbuf, flen, Preserve->mac_key,
                                  Preserve->anchor.present ? &Preserve->anchor : NULL, &count);
         if (vr == SAR_PRES_OK) {
@@ -556,6 +559,8 @@ VOID SarPreserveLoad(_Inout_ PSAR_PRESERVE Preserve)
             Preserve->anchor.present = 1;
             Preserve->anchor.generation = hdr.generation;
             RtlCopyMemory(Preserve->anchor.head_mac, hdr.head_mac, SEMANTICS_AR_MAC_SIZE);
+            if (Preserve->have_key && (!prior_present || hdr.generation > prior_gen))
+                SarPresWriteBlob(Preserve);
             Preserve->free_dirty = TRUE;
             for (i = 0; i < count; i++) {
                 if (Preserve->records[i].kind == SAR_PRESERVE_KIND_NAMESPACE &&
@@ -563,6 +568,9 @@ VOID SarPreserveLoad(_Inout_ PSAR_PRESERVE Preserve)
                     Preserve->next_link_id = (LONG64)Preserve->records[i].payload_offset + 1;
             }
         } else {
+            if (vr == SAR_PRES_BAD_MAGIC || vr == SAR_PRES_RECORD_MAC ||
+                vr == SAR_PRES_ROLLBACK)
+                Preserve->posture->preserve_tamper_detected = TRUE;
             Preserve->record_count = 0;
         }
     }

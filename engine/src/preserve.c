@@ -27,6 +27,15 @@ static void sar_pres_mac_record(const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
     sar_hmac_sha256(mac_key, SEMANTICS_AR_MAC_SIZE, msg, sizeof(msg), out_mac);
 }
 
+static void sar_pres_mac_head(const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
+                              uint64_t generation, uint64_t record_count,
+                              uint8_t out_mac[SEMANTICS_AR_MAC_SIZE]) {
+    uint8_t msg[sizeof(uint64_t) * 2];
+    sar_memcpy(msg, &generation, sizeof(generation));
+    sar_memcpy(msg + sizeof(generation), &record_count, sizeof(record_count));
+    sar_hmac_sha256(mac_key, SEMANTICS_AR_MAC_SIZE, msg, sizeof(msg), out_mac);
+}
+
 void sar_preserve_content_tag(const uint8_t *plaintext, uint64_t len,
                               uint8_t out[SEMANTICS_AR_MAC_SIZE]) {
     sar_sha256_ctx_t ctx;
@@ -275,7 +284,7 @@ int sar_preserve_serialize(const uint8_t mac_key[SEMANTICS_AR_MAC_SIZE],
     hdr.generation = generation;
 
     uint8_t prev[SEMANTICS_AR_MAC_SIZE];
-    sar_memset(prev, 0, SEMANTICS_AR_MAC_SIZE);
+    sar_pres_mac_head(mac_key, generation, count, prev);
 
     uint8_t *p = out_buf + sizeof(hdr);
     for (uint64_t i = 0; i < count; i++) {
@@ -303,14 +312,15 @@ int sar_preserve_verify(const uint8_t *buf, size_t len,
     if (hdr.magic != SEMANTICS_AR_PRESERVE_MAGIC)
         return SAR_PRES_BAD_MAGIC;
 
-    size_t need = sar_preserve_serialized_size(hdr.record_count);
-    if (len < need)
+    if (hdr.record_count >
+        (len - sizeof(sar_preserve_header_t)) / sizeof(sar_preserve_disk_record_t))
         return SAR_PRES_TRUNCATED;
+    size_t need = sar_preserve_serialized_size(hdr.record_count);
     if (len != need)
         return SAR_PRES_COUNT_MISMATCH;
 
     uint8_t prev[SEMANTICS_AR_MAC_SIZE];
-    sar_memset(prev, 0, SEMANTICS_AR_MAC_SIZE);
+    sar_pres_mac_head(mac_key, hdr.generation, hdr.record_count, prev);
 
     const uint8_t *p = buf + sizeof(hdr);
     for (uint64_t i = 0; i < hdr.record_count; i++) {
@@ -328,9 +338,10 @@ int sar_preserve_verify(const uint8_t *buf, size_t len,
         return SAR_PRES_RECORD_MAC;
 
     if (anchor && anchor->present) {
-        if (hdr.generation != anchor->generation)
+        if (hdr.generation < anchor->generation)
             return SAR_PRES_ROLLBACK;
-        if (!sar_ct_equal(hdr.head_mac, anchor->head_mac, SEMANTICS_AR_MAC_SIZE))
+        if (hdr.generation == anchor->generation
+            && !sar_ct_equal(hdr.head_mac, anchor->head_mac, SEMANTICS_AR_MAC_SIZE))
             return SAR_PRES_ROLLBACK;
     }
 
