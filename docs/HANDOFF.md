@@ -456,8 +456,21 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         requires a reboot; the installer stages the delete + flags reboot. If the owner wants reboot-free
         uninstall, the service must expose a self-initiated protected-stop path (design change). (iii)
         whether to enable PPL by default (production: yes; the `-NoProtect` switch is for dev installs).
-      - **DoD REMAINING:** clean install+uninstall smoke on a fresh `clean-baseline` VM via PowerShell
-        Direct (batched with the driver-fix recovery regression). Not yet run.
+      - **DoD MET — VM-VERIFIED (`scripts/vm_smoke_installer.ps1`, 11/0).** Clean restore → deploy `dist`
+        → Install → Verify → Uninstall over PowerShell Direct: install trusts the cert, `pnputil` registers
+        the minifilter (`oem0.inf`) — **a non-PnP ActivityMonitor inf DOES register its service via
+        `/add-driver /install`** (the earlier worry was unfounded) — `fltmc load`, user service `SemanticsAr`
+        created + RUNNING, COM host registered; Verify 6/0; Uninstall removes service + `oem0.inf` driver
+        package + ELAM service + COM + files with **no orphaned state**. Two real defects the smoke caught +
+        fixed (`9e5a187`→ next commit): (1) ELAM `CreateService` failed `87 (INVALID_PARAMETER)` because a
+        **boot-start driver image must live under `System32\drivers`** to be boot-loader-reachable — the
+        installer now copies `semantics_ar_elam.sys` there before `sar_install`; (2) `$Source` relied on
+        `$PSScriptRoot` which is empty under `powershell -File` from a remote session → resolved via
+        `$PSCommandPath` fallback; plus the `Invoke-Verify` counter-scope bug. **Expected residual on a TEST
+        build:** ELAM `InstallELAMCertificateInfo` returns `577 (INVALID_IMAGE_HASH)` because the self-signed
+        cert is not an MS-trusted AM certificate — the installer degrades gracefully to an **unprotected**
+        service (WARN, install proceeds). This is precisely owner-gate (i): a production install supplies an
+        MS-AM-signed ELAM+service and PPL engages. The install/uninstall *mechanics* are fully proven.
 - [~] **Segment 4 — hardening / soak.** The untimed-`FilterSendMessage` item is resolved above
       (driver lock fix SHIP `84d991c`; residual owner-deferred). The three session-5 **known limitations**
       are analysed at code level below and **owner-deferred** (none is a stopgap-fixable bug; two are

@@ -30,13 +30,21 @@
 param(
     [ValidateSet('Install', 'Uninstall', 'Verify')]
     [string]$Action = 'Install',
-    [string]$Source = $PSScriptRoot,
+    [string]$Source,
     [string]$InstallRoot = (Join-Path $env:ProgramFiles 'semantics-ar'),
     [switch]$NoProtect
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Resolve the payload directory robustly. $PSScriptRoot is not always populated in a param
+# default when the script is launched via `powershell -File` from a remote/nested session.
+if (-not $Source) {
+    $Source = if ($PSScriptRoot) { $PSScriptRoot }
+              elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+              else { (Get-Location).Path }
+}
 
 $UserService   = 'SemanticsAr'
 $DriverService = 'semantics_ar'
@@ -178,13 +186,24 @@ function Invoke-Install {
             Log 'user service created' 'OK'
         }
 
-        # 5 ─ ELAM certificate + PPL-AM launch protection (before first start so it launches protected)
+        # 5 ─ ELAM certificate + PPL-AM launch protection (before first start so it launches protected).
+        #     ELAM is a boot-start driver: its image MUST live under System32\drivers to be reachable by
+        #     the boot loader, else CreateService rejects it with ERROR_INVALID_PARAMETER (87). Treat the
+        #     whole step as best-effort — protection failing (e.g. AM-signing on a test cert) must not fail
+        #     the install; the service then simply runs unprotected.
         if (-not $NoProtect) {
-            $elam = Join-Path $drvDir "$ElamService.sys"
-            if (Test-Path $elam) {
-                $rc = & (Join-Path $InstallRoot $InstallerExe) $elam 2>&1 | Out-String
+            $elamSrc = Join-Path $drvDir "$ElamService.sys"
+            if (Test-Path $elamSrc) {
+                $elamSys = Join-Path $env:SystemRoot ('System32\drivers\{0}.sys' -f $ElamService)
+                Copy-Item $elamSrc $elamSys -Force
+                $rollback.Push({ Remove-Item $elamSys -Force -ErrorAction SilentlyContinue })
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                $rc = & (Join-Path $InstallRoot $InstallerExe) $elamSys 2>&1 | Out-String
+                $code = $LASTEXITCODE
+                $ErrorActionPreference = $prevEAP
                 foreach ($l in ($rc -split "`r?`n" | Where-Object { $_ })) { Log "    | $l" }
-                if ($LASTEXITCODE -ne 0) {
+                if ($code -ne 0) {
                     Log 'ELAM/PPL protection could not be applied; the service will run UNPROTECTED' 'WARN'
                 } else {
                     $rollback.Push({ & sc.exe delete $ElamService 2>$null | Out-Null })
@@ -302,16 +321,17 @@ function Invoke-Uninstall {
 # VERIFY
 # ════════════════════════════════════════════════════════════════════════════════════════════
 function Invoke-Verify {
-    $pass = 0; $fail = 0
-    function Check { param([string]$n, [bool]$c) if ($c) { Log "PASS $n" 'OK'; $script:pass++ } else { Log "FAIL $n" 'FAIL'; $script:fail++ } }
+    $script:vpass = 0; $script:vfail = 0
+    function Check { param([string]$n, [bool]$c) if ($c) { Log "PASS $n" 'OK'; $script:vpass++ } else { Log "FAIL $n" 'FAIL'; $script:vfail++ } }
     Check 'minifilter loaded'          (Test-Filter)
     Check 'driver service present'     ([bool](Get-Svc $DriverService))
-    Check 'user service running'       ((Get-Svc $UserService).Status -eq 'Running')
+    $usvc = Get-Svc $UserService
+    Check 'user service running'       ([bool]($usvc -and $usvc.Status -eq 'Running'))
     Check 'COM elevation registered'   (Test-Com)
     Check 'app present'                (Test-Path (Join-Path $InstallRoot $AppExe))
     Check 'elevation host present'     (Test-Path (Join-Path $InstallRoot $HostExe))
-    Log ("verify: {0} passed, {1} failed" -f $pass, $fail) ($(if ($fail) { 'FAIL' } else { 'OK' }))
-    if ($fail) { exit 1 }
+    Log ("verify: {0} passed, {1} failed" -f $script:vpass, $script:vfail) ($(if ($script:vfail) { 'FAIL' } else { 'OK' }))
+    if ($script:vfail) { exit 1 }
 }
 
 switch ($Action) {
