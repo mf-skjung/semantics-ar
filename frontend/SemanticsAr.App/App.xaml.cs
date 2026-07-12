@@ -1,4 +1,6 @@
+using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
@@ -25,6 +27,21 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // A UI-thread exception must never silently kill the app. Log it and keep running;
+        // the failing surface reports its own error state (e.g. "unavailable") rather than crashing.
+        DispatcherUnhandledException += (_, args) =>
+        {
+            LogUnhandled("dispatcher", args.Exception);
+            args.Handled = true;
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            LogUnhandled("task", args.Exception);
+            args.SetObserved();
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            LogUnhandled("domain", args.ExceptionObject as Exception);
 
         ProcessHardening.Apply();
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -58,6 +75,23 @@ public partial class App : Application
 
         if (!OnboardingStore.IsCompleted())
             new OnboardingWindow(new OnboardingViewModel()) { Owner = _window }.ShowDialog();
+    }
+
+    private static void LogUnhandled(string source, Exception? ex)
+    {
+        try
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "semantics-ar");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "app.log"),
+                $"{DateTimeOffset.Now:o} [{source}] {ex}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch
+        {
+            // logging must never itself throw
+        }
     }
 
     private void OnPostureIntegrityChanged(object? sender, PostureChangedEventArgs e)

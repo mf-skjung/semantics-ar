@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using SemanticsAr.Core.Domain;
 
 namespace SemanticsAr.Core.Services;
@@ -42,26 +43,44 @@ public sealed class RecoverySession
         if (!TryOpen(RecoverySessionState.Idle, out IElevatedControlChannel channel))
             return;
 
-        using (channel)
+        try
         {
-            ElevatedError err = channel.LoadCatalog(out IReadOnlyList<RecoverableItem> definitive);
-            if (err != ElevatedError.None)
+            using (channel)
             {
-                Fail(err);
-                return;
-            }
+                ElevatedError err = channel.LoadCatalog(out IReadOnlyList<RecoverableItem> definitive);
+                if (err != ElevatedError.None)
+                {
+                    Fail(err);
+                    return;
+                }
 
-            err = channel.LoadPreserved(out IReadOnlyList<RecoverableItem> bounded);
-            if (err != ElevatedError.None)
-            {
-                Fail(err);
-                return;
-            }
+                err = channel.LoadPreserved(out IReadOnlyList<RecoverableItem> bounded);
+                if (err != ElevatedError.None)
+                {
+                    Fail(err);
+                    return;
+                }
 
-            List<RecoverableItem> all = new(definitive.Count + bounded.Count);
-            all.AddRange(definitive);
-            all.AddRange(bounded);
-            Items = all;
+                List<RecoverableItem> all = new(definitive.Count + bounded.Count);
+                all.AddRange(definitive);
+                all.AddRange(bounded);
+                Items = all;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            State = RecoverySessionState.Idle;
+            return;
+        }
+        catch (COMException comEx)
+        {
+            Fail(ElevatedErrors.FromHResult(comEx.HResult));
+            return;
+        }
+        catch
+        {
+            Fail(ElevatedError.Unknown);
+            return;
         }
 
         State = RecoverySessionState.Browsing;

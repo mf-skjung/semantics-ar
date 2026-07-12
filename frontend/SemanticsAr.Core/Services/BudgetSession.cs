@@ -59,24 +59,42 @@ public sealed class BudgetSession
             return;
         }
 
-        using (channel)
+        try
         {
-            ElevatedError preservedErr = channel.LoadPreserved(out IReadOnlyList<RecoverableItem> preserved);
-            if (preservedErr != ElevatedError.None)
+            using (channel)
             {
-                Fail(preservedErr);
-                return;
-            }
+                ElevatedError preservedErr = channel.LoadPreserved(out IReadOnlyList<RecoverableItem> preserved);
+                if (preservedErr != ElevatedError.None)
+                {
+                    Fail(preservedErr);
+                    return;
+                }
 
-            ElevatedError identityErr = channel.LoadAppIdentities(out IReadOnlyList<AppIdentity> identities);
-            if (identityErr != ElevatedError.None)
-            {
-                Fail(identityErr);
-                return;
-            }
+                ElevatedError identityErr = channel.LoadAppIdentities(out IReadOnlyList<AppIdentity> identities);
+                if (identityErr != ElevatedError.None)
+                {
+                    Fail(identityErr);
+                    return;
+                }
 
-            Preserved = preserved;
-            Identities = identities;
+                Preserved = preserved;
+                Identities = identities;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            State = BudgetSessionState.Idle;
+            return;
+        }
+        catch (COMException comEx)
+        {
+            Fail(ElevatedErrors.FromHResult(comEx.HResult));
+            return;
+        }
+        catch
+        {
+            Fail(ElevatedError.Unknown);
+            return;
         }
 
         State = BudgetSessionState.Loaded;

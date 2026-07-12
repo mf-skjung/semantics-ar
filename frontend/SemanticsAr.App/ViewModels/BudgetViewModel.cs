@@ -142,6 +142,12 @@ public partial class BudgetViewModel : ObservableObject
                     break;
             }
         }
+        catch (Exception ex)
+        {
+            UnavailableText = ElevatedErrorText.Describe(ElevatedError.Unknown, "read your recovery budget")
+                + " (" + ex.GetType().Name + ")";
+            Stage = BudgetStage.Unavailable;
+        }
         finally
         {
             IsBusy = false;
