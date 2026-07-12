@@ -1,7 +1,11 @@
 param(
     [string]$VMName = "SarTarget",
     [PSCredential]$Credential,
-    [int]$Rounds = 6
+    [int]$Rounds = 6,
+    [switch]$Restore,
+    [switch]$Deploy,
+    [switch]$NoMmap,
+    [string]$Snapshot = "clean-baseline-20260704"
 )
 # Broad cross-path concurrency soak. The functional suite exercises capture / mmap / recover / control
 # SEPARATELY; this drives them SIMULTANEOUSLY and sustained, watching for a wedge, a service hang, or a
@@ -27,14 +31,53 @@ function Connect-VM {
 }
 function VM { param([scriptblock]$s) Connect-VM; Invoke-Command -Session $script:Sess -ScriptBlock $s }
 function VMArgs { param([scriptblock]$s, [object[]]$a) Connect-VM; Invoke-Command -Session $script:Sess -ScriptBlock $s -ArgumentList $a }
+function CopyToVM { param([string]$src, [string]$dst) Copy-Item $src -Destination $dst -ToSession $script:Sess -Force }
+$Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pass = 0; $fail = 0
 function Assert { param([string]$n, [bool]$c, [string]$d = "")
     if ($c) { Write-Host "  PASS  $n" -ForegroundColor Green; $script:pass++ }
     else { Write-Host "  FAIL  $n  $d" -ForegroundColor Red; $script:fail++ }
 }
 
-Write-Host "`n=== broad cross-path concurrency soak ($(Get-Date -Format 'HH:mm:ss')) ===" -ForegroundColor Cyan
+Write-Host "`n=== broad cross-path concurrency soak ($(Get-Date -Format 'HH:mm:ss')) NoMmap=$NoMmap ===" -ForegroundColor Cyan
+
+if ($Restore) {
+    Stop-VM -Name $VMName -TurnOff -Force -ErrorAction SilentlyContinue
+    Restore-VMSnapshot -VMName $VMName -Name $Snapshot -Confirm:$false
+    Start-VM -Name $VMName; Start-Sleep -Seconds 8
+}
 Connect-VM
+if ($Deploy) {
+    $pkg = "$Repo\build_driver\pkg"
+    VM { New-Item -ItemType Directory -Path C:\sar -Force | Out-Null }
+    foreach ($f in @("semantics_ar.sys", "semantics_ar.inf", "semantics_ar.cat", "SemanticsArTest.cer")) { CopyToVM "$pkg\$f" "C:\sar\$f" }
+    CopyToVM "$Repo\build_win\service\Release\semantics_ar_service.exe" "C:\sar\semantics_ar_service.exe"
+    CopyToVM "$Repo\build_win\tools\Release\sarctl.exe" "C:\sar\sarctl.exe"
+    CopyToVM "$Repo\build_harness\stream_transform.exe" "C:\sar\stream_transform.exe"
+    if (-not $NoMmap) { CopyToVM "$Repo\build_harness\mmap_over.exe" "C:\sar\mmap_over.exe" }
+    VM {
+        $cer = "C:\sar\SemanticsArTest.cer"
+        certutil -addstore Root $cer 2>$null | Out-Null; certutil -addstore TrustedPublisher $cer 2>$null | Out-Null
+        pnputil /add-driver C:\sar\semantics_ar.inf /install 2>$null | Out-Null
+        $svc = "HKLM:\SYSTEM\CurrentControlSet\Services\semantics_ar"
+        New-Item -Path $svc -Force | Out-Null
+        Set-ItemProperty $svc -Name ImagePath -Value "\??\C:\sar\semantics_ar.sys"
+        Set-ItemProperty $svc -Name Type -Value 2 -Type DWord
+        Set-ItemProperty $svc -Name Start -Value 3 -Type DWord
+        Set-ItemProperty $svc -Name ErrorControl -Value 1 -Type DWord
+        Set-ItemProperty $svc -Name Group -Value "FSFilter Activity Monitor"
+        New-Item -Path "$svc\Instances" -Force | Out-Null
+        Set-ItemProperty "$svc\Instances" -Name DefaultInstance -Value "semantics_ar Instance"
+        New-Item -Path "$svc\Instances\semantics_ar Instance" -Force | Out-Null
+        Set-ItemProperty "$svc\Instances\semantics_ar Instance" -Name Altitude -Value "385000"
+        Set-ItemProperty "$svc\Instances\semantics_ar Instance" -Name Flags -Value 0 -Type DWord
+        fltmc load semantics_ar 2>$null | Out-Null
+        Start-Sleep 3
+        $p = "C:\sar\semantics_ar_service.exe"
+        if (-not (Get-Service semantics_ar_service -ErrorAction SilentlyContinue)) { New-Service -Name semantics_ar_service -BinaryPathName $p -StartupType Manual -ErrorAction SilentlyContinue | Out-Null }
+        Start-Service semantics_ar_service -ErrorAction SilentlyContinue; Start-Sleep 4
+    }
+}
 Assert "minifilter live" ([bool](VM { [bool]((fltmc filters 2>$null) -match 'semantics_ar') }))
 Assert "service running" ([bool](VM { (Get-Service semantics_ar_service -ErrorAction SilentlyContinue).Status -eq 'Running' }))
 $svcPid0 = VM { (Get-Process semantics_ar_service -ErrorAction SilentlyContinue).Id }

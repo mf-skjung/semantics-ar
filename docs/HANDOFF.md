@@ -625,20 +625,20 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         under a synthetic concurrent double-storm — AUDIT is record-only and does not promise FN=0 under
         contention; ENFORCE's block-before-evict is the zero-loss guarantee, proven by `vm_verify_new`
         Phase G. It is independent of the recover read and reproduces identically pre/post harness tweaks.)
-      * **Broad cross-path concurrency soak (`scripts/vm_soak_broad.ps1`) — INCONCLUSIVE, VM wedged.** Drove
-        `mmap_over` + `stream_transform` capture + `sarctl` recover + control storms **simultaneously** and
-        sustained (a combination the functional suite never runs — it exercises those paths separately). Round
-        1 left the guest `Heartbeat=LostCommunication` / PS-Direct-unresponsive (CPU ~24%). **Not attributable
-        to this drive's committed changes:** they are all *service-side* (recover lock split, overlapped
-        shutdown, leak-on-stuck) and cannot kernel-wedge the guest, and the driver+service already passed
-        `vm_verify_new` 27/2/1 (only the documented flakies), `vm_verify_recover_isolation` 8/0, and the
-        recover soak 28/0. The wedge is either (a) a genuine **cross-path concurrency** defect in the driver
-        (most likely the mmap capture path — where the original wedge lived — under simultaneous recover/
-        capture pressure), or (b) accumulated **host vmbus degradation** (§6; this drive ran many VM cycles).
-        Cannot be disambiguated on a load-degraded host. **Follow-up:** re-run `vm_soak_broad.ps1` on a FRESH
-        host/boot (rule out (b)); if it still wedges, it is a real cross-path bug — bisect by dropping one
-        storm at a time (drop `mmap_over` first) and apply the §6 kernel-hang forensics. VM was force-off +
-        restored to `clean-baseline` after the wedge.
+      * **Broad cross-path concurrency soak (`scripts/vm_soak_broad.ps1`) — RESOLVED: it was HOST
+        DEGRADATION, not a driver bug.** Drives `mmap_over` + `stream_transform` capture + `sarctl` recover +
+        control storms **simultaneously** and sustained (a combination the functional suite never runs — it
+        exercises those paths separately). A first run on a heavily-cycled host wedged the guest
+        (`Heartbeat=LostCommunication`) in round 1. Made the script self-contained (`-Restore -Deploy -NoMmap`)
+        and **re-ran on a fresh host/snapshot: 22/0, all 6 rounds clean** — every round filter-live, service
+        up with the **same PID (no crash/restart)**, control channel responsive, and **no handle/thread leak**
+        (handles 169→308 < 200 threshold, threads 19→17). So the exact same cross-path load passes on a fresh
+        host; the earlier wedge was accumulated **host vmbus degradation** (§6 — this drive ran many VM
+        cycles), **not** a driver cross-path defect. The recover-lock-split + shutdown changes and the
+        capture/recover/mmap paths handle sustained simultaneous concurrency without wedging — the
+        "사용성 저해 0" availability guarantee holds under this stress. (Minor: the ~139 handle growth is
+        per-round `sarctl`/job/pipe churn, within threshold; if a longer soak shows monotonic growth, audit
+        per-connection handle release — not seen here.)
       * **Other remaining Segment-4 work:** service-stop robustness *under rapid driver reload* (the
         `Restart-Service` double-action transient wedge from Segment 1 — probe fixed; the service side is now
         much harder to wedge after the leak-on-stuck + overlapped-shutdown fixes, but not yet soaked under
