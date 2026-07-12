@@ -318,11 +318,27 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         hashes; banner + wallpaper + README carry the TEST MODE disclaimer on every surface.
       - **Honest about the unavoidable:** one reboot (boot policy) and Secure Boot OFF (firmware → crisp
         NO-GO, not a silent fail). Refuses non-VM / domain-joined hosts without `-IAmSure`.
-      - **Verified on host:** 14/14 scripts AST-parse; attack guardrails 7/7; read-only detection correct
-        (this physical host → IsVm=False → would NO-GO, as designed). **Remaining (needs the demo VM):**
-        full end-to-end on SarTarget (preflight→reboot→resume→install→attack ENFORCE-block→AUDIT-recover
-        →teardown) + a `vm_verify_demokit.ps1` refresh test; requires `build_driver/pkg` + `build_win`
-        present to build the payload. `dist/` and `dist-demokit/` are gitignored (large payloads).
+      - **VM-VERIFIED end-to-end on SarTarget (Gen2, Secure Boot off).** `vm_verify_demokit.ps1` = **13/13**.
+        - No-reboot idempotent path (baseline already test-signed): preflight → install (driver load +
+          service + COM) → sandbox seed → DEMO READY.
+        - Fresh-VM reboot path (test signing OFF): preflight detects OFF → enable + schedule `SarDemoResume`
+          (AtLogon) → clean guest reboot → resume detects test signing ACTIVE → install → DEMO READY →
+          task self-deletes, state READY.
+        - Safe attack: 12 sandbox files encrypted + ransom note, an EXTERNAL file left byte-identical
+          (containment held), reset restored originals; teardown uninstall removed filter+service+files.
+      - **Root-cause fix surfaced by the kit (commit after `bc474dc`):** `SemanticsAr-Setup.ps1`'s minifilter
+        guard keyed on the service merely existing, so a STALE service (present but pointing at a missing
+        image — the dev baseline's `\??\C:\sar\semantics_ar.sys`, or an imperfect prior uninstall) made Setup
+        skip pnputil then fail `fltmc load` with PATH_NOT_FOUND. Now gates on the filter being LOADED, clears
+        a stale service, re-registers (idempotent). Strictly more robust; clean-install path unchanged. Also
+        fixed a BootPolicy `-Force` self-import that unloaded Preflight mid-run, and added `-NoReboot`.
+      - **HARNESS NOTE (critical for future VM reboot tests):** reboot the guest with a CLEAN reboot (the
+        kit's own `Restart-Computer -Force`, or `Restart-VM` WITHOUT `-Force`). A `Restart-VM -Force` hard
+        reset can DROP the pending `bcdedit testsigning` BCD write, making the post-reboot state read OFF —
+        a harness artifact, not a kit bug (proven: the kit's own clean reboot flushed it correctly).
+      - **Verified on host too:** 14/14 scripts AST-parse; attack guardrails 7/7; read-only detection correct
+        (this physical host → IsVm=False → would NO-GO, as designed). `dist/`, `dist-demokit/` gitignored.
+        Build the payload with `build_driver/pkg` + `build_win` present, then `installer\Build-DemoKit.ps1`.
 - [x] **[Frontier] Visual-first feature communication — DONE (6 commits `0215993`..`94b323c`).** Owner
       asked (Q6) that every feature be conveyed through purpose-built VISUALS so non-experts understand
       intuitively, honestly (a bounded claim must never look as strong as a definitive one; invent no data).
