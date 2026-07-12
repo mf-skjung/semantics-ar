@@ -88,7 +88,7 @@ public partial class RecoveryViewModel : ObservableObject
     [RelayCommand]
     private async Task Begin()
     {
-        if (_busy)
+        if (_busy || Stage is not (RecoveryStage.PreElevation or RecoveryStage.Unavailable))
             return;
 
         _busy = true;
@@ -100,8 +100,17 @@ public partial class RecoveryViewModel : ObservableObject
             switch (_session.State)
             {
                 case RecoverySessionState.Browsing:
-                    await PopulateItemsAsync(_session.Items);
-                    Stage = RecoveryStage.Browsing;
+                    try
+                    {
+                        await PopulateItemsAsync(_session.Items);
+                        Stage = RecoveryStage.Browsing;
+                    }
+                    catch
+                    {
+                        Items.Clear();
+                        UnavailableText = DescribeError(ElevatedError.Unknown);
+                        Stage = RecoveryStage.Unavailable;
+                    }
                     break;
 
                 case RecoverySessionState.Unavailable:
@@ -256,11 +265,13 @@ public partial class RecoveryViewModel : ObservableObject
         List<(RecoverableItem Model, RestoreDisposition Disposition, string Label)> rows =
             await Task.Run(() => ClassifyRows(snapshot, probe));
 
-        Items.Clear();
         ICollectionView view = CollectionViewSource.GetDefaultView(Items);
         using (view.DeferRefresh())
+        {
+            Items.Clear();
             foreach ((RecoverableItem model, RestoreDisposition disposition, string label) in rows)
                 Items.Add(new RecoverableItemViewModel(model, disposition, label));
+        }
     }
 
     private static List<(RecoverableItem Model, RestoreDisposition Disposition, string Label)> ClassifyRows(

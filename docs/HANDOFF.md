@@ -390,6 +390,22 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
           `IsSelected` lives on the VM (SelectAll/Preview iterate `Items` VMs, not containers).
         * Verify by navigating to Recovery with many items (VM UIAutomation nav is flaky — §6; owner can
           drive it in VMConnect). Committed.
+        * **FABLE5 adversarial threading review (neutral WPF framing): fundamentally sound** — no
+          thread-affinity violation (the RCW is fully consumed + disposed synchronously inside
+          `_session.Begin()` before the first await; only the plain `List`/POCO rows cross to the pool
+          thread; VM construction is post-await on the dispatcher), no constructable cross-thread view
+          mutation, `_busy` is airtight on the single dispatcher thread, `AsyncRelayCommand` is
+          non-concurrent by default, and recycling+grouping selection is correct (VM-held `IsSelected`,
+          iterated over the source collection not containers). **3 findings applied** (next commit):
+          (1) `Items.Clear()` moved INSIDE `DeferRefresh` (was a double view-Reset on the
+          Unavailable→retry-after-failed-Confirm path); (2) `Begin` now has a Stage precondition
+          `Stage is (PreElevation or Unavailable)` so the no-reentry-into-Browsing invariant lives in the
+          VM, not just XAML visibility (future-proofs against a new KeyBinding/tray trigger orphaning
+          `PreviewItems`); (3) the population `await` is wrapped → `Stage = Unavailable` on an unexpected
+          throw, because the classify pass does filesystem I/O over **adversary-derived NT device paths**
+          and an uncaught throw would reach `DispatcherUnhandledException` → crash. App builds 0 errors.
+          (Deferred, cosmetic: bind Close's `CanExecute` to `!_busy` so it visibly disables during a long
+          dead-network probe — UX, not correctness.)
       - **Bug D (prior IN-PROGRESS notes, kept for provenance).**
         Owner observed: navigating to Recovery and clicking "View & recover" spikes resources and
         temporarily freezes the app when there are many recoverable items. This is a REAL responsiveness
