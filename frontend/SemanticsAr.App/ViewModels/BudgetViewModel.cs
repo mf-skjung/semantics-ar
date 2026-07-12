@@ -77,7 +77,7 @@ public partial class BudgetViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowTrend))]
-    private PointCollection _trendPoints = new();
+    private PointCollection _trendPoints = EmptyTrend();
 
     public BudgetViewModel(Func<IElevatedControlChannel> channelFactory, Action<string, string>? onExempt = null)
     {
@@ -144,6 +144,15 @@ public partial class BudgetViewModel : ObservableObject
         }
         catch (Exception ex)
         {
+            try
+            {
+                string dir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "semantics-ar");
+                System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "app.log"),
+                    $"{DateTimeOffset.Now:o} [budget-begin] {ex}{Environment.NewLine}{Environment.NewLine}");
+            }
+            catch { }
             UnavailableText = ElevatedErrorText.Describe(ElevatedError.Unknown, "read your recovery budget")
                 + " (" + ex.GetType().Name + ")";
             Stage = BudgetStage.Unavailable;
@@ -162,7 +171,7 @@ public partial class BudgetViewModel : ObservableObject
         _session = null;
         Apps.Clear();
         Segments.Clear();
-        TrendPoints = new();
+        TrendPoints = EmptyTrend();
         AchievedWindowText = string.Empty;
         HeldText = string.Empty;
         OldestText = string.Empty;
@@ -286,7 +295,7 @@ public partial class BudgetViewModel : ObservableObject
         foreach (TrendPoint point in trend)
             max = Math.Max(max, point.Bytes);
         if (max == 0 || trend.Count < 2)
-            return new PointCollection();
+            return EmptyTrend();
 
         PointCollection points = new(trend.Count);
         double usable = TrendHeight - 2 * TrendPad;
@@ -298,5 +307,15 @@ public partial class BudgetViewModel : ObservableObject
         }
         points.Freeze();
         return points;
+    }
+
+    // A PointCollection is a Freezable with thread affinity. BuildTrend runs on a background
+    // thread (Task.Run), so every collection it can produce - including the empty one - must be
+    // frozen before it crosses to the UI thread, or binding it throws a cross-thread ArgumentException.
+    private static PointCollection EmptyTrend()
+    {
+        PointCollection empty = new();
+        empty.Freeze();
+        return empty;
     }
 }
