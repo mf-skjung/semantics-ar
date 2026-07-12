@@ -10,9 +10,49 @@
 
 ## ⚡ ACTIVE TASK (2026-07-13, owner asleep — do this to completion, do NOT ask) ⚡
 
-**Two live functional bugs the owner just reported on the running app. The mandate is FULL
-FUNCTIONALITY, not merely "no crash": mode switching must actually switch; Open budget must
-actually show the budget.** Drive to frontier quality autonomously, then update this block + §9.
+**Mandate: FULL FUNCTIONALITY, not merely "no crash".** Two bugs reported. STATUS AS OF THIS EDIT
+(root-caused on the SarTarget VM by driving the real GUI with UIA + app.log — see the repro loop below):
+
+- **BUG B (Open budget "지원 안 함") = ALREADY FIXED on the current build (0.9.3 / commit `3c97b50`).**
+  Verified on the VM: clicking Open budget loads the real budget ("You can restore back to / no kept
+  copies yet / 0 kept copies · 0 bytes held") — no "unsupported", no crash. The owner saw this on an
+  OLDER build; the empty-trend-freeze fix (`479572b`) + the elevated-read crash-safety resolved it.
+  REMAINING for B: verify the POPULATED budget (run the demo attack in AUDIT so preserve copies exist,
+  then Open budget → the meter + timeline should show real data). NOTE the separate open question:
+  the demo attack on `C:\SarDemo\Sandbox` produced **0 kept copies** even in AUDIT — the driver may not
+  monitor that path, which would also break the recovery demo (see the deferred item in §9).
+
+- **BUG A (AUDIT↔ENFORCE switch "crashes") = ROOT-CAUSED: it's a LAYOUT HANG, not a crash.** The mode
+  chip → `MainWindow.ModeChip_Click` → `new ModeSwitchWindow{...}.ShowDialog()`. Diagnostic logging
+  (temporarily added to `ModeChip_Click`) proved the dialog CONSTRUCTS fine, then `ShowDialog()` NEVER
+  RETURNS and throws NO exception — the UI thread spins in an infinite layout/measure loop (the process
+  even resists `taskkill /F` for ~20s, and UIA sees zero windows because the thread stops pumping). To
+  the user that presents as a crash/freeze. **Cause: a `<Viewbox>` wrapping `Controls/ModePictogram`
+  inside `ModeSwitchWindow.xaml`.** The gallery rendered ModePictogram WITHOUT a Viewbox and was fine;
+  the dialog wrapped it in a Viewbox and hangs (ModePictogram's root is a fixed 220x130 Grid containing
+  a `Canvas` with absolutely-positioned `CertaintyGlyph`s — the Viewbox's measure-with-infinity over a
+  Canvas-bearing subtree loops). Neither `SizeToContent` nor a fixed Viewbox size mattered; removing the
+  Viewbox is the fix. **FIX APPLIED (uncommitted): replaced both `<Viewbox …><ModePictogram/></Viewbox>`
+  in `ModeSwitchWindow.xaml` with `<ModePictogram><ModePictogram.LayoutTransform><ScaleTransform 0.68/>…`
+  and set the window to fixed `Height="640"` (was `SizeToContent="Height"`).** ⚠️ **The SAME pattern is
+  in `OnboardingWindow.xaml`** (it also wraps two ModePictograms in `<Viewbox Height="66">`) — it will
+  hang the first-run onboarding the same way; apply the identical Viewbox→LayoutTransform fix there.
+  (Onboarding was never verified because the VM repro sets `OnboardingCompleted=1` to skip it.)
+
+  **REMAINING for A (do these, then it's done):**
+  1. Apply the Viewbox→LayoutTransform fix in `OnboardingWindow.xaml` too.
+  2. **Remove the temporary diagnostic logging** from `MainWindow.xaml.cs` (`ModeChip_Click` try/catch +
+     `DiagLog`) — it was only for root-causing.
+  3. Rebuild, clean-VM-verify: mode dialog OPENS (not hangs), confirm actually toggles Audit→Enforce
+     (home chip should then read "ENFORCE MODE"), app stays responsive; and onboarding renders. Because
+     ~8 test iterations left hung app instances holding the DLL, the VM state was polluted — **restore
+     the snapshot for a clean verify** rather than swapping DLLs onto a dirty box.
+  4. FABLE5-review the fix (Viewbox is likely used elsewhere too — grep `Viewbox` for other
+     ModePictogram/CertaintyGlyph/Canvas-subtree wrappers that could hang), reach agreement, commit+push,
+     rebuild the kit.
+
+**Original mandate (unchanged):** mode switching must actually switch; Open budget must show the budget.
+Drive to frontier quality autonomously, then update this block + §9.
 
 1. **Switching AUDIT MODE ↔ ENFORCE MODE crashes the app.** Path: the mode chip in `MainWindow`
    (`MainViewModel.CreateModeControl`) opens `ModeSwitchWindow` (which I recently changed — it now
