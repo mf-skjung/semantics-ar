@@ -30,12 +30,15 @@
   end-to-end before — it needs a live posture with a known Audit/Enforce mode, which only exists on the
   installed VM). **NEXT STEPS (do these, this is the live thread):**
   1. **Keep bisecting on the VM** (repro loop below; the DriveModeOnly scheduled task + `C:\SarDemo\mode-test.txt`
-     are already set up on SarTarget). Candidates now: (a) `ui:FluentWindow` + `ShowDialog()` + `WindowStartupLocation="CenterOwner"`
-     with a FluentWindow owner (try a plain `Window` instead of FluentWindow, or `Show()` non-modal, or remove
-     CenterOwner); (b) the `ModeControlViewModel` DataContext / a binding (try opening the dialog with a null
-     or trivial DataContext); (c) the `ui:TitleBar` + `ExtendsContentIntoTitleBar`; (d) the three
-     Visibility-toggled StackPanels (confirm/applied/unavailable) — try a dialog whose content is a single
-     `<TextBlock>` to prove whether ANY ModeSwitchWindow opens. Reduce to the minimal repro, then re-add.
+     are already set up on SarTarget). **RULED OUT so far (all still hang): pictograms, Viewbox, SizeToContent,
+     AND `WindowStartupLocation` (CenterScreen hangs too).** Remaining candidates, in priority order:
+     (a) **minimal-content test** — replace the whole `ModeSwitchWindow` body with a single `<TextBlock>`; if it
+     STILL hangs, the cause is `ui:FluentWindow` + `ShowDialog()` itself (then try a plain `<Window>`, or `Show()`
+     non-modal); if it OPENS, the cause is the content/bindings, so bisect those next; (b) **null-DataContext test**
+     — in `MainWindow.ModeChip_Click` set the dialog `DataContext = null` (skip `CreateModeControl()`); if it opens,
+     the `ModeControlViewModel` or a binding is the hang (its ctor is trivial, so suspect a binding — e.g. a
+     converter or a property getter that loops); (c) `ui:TitleBar` + `ExtendsContentIntoTitleBar`.
+     Reduce to the minimal repro, then re-add pieces until it hangs — that pinpoints it.
   2. Re-add diagnostic logging (the `ModeChip_Click` try/catch + `DiagLog` to `%LOCALAPPDATA%\semantics-ar\app.log`,
      removed in the current tree) — it proved "dialog constructed, showing" logs then ShowDialog never returns.
      Add similar logging inside the dialog's ctor / Loaded to see how far it gets.
