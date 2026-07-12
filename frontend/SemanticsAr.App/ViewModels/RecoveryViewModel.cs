@@ -26,7 +26,12 @@ public partial class RecoveryViewModel : ObservableObject
     private readonly Func<IElevatedControlChannel> _channelFactory;
     private readonly IFileProbe _probe = new Win32FileProbe();
     private RecoverySession? _session;
-    private bool _busy;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(BeginCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CloseCommand))]
+    private bool _isBusy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowPreElevation))]
@@ -85,13 +90,15 @@ public partial class RecoveryViewModel : ObservableObject
     public bool ShowReport => Stage == RecoveryStage.Report;
     public bool ShowUnavailable => Stage == RecoveryStage.Unavailable;
 
-    [RelayCommand]
+    private bool NotBusy => !IsBusy;
+
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private async Task Begin()
     {
-        if (_busy || Stage is not (RecoveryStage.PreElevation or RecoveryStage.Unavailable))
+        if (Stage is not (RecoveryStage.PreElevation or RecoveryStage.Unavailable))
             return;
 
-        _busy = true;
+        IsBusy = true;
         try
         {
             _session = new RecoverySession(_channelFactory);
@@ -125,7 +132,7 @@ public partial class RecoveryViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
@@ -172,13 +179,13 @@ public partial class RecoveryViewModel : ObservableObject
             Stage = RecoveryStage.Browsing;
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void Confirm()
     {
-        if (_session is null || Stage != RecoveryStage.Preview || _busy)
+        if (_session is null || Stage != RecoveryStage.Preview)
             return;
 
-        _busy = true;
+        IsBusy = true;
         try
         {
             HashSet<string> reserved = new(StringComparer.OrdinalIgnoreCase);
@@ -240,16 +247,13 @@ public partial class RecoveryViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void Close()
     {
-        if (_busy)
-            return;
-
         _session?.Close();
         _session = null;
         Items.Clear();
