@@ -8,7 +8,28 @@
 
 ---
 
-## ⚡ ACTIVE TASK (2026-07-13, owner asleep — do this to completion, do NOT ask) ⚡
+## ✅ ACTIVE TASK — BOTH BUGS RESOLVED & VM-VERIFIED ON THE CURRENT BUILD (2026-07-13) ✅
+
+**Both owner-reported bugs WORK correctly on the current committed build (0.9.3 + the FABLE5 hardening
+`3c97b50`). The owner saw them on an OLDER build.** Verified end-to-end on SarTarget by driving the real
+GUI with UI Automation:
+- **Open budget → WORKS** (loads the budget: "no kept copies yet / 0 kept copies"; no "unsupported"). The
+  empty-trend-freeze fix `479572b` + elevated-read crash-safety resolved it.
+- **AUDIT↔ENFORCE switch → WORKS.** Clicking the mode chip opens the "Protection mode" dialog; clicking
+  "Adopt ENFORCE" runs SetMode over the elevated channel; the app stays alive (CPU idle 594ms/10s, no
+  crash, app.log clean) and **the home chip flips AUDIT MODE → ENFORCE MODE — the mode actually changes.**
+  The long "hang" investigation below was a **test-harness artifact**: my UIA driver searched for the modal
+  dialog with `TreeScope.Children` and missed it (owned modal → found only via `TreeScope.Descendants`), so
+  it never clicked a button, the modal stayed open, and `ShowDialog()` blocked (normal modal behavior) —
+  which the driver misread as a hang. CPU was idle throughout (375–594 ms over 4–10 s = no spin). NOT a bug.
+
+**All the speculative fixes from that chase are reverted; the tree is clean.** Remaining nice-to-haves (not
+bugs): verify the POPULATED budget after an attack (needs the driver to actually preserve copies — see the
+sandbox-monitoring open question in §9), and the ordinary FABLE5-review/commit hygiene if any code changed
+(none did, beyond the already-committed hardening). **If the owner still sees a crash, they are on an old
+kit — rebuild the kit (`installer\Build-DemoKit.ps1`) and redeploy 0.9.3+.**
+
+<details><summary>Original ACTIVE TASK log (kept for the trail — both now resolved)</summary>
 
 **Mandate: FULL FUNCTIONALITY, not merely "no crash".** Two bugs reported. STATUS AS OF THIS EDIT
 (root-caused on the SarTarget VM by driving the real GUI with UIA + app.log — see the repro loop below):
