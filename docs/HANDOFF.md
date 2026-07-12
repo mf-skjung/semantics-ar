@@ -22,7 +22,30 @@
   the demo attack on `C:\SarDemo\Sandbox` produced **0 kept copies** even in AUDIT — the driver may not
   monitor that path, which would also break the recovery demo (see the deferred item in §9).
 
-- **BUG A (AUDIT↔ENFORCE switch "crashes") = ROOT-CAUSED: it's a LAYOUT HANG, not a crash.** The mode
+- **BUG A UPDATE (CORRECTED — the Viewbox/ModePictogram theory below is WRONG).** Bisection on the VM:
+  with **both ModePictograms replaced by plain placeholder `<Border>`s, the dialog STILL HANGS** the same
+  way (ShowDialog never returns, windows-of-proc=0, app alive, resists taskkill). So the hang is **NOT the
+  pictograms and NOT the Viewbox** — it is structural to `ModeSwitchWindow` / its `ShowDialog` / its
+  `ModeControlViewModel` DataContext, and may well be a PRE-EXISTING bug (this dialog was never verified
+  end-to-end before — it needs a live posture with a known Audit/Enforce mode, which only exists on the
+  installed VM). **NEXT STEPS (do these, this is the live thread):**
+  1. **Keep bisecting on the VM** (repro loop below; the DriveModeOnly scheduled task + `C:\SarDemo\mode-test.txt`
+     are already set up on SarTarget). Candidates now: (a) `ui:FluentWindow` + `ShowDialog()` + `WindowStartupLocation="CenterOwner"`
+     with a FluentWindow owner (try a plain `Window` instead of FluentWindow, or `Show()` non-modal, or remove
+     CenterOwner); (b) the `ModeControlViewModel` DataContext / a binding (try opening the dialog with a null
+     or trivial DataContext); (c) the `ui:TitleBar` + `ExtendsContentIntoTitleBar`; (d) the three
+     Visibility-toggled StackPanels (confirm/applied/unavailable) — try a dialog whose content is a single
+     `<TextBlock>` to prove whether ANY ModeSwitchWindow opens. Reduce to the minimal repro, then re-add.
+  2. Re-add diagnostic logging (the `ModeChip_Click` try/catch + `DiagLog` to `%LOCALAPPDATA%\semantics-ar\app.log`,
+     removed in the current tree) — it proved "dialog constructed, showing" logs then ShowDialog never returns.
+     Add similar logging inside the dialog's ctor / Loaded to see how far it gets.
+  3. **Current uncommitted tree state to be aware of:** `ModeSwitchWindow.xaml` has the two ModePictograms
+     replaced by placeholder `<Border Height="88">` (from the bisection) and `SizeToContent="Height"` changed
+     to `Height="640"`; `OnboardingWindow.xaml` has its two ModePictograms changed to LayoutTransform (harmless
+     but NOT the fix); `MainWindow.xaml.cs` diagnostic logging was removed. **Decide: once the REAL cause is
+     found, restore the ModePictograms (they are not the culprit) and keep the visual design.** These edits are
+     uncommitted — reconcile them.
+- **BUG A (original, NOW-DISPROVEN theory kept for the trail):** it's a LAYOUT HANG, not a crash. The mode
   chip → `MainWindow.ModeChip_Click` → `new ModeSwitchWindow{...}.ShowDialog()`. Diagnostic logging
   (temporarily added to `ModeChip_Click`) proved the dialog CONSTRUCTS fine, then `ShowDialog()` NEVER
   RETURNS and throws NO exception — the UI thread spins in an infinite layout/measure loop (the process
