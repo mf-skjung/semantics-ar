@@ -1,51 +1,65 @@
 #include "server_identity.h"
+#include <aclapi.h>
 
 sarapi_result_t sarapi_server_is_system(HANDLE pipe)
 {
-    ULONG                    pid = 0;
-    HANDLE                   proc;
-    HANDLE                   token = NULL;
-    DWORD                    len = 0;
-    PTOKEN_USER              user;
+    PSID                     owner = NULL;
+    PSECURITY_DESCRIPTOR     sd = NULL;
     SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
     PSID                     system = NULL;
     BOOL                     equal = FALSE;
 
-    if (!GetNamedPipeServerProcessId(pipe, &pid))
+    if (GetSecurityInfo(pipe, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION,
+                        &owner, NULL, NULL, NULL, &sd) != ERROR_SUCCESS)
         return SARAPI_SERVER_UNTRUSTED;
 
-    proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!proc)
-        return SARAPI_SERVER_UNTRUSTED;
-
-    if (!OpenProcessToken(proc, TOKEN_QUERY, &token)) {
-        CloseHandle(proc);
-        return SARAPI_SERVER_UNTRUSTED;
-    }
-
-    GetTokenInformation(token, TokenUser, NULL, 0, &len);
-    if (len == 0) {
-        CloseHandle(token);
-        CloseHandle(proc);
-        return SARAPI_SERVER_UNTRUSTED;
-    }
-
-    user = (PTOKEN_USER)LocalAlloc(LPTR, len);
-    if (!user) {
-        CloseHandle(token);
-        CloseHandle(proc);
-        return SARAPI_SERVER_UNTRUSTED;
-    }
-
-    if (GetTokenInformation(token, TokenUser, user, len, &len)
+    if (owner != NULL && IsValidSid(owner)
         && AllocateAndInitializeSid(&nt, 1, SECURITY_LOCAL_SYSTEM_RID,
                                     0, 0, 0, 0, 0, 0, 0, &system)) {
-        equal = EqualSid(user->User.Sid, system);
+        equal = EqualSid(owner, system);
         FreeSid(system);
     }
 
-    LocalFree(user);
-    CloseHandle(token);
-    CloseHandle(proc);
+    if (sd != NULL)
+        LocalFree(sd);
+
     return equal ? SARAPI_OK : SARAPI_SERVER_UNTRUSTED;
+}
+
+#define SARAPI_READ_TIMEOUT_MS 5000u
+
+sarapi_result_t sarapi_read_frame(HANDLE pipe, void *out, DWORD len, DWORD *got)
+{
+    OVERLAPPED ov;
+    HANDLE     ev;
+    DWORD      n = 0;
+    BOOL       ok;
+    DWORD      e;
+
+    ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (ev == NULL)
+        return SARAPI_TRANSPORT_ERROR;
+
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = ev;
+
+    ok = ReadFile(pipe, out, len, &n, &ov);
+    if (!ok && GetLastError() == ERROR_IO_PENDING) {
+        if (WaitForSingleObject(ev, SARAPI_READ_TIMEOUT_MS) == WAIT_OBJECT_0) {
+            ok = GetOverlappedResult(pipe, &ov, &n, FALSE);
+        } else {
+            CancelIoEx(pipe, &ov);
+            GetOverlappedResult(pipe, &ov, &n, TRUE);
+            CloseHandle(ev);
+            return SARAPI_TRANSPORT_ERROR;
+        }
+    }
+
+    e = GetLastError();
+    CloseHandle(ev);
+    if (!ok)
+        return (e == ERROR_MORE_DATA) ? SARAPI_VERSION_MISMATCH : SARAPI_TRANSPORT_ERROR;
+    if (got != NULL)
+        *got = n;
+    return SARAPI_OK;
 }

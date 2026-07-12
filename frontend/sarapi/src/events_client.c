@@ -19,7 +19,8 @@ static sarapi_result_t sarapi_open_events(HANDLE *out_pipe)
         HANDLE pipe = CreateFileW(SAR_EVENTS_PIPE_NAME,
                                   GENERIC_READ | FILE_WRITE_ATTRIBUTES,
                                   0, NULL, OPEN_EXISTING,
-                                  SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                                  FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT
+                                      | SECURITY_IDENTIFICATION,
                                   NULL);
         if (pipe != INVALID_HANDLE_VALUE) {
             *out_pipe = pipe;
@@ -74,7 +75,7 @@ sarapi_result_t __cdecl sarapi_events_read(void *handle, sarapi_event_t *out)
 {
     sar_events_frame_t frame;
     DWORD               got = 0;
-    BOOL                ok;
+    sarapi_result_t     r;
 
     if (!handle || handle == INVALID_HANDLE_VALUE || !out)
         return SARAPI_INVALID_ARG;
@@ -82,13 +83,9 @@ sarapi_result_t __cdecl sarapi_events_read(void *handle, sarapi_event_t *out)
     memset(out, 0, sizeof(*out));
     memset(&frame, 0, sizeof(frame));
 
-    ok = ReadFile((HANDLE)handle, &frame, (DWORD)sizeof(frame), &got, NULL);
-    if (!ok) {
-        DWORD e = GetLastError();
-
-        return (e == ERROR_MORE_DATA) ? SARAPI_VERSION_MISMATCH
-                                      : SARAPI_TRANSPORT_ERROR;
-    }
+    r = sarapi_read_frame((HANDLE)handle, &frame, (DWORD)sizeof(frame), &got);
+    if (r != SARAPI_OK)
+        return r;
 
     if (got < offsetof(sar_events_frame_t, valid))
         return SARAPI_TRANSPORT_ERROR;

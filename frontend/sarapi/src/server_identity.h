@@ -7,4 +7,6 @@
 
 sarapi_result_t sarapi_server_is_system(HANDLE pipe);
 
+sarapi_result_t sarapi_read_frame(HANDLE pipe, void *out, DWORD len, DWORD *got);
+
 #endif

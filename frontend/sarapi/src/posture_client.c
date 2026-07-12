@@ -25,7 +25,8 @@ static sarapi_result_t sarapi_open_posture(HANDLE *out_pipe)
         HANDLE pipe = CreateFileW(SAR_POSTURE_PIPE_NAME,
                                   GENERIC_READ | FILE_WRITE_ATTRIBUTES,
                                   0, NULL, OPEN_EXISTING,
-                                  SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                                  FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT
+                                      | SECURITY_IDENTIFICATION,
                                   NULL);
         if (pipe != INVALID_HANDLE_VALUE) {
             *out_pipe = pipe;
@@ -53,7 +54,6 @@ sarapi_result_t __cdecl sarapi_posture_read(sarapi_posture_t *out)
     DWORD               mode = PIPE_READMODE_MESSAGE;
     DWORD               got = 0;
     sarapi_result_t     r;
-    BOOL                ok;
 
     if (!out)
         return SARAPI_INVALID_ARG;
@@ -76,15 +76,10 @@ sarapi_result_t __cdecl sarapi_posture_read(sarapi_posture_t *out)
     }
 
     memset(&frame, 0, sizeof(frame));
-    ok = ReadFile(pipe, &frame, (DWORD)sizeof(frame), &got, NULL);
-    if (!ok) {
-        DWORD e = GetLastError();
-
-        CloseHandle(pipe);
-        return (e == ERROR_MORE_DATA) ? SARAPI_VERSION_MISMATCH
-                                      : SARAPI_TRANSPORT_ERROR;
-    }
+    r = sarapi_read_frame(pipe, &frame, (DWORD)sizeof(frame), &got);
     CloseHandle(pipe);
+    if (r != SARAPI_OK)
+        return r;
 
     if (got < offsetof(sar_posture_frame_t, flags))
         return SARAPI_TRANSPORT_ERROR;

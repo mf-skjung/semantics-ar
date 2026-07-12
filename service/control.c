@@ -564,6 +564,10 @@ static uint32_t sar_coarsen_expiry(uint64_t oldest_protected_100ns, uint64_t ret
     return SAR_POSTURE_EXPIRY_GT_7D;
 }
 
+static SRWLOCK             g_posture_cache_lock = SRWLOCK_INIT;
+static sar_posture_frame_t g_posture_cache;
+static BOOL                g_posture_cache_valid = FALSE;
+
 static void sar_posture_serve(sar_pipe_conn_t *conn, void *vctx)
 {
     sar_comm_client_t          *client = (sar_comm_client_t *)vctx;
@@ -576,28 +580,49 @@ static void sar_posture_serve(sar_pipe_conn_t *conn, void *vctx)
     frame.frame_length = (uint32_t)sizeof(frame);
     frame.protocol_version = SEMANTICS_AR_PROTOCOL_VERSION;
     frame.flags = SAR_POSTURE_FLAG_SERVICE_RUNNING;
-
-    memset(&status, 0, sizeof(status));
-    EnterCriticalSection(&g_control_lock);
-    cs = sar_comm_query_status(client, &status);
-    LeaveCriticalSection(&g_control_lock);
-
-    if (cs == SAR_COMM_OK) {
-        frame.flags |= SAR_POSTURE_FLAG_DRIVER_CONNECTED;
-        if (status.integrity_halt)
-            frame.flags |= SAR_POSTURE_FLAG_INTEGRITY_HALT;
-        frame.mode = status.mode;
-        frame.captured_key_count = status.captured_key_count;
-        frame.preserve_health = sar_coarsen_health(status.preserve_used_bytes,
-                                                   status.preserve_capacity_bytes);
-        frame.oldest_expiry_bucket = sar_coarsen_expiry(
-            status.preserve_oldest_protected_time, status.preserve_retention_100ns);
-    } else {
-        frame.mode = client->mode;
-        frame.captured_key_count = (uint64_t)InterlockedCompareExchange64(
-            (volatile LONG64 *)&client->captured_key_count, 0, 0);
-    }
     frame.descents = sar_posture_descents();
+
+    if (TryEnterCriticalSection(&g_control_lock)) {
+        memset(&status, 0, sizeof(status));
+        cs = sar_comm_query_status(client, &status);
+        LeaveCriticalSection(&g_control_lock);
+
+        if (cs == SAR_COMM_OK) {
+            frame.flags |= SAR_POSTURE_FLAG_DRIVER_CONNECTED;
+            if (status.integrity_halt)
+                frame.flags |= SAR_POSTURE_FLAG_INTEGRITY_HALT;
+            frame.mode = status.mode;
+            frame.captured_key_count = status.captured_key_count;
+            frame.preserve_health = sar_coarsen_health(status.preserve_used_bytes,
+                                                       status.preserve_capacity_bytes);
+            frame.oldest_expiry_bucket = sar_coarsen_expiry(
+                status.preserve_oldest_protected_time, status.preserve_retention_100ns);
+        } else {
+            frame.mode = client->mode;
+            frame.captured_key_count = (uint64_t)InterlockedCompareExchange64(
+                (volatile LONG64 *)&client->captured_key_count, 0, 0);
+        }
+
+        AcquireSRWLockExclusive(&g_posture_cache_lock);
+        g_posture_cache = frame;
+        g_posture_cache_valid = TRUE;
+        ReleaseSRWLockExclusive(&g_posture_cache_lock);
+    } else {
+        BOOL have = FALSE;
+
+        AcquireSRWLockShared(&g_posture_cache_lock);
+        if (g_posture_cache_valid) {
+            frame = g_posture_cache;
+            have = TRUE;
+        }
+        ReleaseSRWLockShared(&g_posture_cache_lock);
+
+        if (!have) {
+            frame.mode = client->mode;
+            frame.captured_key_count = (uint64_t)InterlockedCompareExchange64(
+                (volatile LONG64 *)&client->captured_key_count, 0, 0);
+        }
+    }
 
     sar_pipe_send(conn, &frame, (DWORD)sizeof(frame), SAR_CONTROL_SEND_TIMEOUT);
 }
@@ -675,7 +700,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
     g_control_ctx.lock = &g_control_lock;
 
     if (sar_pipe_server_start(&g_control_server, SAR_CONTROL_PIPE_NAME,
-                              L"D:P(A;;GA;;;SY)(A;;GA;;;BA)",
+                              L"O:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)",
                               PIPE_ACCESS_DUPLEX,
                               (DWORD)sizeof(sar_control_reply_t),
                               (DWORD)sizeof(sar_control_command_t),
@@ -686,7 +711,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
     }
 
     if (sar_pipe_server_start(&g_posture_server, SAR_POSTURE_PIPE_NAME,
-                              L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)",
+                              L"O:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)",
                               PIPE_ACCESS_OUTBOUND,
                               (DWORD)sizeof(sar_posture_frame_t), 0,
                               SAR_POSTURE_INSTANCES,
@@ -697,7 +722,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
     }
 
     if (sar_pipe_server_start(&g_events_server, SAR_EVENTS_PIPE_NAME,
-                              L"D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)",
+                              L"O:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x120189;;;IU)",
                               PIPE_ACCESS_OUTBOUND,
                               (DWORD)sizeof(sar_events_frame_t), 0,
                               SAR_EVENTS_INSTANCES,
