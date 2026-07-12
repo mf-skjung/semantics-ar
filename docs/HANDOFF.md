@@ -501,10 +501,22 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         slips the name check is still caught before it can be granted trust. **Owner-defer / acceptable:**
         the defense-in-depth apply-time guard makes the name-based front check adequate; a content/behaviour-
         based interpreter classifier is a research-grade enhancement, not a correctness gap.
-      * **Remaining Segment-4 work (needs a healthy VM):** long-running soak/stress (the original wedge was
-        concurrency-latent), and service-stop robustness under rapid driver reload (the `Restart-Service`
-        double-action transient wedge noted under Segment 1 — the probe was fixed; the service-side
-        robustness itself is still to be exercised under soak).
+      * **Recover-fix concurrency soak — DONE, PASS (`scripts/vm_soak_recover.ps1`, 28/0).** 12 iterations
+        overlapping a background capture write-storm (holds the capture path / `Preserve->lock` hot) with a
+        foreground attack + recover + golden-verify pass (drives the now-UNLOCKED `SarPreserveRestore` read).
+        Result: **engine live every iteration (no wedge)**, recovered files **byte-exact** (golden-hash), and
+        the recovered count is **dead steady — spread=0** (`39,39,…,39`). That stability is the affirmative
+        signal the change is sound: a recover-read race from dropping the lock would make the count *vary*
+        with timing; it does not. (The constant 1/40 shortfall is a **capture-side** artifact of AUDIT mode
+        under a synthetic concurrent double-storm — AUDIT is record-only and does not promise FN=0 under
+        contention; ENFORCE's block-before-evict is the zero-loss guarantee, proven by `vm_verify_new`
+        Phase G. It is independent of the recover read and reproduces identically pre/post harness tweaks.)
+      * **Remaining Segment-4 work (needs a healthy VM + owner-supervised time):** broader long-running
+        soak across the *whole* driver (the original wedge was concurrency-latent — hunt for OTHER latent
+        bugs beyond the recover path), and service-stop robustness under rapid driver reload (the
+        `Restart-Service` double-action transient wedge noted under Segment 1 — the probe was fixed; the
+        service-side robustness itself is still to be exercised under soak). The `ransom_sim`/
+        `stream_transform` + `sarctl` harnesses (prebuilt in `build_harness/`) are the turnkey drivers.
 - Owner-only pending: Part XII ratification; **`git push`** (many unpushed commits this drive — latest
   `1590616`; run `git log --oneline origin/main..HEAD` for the full set); MS driver cert.
 - *Record every commit hash + one line of what it closed here as you go. If your context was
