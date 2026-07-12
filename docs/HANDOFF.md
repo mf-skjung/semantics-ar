@@ -293,6 +293,34 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
   This drive's frontier hardening (recover lock split, service-stop robustness, prompt shutdown, frontend
   responsiveness sweep) is VM-verified and regression-clean; the broad cross-path soak is 22/0 on a fresh
   host (the earlier wedge was host degradation, not a bug — see the Segment-4 soak note).
+- [~] **[Frontier] Mock design-system applied to the WPF app (was generic Wpf.Ui Fluent).** The owner
+      asked whether the approved mock (`frontend/mocks/recovery-and-budget.v1.html`) design was applied — it
+      was NOT (only the ladder color tokens were; everything else was stock Fluent). Now applied + FABLE5
+      design-critiqued + **host-screenshot-verified** (`scripts/host_shot.ps1` launches the app on the host —
+      no VM/engine needed — navigates, and captures `build_verify/host_*.png`; the pre-elevation/unavailable
+      states render the full design):
+      - `Themes/DesignTokens.xaml` — the mock's warm-paper palette (canvas #FAFAF9 / surface / text / muted /
+        hair / accent + def/bnd/unr/red triads) as frozen `Sar.*` brushes, soft card + large shadows, fonts,
+        and a bridge overriding ~10 Wpf.Ui theme keys so stock chrome harmonizes. `Themes/SarControls.xaml` —
+        NavItem (active = surface card + shadow + 3px accent left-bar, no more blue selection block), Card
+        (shadow-host pattern → keeps ClearType), Quiet/Primary/Outline buttons, Eyebrow/PageTitle/BigNumber,
+        Meter (ProgressBar), Segment.
+      - Shell (`MainWindow`): mica background (canvas + two faint radial blooms, blue bottom-left / green
+        top-right per the mock), `WindowBackdropType=None`, 236px sidebar with a teal→#17729B brand mark,
+        Fluent **nav icons**, active-item card + accent bar, a neutral-dot mode chip.
+      - Views: Home hero is a Card with a **tinted** level shield (bg + line + stroke glyph, not a solid-red
+        fill) + Display verdict + hairline stats; Recovery/Budget/Exemptions use Sar.PageTitle/Subtitle +
+        Primary/Outline buttons + Sar.Card; Budget big-number (Sar.BigNumber tabular) + Sar.Segment range
+        picker; the **CertaintyChip** is now the mock rung (small tinted pill, colored glyph+label, UNR
+        square-left edge) — which also upgrades every populated item row. Onboarding + ModeSwitch windows
+        got the same canvas + typography + buttons. Fixed a real layout bug (MaxWidth text centering in a
+        stretched StackPanel → `HorizontalAlignment=Left`).
+      - **Remaining polish (further fidelity, lower value):** Home pagehead + right-column stats + coverage
+        card; card-ify the Recovery ladder with all 3 rungs; the deep populated-state components (incident
+        cards, budget app-impact rows, exemption cards, preview modals) are styled with Sar tokens but not
+        pixel-matched and are **only fully verifiable with the live engine** (VM GUI harness is flaky, §6);
+        dark theme (mock supports it; app is light-only — the `DynamicResource` brush refs make it a
+        swap-the-colors-dictionary change later). Frontend builds 0 errors; Core.Tests 159/0.
 - [x] mmap writeback deadlock — **DONE, committed `3f84a64`**, FABLE5 ship, 29/0/1.
 - [x] **Segment 1 — XII.3 integrity-halt — DONE.** Two commits:
       - `e5246f1` feat: XII.3 integrity-halt posture flag (path-free enum → red foreground tier) +
