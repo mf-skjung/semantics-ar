@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    xmlns:controls="clr-namespace:SemanticsAr.App.Controls"
     xmlns:vm="clr-namespace:SemanticsAr.App.ViewModels"
     d:DataContext="{d:DesignInstance Type=vm:ModeControlViewModel}"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -42,8 +43,87 @@
                     FontWeight="SemiBold"
                     Foreground="{DynamicResource Sar.TextBrush}"
                     Text="{Binding Title}" />
+
+                <Grid Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="14" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Padding="10,12" CornerRadius="12" BorderThickness="1.5">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{DynamicResource Sar.SurfaceBrush}" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource Sar.HairBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsEnforceAdoption}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource Sar.AccentBgBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource Sar.AccentBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <Viewbox Height="94" HorizontalAlignment="Center">
+                                <controls:ModePictogram IsEnforce="True" />
+                            </Viewbox>
+                            <TextBlock
+                                Margin="0,8,0,0"
+                                HorizontalAlignment="Center"
+                                FontSize="13"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource Sar.TextBrush}"
+                                Text="Enforce" />
+                            <TextBlock
+                                Margin="0,3,0,0"
+                                HorizontalAlignment="Center"
+                                FontSize="11.5"
+                                Foreground="{DynamicResource Sar.MutedBrush}"
+                                TextAlignment="Center"
+                                TextWrapping="Wrap"
+                                Text="Blocks destructive encryption automatically." />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="2" Padding="10,12" CornerRadius="12" BorderThickness="1.5">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{DynamicResource Sar.SurfaceBrush}" />
+                                <Setter Property="BorderBrush" Value="{DynamicResource Sar.HairBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsEnforceAdoption}" Value="False">
+                                        <Setter Property="Background" Value="{DynamicResource Sar.AccentBgBrush}" />
+                                        <Setter Property="BorderBrush" Value="{DynamicResource Sar.AccentBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel>
+                            <Viewbox Height="94" HorizontalAlignment="Center">
+                                <controls:ModePictogram IsEnforce="False" />
+                            </Viewbox>
+                            <TextBlock
+                                Margin="0,8,0,0"
+                                HorizontalAlignment="Center"
+                                FontSize="13"
+                                FontWeight="SemiBold"
+                                Foreground="{DynamicResource Sar.TextBrush}"
+                                Text="Audit" />
+                            <TextBlock
+                                Margin="0,3,0,0"
+                                HorizontalAlignment="Center"
+                                FontSize="11.5"
+                                Foreground="{DynamicResource Sar.MutedBrush}"
+                                TextAlignment="Center"
+                                TextWrapping="Wrap"
+                                Text="Records the attack and keeps files recoverable — does not stop it." />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
                 <TextBlock
-                    Margin="0,12,0,0"
+                    Margin="0,18,0,0"
                     FontSize="13"
                     Foreground="{DynamicResource Sar.MutedBrush}"
                     TextWrapping="Wrap"
