@@ -188,6 +188,16 @@ confusion; `capture.c`/`driver.h` are committed and clean)
 
 ## 6. OPERATIONAL HAZARDS (paid for in time this drive)
 
+- **NEVER wait indefinitely on a VM test — poll status periodically. [OWNER-MANDATED, survives compaction.]**
+  A background VM task (PowerShell Direct / `Invoke-Command`) that runs while the **guest goes
+  unresponsive hangs forever, and its completion notification NEVER fires.** So you cannot passively await
+  a VM run's notification — you must actively re-check `Get-VM -Name SarTarget` (Heartbeat/State) and the
+  task's output file on an interval, and if the guest is wedged (`Heartbeat=LostCommunication` + a
+  timeout-bounded PS Direct probe fails), **stop the hung task (TaskStop), force-off, and restore the
+  clean-baseline snapshot** rather than wait. Always wrap any exploratory VM probe in a `Start-Job` +
+  `Wait-Job -Timeout` so it cannot block you. This applies to every future VM run, compaction or not.
+  (Observed this drive: a broad concurrency soak left the guest `Heartbeat=LostCommunication`, CPU ~24%,
+  PS Direct timing out; the run's notification would never have arrived.)
 - **VM host degradation from repeated restores.** `vm_verify_new.ps1` restores the snapshot each run;
   running it back-to-back **degrades the host vmbus / VMConnect console** (the owner hit "가상 컴퓨터에
   연결하지 못했습니다"). **Budget your VM runs.** Prefer `-SkipRestore`/`-SkipDeploy` when the VM is
@@ -563,14 +573,26 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         under a synthetic concurrent double-storm — AUDIT is record-only and does not promise FN=0 under
         contention; ENFORCE's block-before-evict is the zero-loss guarantee, proven by `vm_verify_new`
         Phase G. It is independent of the recover read and reproduces identically pre/post harness tweaks.)
-      * **Remaining Segment-4 work (needs a healthy VM + owner-supervised time):** broader long-running
-        soak across the *whole* driver (the original wedge was concurrency-latent — hunt for OTHER latent
-        bugs beyond the recover path), and service-stop robustness under rapid driver reload (the
-        `Restart-Service` double-action transient wedge noted under Segment 1 — the probe was fixed; the
-        service-side robustness itself is still to be exercised under soak). The `ransom_sim`/
-        `stream_transform` + `sarctl` harnesses (prebuilt in `build_harness/`) are the turnkey drivers.
-- Owner-only pending: Part XII ratification; **`git push`** (many unpushed commits this drive — latest
-  `1590616`; run `git log --oneline origin/main..HEAD` for the full set); MS driver cert.
+      * **Broad cross-path concurrency soak (`scripts/vm_soak_broad.ps1`) — INCONCLUSIVE, VM wedged.** Drove
+        `mmap_over` + `stream_transform` capture + `sarctl` recover + control storms **simultaneously** and
+        sustained (a combination the functional suite never runs — it exercises those paths separately). Round
+        1 left the guest `Heartbeat=LostCommunication` / PS-Direct-unresponsive (CPU ~24%). **Not attributable
+        to this drive's committed changes:** they are all *service-side* (recover lock split, overlapped
+        shutdown, leak-on-stuck) and cannot kernel-wedge the guest, and the driver+service already passed
+        `vm_verify_new` 27/2/1 (only the documented flakies), `vm_verify_recover_isolation` 8/0, and the
+        recover soak 28/0. The wedge is either (a) a genuine **cross-path concurrency** defect in the driver
+        (most likely the mmap capture path — where the original wedge lived — under simultaneous recover/
+        capture pressure), or (b) accumulated **host vmbus degradation** (§6; this drive ran many VM cycles).
+        Cannot be disambiguated on a load-degraded host. **Follow-up:** re-run `vm_soak_broad.ps1` on a FRESH
+        host/boot (rule out (b)); if it still wedges, it is a real cross-path bug — bisect by dropping one
+        storm at a time (drop `mmap_over` first) and apply the §6 kernel-hang forensics. VM was force-off +
+        restored to `clean-baseline` after the wedge.
+      * **Other remaining Segment-4 work:** service-stop robustness *under rapid driver reload* (the
+        `Restart-Service` double-action transient wedge from Segment 1 — probe fixed; the service side is now
+        much harder to wedge after the leak-on-stuck + overlapped-shutdown fixes, but not yet soaked under
+        reload). Harnesses prebuilt in `build_harness/`.
+- Owner-only pending: Part XII ratification; **`git push`** (many unpushed commits this drive — latest is
+  `e955a72`; run `git log --oneline origin/main..HEAD` for the full set); MS driver cert.
 - *Record every commit hash + one line of what it closed here as you go. If your context was
   compressed, this section is where you find yourself.*
 
