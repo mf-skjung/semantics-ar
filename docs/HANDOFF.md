@@ -330,25 +330,49 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         is the §8 documented-flaky **MMAP2 reservation-release** (async B.2 budget channel — an unrelated
         mmap write-reservation timing check, not the recovery path); per §8 not chased, and not re-run to a
         cosmetic 29/0/1 to respect the §6 host-degradation budget.
-      - **[Seg-4 — residual, OWNER-DEFERRED with justification.]** The genuine remaining unbounded-I/O
-        surface is **not** the (now de-risked, own-store, cached-handle) preserve.dat read but
-        `SarRecoveryExecute` (`driver/recovery.c:426/439/457/469`): synchronous `ZwCreateFile`/`ZwReadFile`/
-        `ZwWriteFile` on the **arbitrary target file** inside the callback — an external path exposed to
-        stacked-filter interception / oplock / network / removable stalls, which `FilterSendMessage` cannot
-        cancel. A permanently-stuck recover worker never returns to `accept()`, permanently consuming one
-        **control**-pipe instance. **Blast radius is bounded by design:** the service runs THREE separate
-        pipe servers each with its own 4-worker pool (`control.c:459-461`) — **posture (the GUI liveness
-        poll) and events are fully isolated from control**, so a hung recover cannot starve the GUI's status
-        signal (it survives on the wait-free posture cache regardless). Only the control pool (4 workers,
-        shared by recover + catalog/preserve-query + whitelist/mode/budget) can be exhausted, and only by
-        **≥4 concurrently-hung recovers** — pathological, since `RecoverySession.Execute` serializes recovers
-        one-at-a-time per elevated session. **Owner decision needed** (do not paper over): choose (a) cheap
-        pool-isolation — cap concurrent in-flight recovers below the control pool size, or give recover its
-        own pipe endpoint; or (b) the heavyweight service-side deadline wrapper (must run on a dedicated
-        non-pool thread and **leak** the reply buffer on timeout, since the kernel owns it until the callback
-        returns) as defense-in-depth for the arbitrary-target `ZwCreateFile`; or (c) accept as a documented
-        limitation given the bounded blast radius. FABLE5 recommends (a) over (b) and agrees (b) is not a
-        ship gate now that the lock fix removed the amplification.
+      - **[Seg-4 — recover-starvation residual RESOLVED (frontier hardening, not deferred).]** The genuine
+        remaining unbounded-I/O surface is `SarRecoveryExecute` (`driver/recovery.c`): synchronous
+        `ZwCreateFile`/`ZwReadFile`/`ZwWriteFile` on the **arbitrary target file** inside the port callback,
+        which a stalled filesystem/oplock/redirector can hang and `FilterSendMessage` cannot cancel. The
+        **true chokepoint** (corrected from the earlier pipe-pool-only analysis): `sar_control_serve` wrapped
+        EVERY control op in ONE process-wide `g_control_lock` around the single `MaxConnections=1` driver
+        connection (`control.c:520`), and that same lock is shared by the **events**-query serve and the
+        **autoverdict** verdict-push (`control.c:644,736`). So a hung recover held `g_control_lock` and
+        blocked **catalog/preserve-query/whitelist/mode + events + autoverdict** — the last a security-adjacent
+        channel. (Posture was already safe: it uses `TryEnterCriticalSection` + a cached frame — the Bug B
+        wait-free serve.) **FIX (i) — recover lock split (`service/control.c`, service builds 0 errors):**
+        recover ops (`SAR_CTL_OP_RECOVER`/`PRESERVE_RECOVER`) now take a dedicated `g_recover_lock`; all other
+        control ops keep `g_control_lock`. A hung recover can no longer block any other subsystem — at worst
+        another recover. This introduces concurrent request/response on the single driver port; **a fresh
+        FABLE5 (neutral framing) confirmed SAFE against the source**: the port is opened async (no
+        `FO_SYNCHRONOUS_IO`) so FltMgr does not serialize concurrent IOCTLs; `MaxConnections=1` limits
+        connections not in-flight messages; the reply rides the request's own IRP OutputBuffer (no
+        cross-delivery); the driver callback is reentrant with per-domain locks + no shared reply buffer; the
+        stalling recover I/O holds **no** driver lock (the shipped `SarPreserveRestore` snapshot-then-release);
+        recover keeps its own lock so two recovers still serialize on the shared `.sarrectmp` temp path.
+        **VM-VERIFIED (`scripts/vm_verify_recover_isolation.ps1`): 240/240 files byte-exact under a concurrent
+        control-op storm, engine live** — the introduced concurrency is corruption-free. The only residual is
+        the ≥4-concurrently-hung-recovers control-**pipe-pool** exhaustion (recovers share the control pipe's
+        4 workers); it is deep-pathological (`RecoverySession.Execute` serializes recovers one-per-elevated
+        session, so it needs ≥4 concurrent elevated sessions each on a stalled target) and touches only the
+        recover subsystem. Optional further isolation (A): give recover its own pipe endpoint (own pool);
+        deferred as disproportionate (needs a sarapi+service endpoint split for a pathological case).
+      - **[Seg-4 — service-stop robustness.]** FABLE5 (concurrency review) surfaced a **pre-existing
+        shutdown handle-recycle race**: `sar_pipe_server_stop` waited 5 s per worker then closed the pipe +
+        stop handles **regardless**, so a worker still inside an uncancelable recover `FilterSendMessage`
+        would, on return, `sar_pipe_send` on a recycled handle. **FIX (leak-on-stuck):** `sar_pipe_server_stop`
+        now returns a stuck flag and, on timeout, closes only the resources no live worker can still touch
+        (each worker owns one pipe by index) and **leaks** a stuck worker's pipe + the shared stop event
+        (already signaled, so the worker exits on its own; own-process service ⇒ process exit reclaims);
+        `sar_control_listener_stop` skips `DeleteCriticalSection` on a stuck stop (a stuck worker may still own
+        `g_recover_lock`/`g_control_lock`; the static CS is left initialized so its eventual Leave is defined).
+        **Found (not yet fixed):** clean service stop measures ~15 s because `sar_comm_recv_message` uses a
+        **synchronous** `FilterGetMessage` (`commclient.c:108`, `lpOverlapped=NULL`) in the `sar_comm_run`
+        inbound loop, which `CancelIoEx` does not promptly cancel; the loop exits only late. This is
+        orthogonal to recover (it runs *before* the pipe stops in the shutdown order, so it does not mis-fire
+        leak-on-stuck) and is now *safe* (leak-on-stuck), just slow. Frontier fix in progress: convert the
+        inbound recv to overlapped `FilterGetMessage` + wait on a stop event (mirroring `sar_pipe_recv`),
+        pending a FABLE5 review because it touches the verdict-notify inbound channel.
       - **NON-ELEVATED FIX LIVE-CONFIRMED:** with the committed binaries deployed and the engine live,
         a genuine medium-integrity process (`runas /trustlevel:0x20000`, session 0 — avoids the flaky
         interactive-session/scheduled-task harness) ran `sarapi_posture_read` and got **result=0

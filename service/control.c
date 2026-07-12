@@ -469,6 +469,7 @@ static sar_pipe_server_t g_control_server;
 static sar_pipe_server_t g_posture_server;
 static sar_pipe_server_t g_events_server;
 static CRITICAL_SECTION  g_control_lock;
+static CRITICAL_SECTION  g_recover_lock;
 static sar_control_ctx_t g_control_ctx;
 
 static BOOL sar_control_caller_is_admin(void)
@@ -517,9 +518,22 @@ static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
         return;
     }
 
-    EnterCriticalSection(ctx->lock);
-    sar_control_apply(ctx->client, &cmd, &reply);
-    LeaveCriticalSection(ctx->lock);
+    {
+        /* Recover is the only control op that can block for an unbounded time (its handler does
+         * synchronous I/O on an arbitrary target file, which a stalled filesystem/oplock/redirector
+         * can hang). Serializing it under the shared g_control_lock would let one hung recover stall
+         * every other control op AND the events-query + autoverdict paths that share that lock.
+         * Route recover through its own lock so a hung recover can only ever block another recover.
+         * Concurrent request/response on the single driver port is safe: the transport uses a local
+         * reply buffer and mutates no shared client state, and the driver's message callback is
+         * reentrant with per-domain locks and no shared reply buffer. */
+        LPCRITICAL_SECTION lock =
+            (cmd.op == SAR_CTL_OP_RECOVER || cmd.op == SAR_CTL_OP_PRESERVE_RECOVER)
+                ? &g_recover_lock : ctx->lock;
+        EnterCriticalSection(lock);
+        sar_control_apply(ctx->client, &cmd, &reply);
+        LeaveCriticalSection(lock);
+    }
 
     sar_pipe_send(conn, &reply, (DWORD)sizeof(reply), SAR_CONTROL_SEND_TIMEOUT);
 }
@@ -696,6 +710,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
         return -1;
 
     InitializeCriticalSection(&g_control_lock);
+    InitializeCriticalSection(&g_recover_lock);
     g_control_ctx.client = client;
     g_control_ctx.lock = &g_control_lock;
 
@@ -706,6 +721,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
                               (DWORD)sizeof(sar_control_command_t),
                               SAR_CONTROL_INSTANCES,
                               sar_control_serve, &g_control_ctx) != 0) {
+        DeleteCriticalSection(&g_recover_lock);
         DeleteCriticalSection(&g_control_lock);
         return -1;
     }
@@ -717,6 +733,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
                               SAR_POSTURE_INSTANCES,
                               sar_posture_serve, client) != 0) {
         sar_pipe_server_stop(&g_control_server);
+        DeleteCriticalSection(&g_recover_lock);
         DeleteCriticalSection(&g_control_lock);
         return -1;
     }
@@ -729,6 +746,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
                               sar_events_serve, client) != 0) {
         sar_pipe_server_stop(&g_posture_server);
         sar_pipe_server_stop(&g_control_server);
+        DeleteCriticalSection(&g_recover_lock);
         DeleteCriticalSection(&g_control_lock);
         return -1;
     }
@@ -737,6 +755,7 @@ int sar_control_listener_start(sar_comm_client_t *client)
         sar_pipe_server_stop(&g_events_server);
         sar_pipe_server_stop(&g_posture_server);
         sar_pipe_server_stop(&g_control_server);
+        DeleteCriticalSection(&g_recover_lock);
         DeleteCriticalSection(&g_control_lock);
         return -1;
     }
@@ -746,9 +765,19 @@ int sar_control_listener_start(sar_comm_client_t *client)
 
 void sar_control_listener_stop(void)
 {
+    int stuck = 0;
+
     sar_autoverdict_stop();
-    sar_pipe_server_stop(&g_events_server);
-    sar_pipe_server_stop(&g_posture_server);
-    sar_pipe_server_stop(&g_control_server);
-    DeleteCriticalSection(&g_control_lock);
+    stuck |= sar_pipe_server_stop(&g_events_server);
+    stuck |= sar_pipe_server_stop(&g_posture_server);
+    stuck |= sar_pipe_server_stop(&g_control_server);
+
+    /* A worker that could not be joined may still own g_recover_lock (a stalled recover) or
+     * g_control_lock; deleting a held critical section is undefined. These are static objects, so
+     * leaving them initialized is harmless - the worker's eventual LeaveCriticalSection stays
+     * well-defined and the process is exiting. Only tear them down on a fully clean stop. */
+    if (!stuck) {
+        DeleteCriticalSection(&g_recover_lock);
+        DeleteCriticalSection(&g_control_lock);
+    }
 }
