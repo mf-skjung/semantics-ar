@@ -323,8 +323,13 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         store handle (no shared file-position), and `verify_extract` gates all output against the `rec`
         snapshot → a race with concurrent compaction can only yield `STATUS_DATA_ERROR` (fail-closed, never
         stale/wrong bytes). Matches the existing recovery.c / namespace-branch unlocked-I/O discipline;
-        touches no MAC/rollback/security invariant. **Pending: VM recovery byte-for-byte regression** (in
-        the batched VM pass; re-signed pkg already carries the fix, thumbprint `1E4B3044…`).
+        touches no MAC/rollback/security invariant. **VM-VERIFIED (`vm_verify_new`, re-signed pkg thumbprint
+        `1E4B3044…`): recovery not regressed** — `28 passed / 1 failed / 1 skipped`, where every recover /
+        FN=0 check the lock fix touches PASSED (chacha/20 FN=0, salsa/20 FN=0, **Salsa20/12 convicted +
+        recovered BY KEY FN=0**, MMAP-ORACLE positive Oracle forward-convicts BY KEY + FN=0). The lone fail
+        is the §8 documented-flaky **MMAP2 reservation-release** (async B.2 budget channel — an unrelated
+        mmap write-reservation timing check, not the recovery path); per §8 not chased, and not re-run to a
+        cosmetic 29/0/1 to respect the §6 host-degradation budget.
       - **[Seg-4 — residual, OWNER-DEFERRED with justification.]** The genuine remaining unbounded-I/O
         surface is **not** the (now de-risked, own-store, cached-handle) preserve.dat read but
         `SarRecoveryExecute` (`driver/recovery.c:426/439/457/469`): synchronous `ZwCreateFile`/`ZwReadFile`/
