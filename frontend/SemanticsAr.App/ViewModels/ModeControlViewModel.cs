@@ -17,7 +17,10 @@ public partial class ModeControlViewModel : ObservableObject
 {
     private readonly Func<IElevatedControlChannel> _channelFactory;
     private readonly uint _targetMode;
-    private bool _busy;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ConfirmCommand))]
+    private bool _isBusy;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowConfirm))]
@@ -58,13 +61,15 @@ public partial class ModeControlViewModel : ObservableObject
     public bool ShowApplied => Stage == ModeStage.Applied;
     public bool ShowUnavailable => Stage == ModeStage.Unavailable;
 
-    [RelayCommand]
+    private bool NotBusy => !IsBusy;
+
+    [RelayCommand(CanExecute = nameof(NotBusy))]
     private void Confirm()
     {
-        if (_busy || Stage != ModeStage.Confirm)
+        if (Stage != ModeStage.Confirm)
             return;
 
-        _busy = true;
+        IsBusy = true;
         try
         {
             (bool cancelled, ElevatedError err) = Apply();
@@ -86,7 +91,7 @@ public partial class ModeControlViewModel : ObservableObject
         }
         finally
         {
-            _busy = false;
+            IsBusy = false;
         }
     }
 
