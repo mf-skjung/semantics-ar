@@ -36,11 +36,11 @@
         <Border IsHitTestVisible="False">
             <Border.Background>
                 <RadialGradientBrush
-                    Center="0.2,0"
-                    GradientOrigin="0.2,0"
+                    Center="-0.05,1.05"
+                    GradientOrigin="-0.05,1.05"
                     MappingMode="RelativeToBoundingBox"
-                    RadiusX="0.75"
-                    RadiusY="1">
+                    RadiusX="0.8"
+                    RadiusY="0.9">
                     <GradientStop Offset="0" Color="#0A2563EB" />
                     <GradientStop Offset="1" Color="#002563EB" />
                 </RadialGradientBrush>
@@ -86,7 +86,7 @@
                             <Border.Background>
                                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                                     <GradientStop Offset="0" Color="#0E7C66" />
-                                    <GradientStop Offset="1" Color="#2563EB" />
+                                    <GradientStop Offset="1" Color="#17729B" />
                                 </LinearGradientBrush>
                             </Border.Background>
                             <TextBlock
@@ -136,7 +136,7 @@
                                     Height="6"
                                     Margin="0,0,7,0"
                                     VerticalAlignment="Center"
-                                    Fill="{DynamicResource Sar.DefBrush}" />
+                                    Fill="{DynamicResource Sar.FaintBrush}" />
                                 <TextBlock
                                     VerticalAlignment="Center"
                                     FontSize="11"

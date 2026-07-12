@@ -6,25 +6,21 @@
 
     <Border
         x:Name="ChipBorder"
-        Padding="10,6"
-        CornerRadius="6"
-        BorderThickness="1">
+        Padding="7,3,9,3"
+        BorderThickness="1"
+        CornerRadius="999">
         <StackPanel Orientation="Horizontal">
-            <Grid Width="22" Height="22" VerticalAlignment="Center" AutomationProperties.Name="">
-                <Ellipse x:Name="AccentDot" />
-                <TextBlock
-                    x:Name="GlyphText"
-                    Foreground="White"
-                    FontSize="13"
-                    FontWeight="Bold"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Center" />
-            </Grid>
+            <TextBlock
+                x:Name="GlyphText"
+                VerticalAlignment="Center"
+                FontSize="12"
+                FontWeight="Bold" />
             <TextBlock
                 x:Name="LabelText"
-                Margin="8,0,0,0"
+                Margin="6,0,0,0"
                 VerticalAlignment="Center"
-                FontSize="14" />
+                FontSize="11"
+                FontWeight="Bold" />
         </StackPanel>
     </Border>
 </UserControl>

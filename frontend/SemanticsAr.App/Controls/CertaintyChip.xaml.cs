@@ -46,13 +46,33 @@ public partial class CertaintyChip : UserControl
             CertaintyRung.Bounded => "⌛",
             _ => "∅",
         };
+        (string bg, string line) = Rung switch
+        {
+            CertaintyRung.Definitive => ("Sar.DefBgBrush", "Sar.DefLineBrush"),
+            CertaintyRung.Bounded => ("Sar.BndBgBrush", "Sar.BndLineBrush"),
+            _ => ("Sar.UnrBgBrush", "Sar.UnrLineBrush"),
+        };
 
         RungToken token = DesignTokens.Rung(Rung);
         GlyphText.Text = glyph;
         LabelText.Text = token.Label;
         AutomationProperties.SetName(ChipBorder, token.Label);
 
-        AccentDot.SetResourceReference(Shape.FillProperty, token.BrushKey);
-        ChipBorder.SetResourceReference(Border.BorderBrushProperty, token.BrushKey);
+        GlyphText.SetResourceReference(TextBlock.ForegroundProperty, token.BrushKey);
+        LabelText.SetResourceReference(TextBlock.ForegroundProperty, token.BrushKey);
+        ChipBorder.SetResourceReference(Border.BackgroundProperty, bg);
+
+        if (Rung == CertaintyRung.Unrecoverable)
+        {
+            ChipBorder.BorderThickness = new Thickness(3, 1, 1, 1);
+            ChipBorder.CornerRadius = new CornerRadius(4, 999, 999, 4);
+            ChipBorder.SetResourceReference(Border.BorderBrushProperty, "Sar.UnrBrush");
+        }
+        else
+        {
+            ChipBorder.BorderThickness = new Thickness(1);
+            ChipBorder.CornerRadius = new CornerRadius(999);
+            ChipBorder.SetResourceReference(Border.BorderBrushProperty, line);
+        }
     }
 }

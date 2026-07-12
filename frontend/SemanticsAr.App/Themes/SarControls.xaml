@@ -210,6 +210,7 @@
         <Setter Property="FontSize" Value="13" />
         <Setter Property="Foreground" Value="{DynamicResource Sar.MutedBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
     </Style>
     <Style x:Key="Sar.BigNumber" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Sar.Fonts.Display}" />
