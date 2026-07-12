@@ -9,6 +9,7 @@
                 <ui:ThemesDictionary Theme="Light" />
                 <ui:ControlsDictionary />
                 <ResourceDictionary Source="Themes/DesignTokens.xaml" />
+                <ResourceDictionary Source="Themes/Glyphs.xaml" />
                 <ResourceDictionary Source="Themes/SarControls.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>

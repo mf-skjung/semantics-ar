@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Shapes;
 using SemanticsAr.App.Design;
 
 namespace SemanticsAr.App.Controls;
@@ -40,12 +39,6 @@ public partial class CertaintyChip : UserControl
 
     private void Update()
     {
-        string glyph = Rung switch
-        {
-            CertaintyRung.Definitive => "✓",
-            CertaintyRung.Bounded => "⌛",
-            _ => "∅",
-        };
         (string bg, string line) = Rung switch
         {
             CertaintyRung.Definitive => ("Sar.DefBgBrush", "Sar.DefLineBrush"),
@@ -54,25 +47,12 @@ public partial class CertaintyChip : UserControl
         };
 
         RungToken token = DesignTokens.Rung(Rung);
-        GlyphText.Text = glyph;
+        Glyph.Rung = Rung;
         LabelText.Text = token.Label;
         AutomationProperties.SetName(ChipBorder, token.Label);
 
-        GlyphText.SetResourceReference(TextBlock.ForegroundProperty, token.BrushKey);
         LabelText.SetResourceReference(TextBlock.ForegroundProperty, token.BrushKey);
         ChipBorder.SetResourceReference(Border.BackgroundProperty, bg);
-
-        if (Rung == CertaintyRung.Unrecoverable)
-        {
-            ChipBorder.BorderThickness = new Thickness(3, 1, 1, 1);
-            ChipBorder.CornerRadius = new CornerRadius(4, 999, 999, 4);
-            ChipBorder.SetResourceReference(Border.BorderBrushProperty, "Sar.UnrBrush");
-        }
-        else
-        {
-            ChipBorder.BorderThickness = new Thickness(1);
-            ChipBorder.CornerRadius = new CornerRadius(999);
-            ChipBorder.SetResourceReference(Border.BorderBrushProperty, line);
-        }
+        ChipBorder.SetResourceReference(Border.BorderBrushProperty, line);
     }
 }

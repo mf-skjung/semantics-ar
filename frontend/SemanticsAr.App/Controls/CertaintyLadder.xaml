@@ -1,0 +1,160 @@
+<UserControl
+    x:Class="SemanticsAr.App.Controls.CertaintyLadder"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:SemanticsAr.App.Controls"
+    x:Name="LadderRoot">
+
+    <StackPanel>
+        <TextBlock
+            Margin="0,0,0,14"
+            FontSize="11"
+            FontWeight="SemiBold"
+            Foreground="{DynamicResource Sar.MutedBrush}"
+            Text="HOW FILES COME BACK" />
+
+        <Grid
+            Margin="0,0,0,10"
+            AutomationProperties.Name="Highest certainty: verified reconstruction. The encryption key was captured; the original is rebuilt and verified byte-for-byte.">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="100*" />
+                <ColumnDefinition Width="0*" />
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0" Height="64">
+                <Rectangle
+                    RadiusX="10"
+                    RadiusY="10"
+                    Fill="{DynamicResource Sar.DefBgBrush}"
+                    Stroke="{DynamicResource Sar.DefBrush}"
+                    StrokeThickness="1.5" />
+                <DockPanel Margin="16,0,18,0">
+                    <controls:CertaintyGlyph
+                        DockPanel.Dock="Left"
+                        VerticalAlignment="Center"
+                        Rung="Definitive"
+                        GlyphSize="34" />
+                    <TextBlock
+                        DockPanel.Dock="Right"
+                        Margin="18,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="{DynamicResource Sar.TextBrush}"
+                        Text="{Binding DefinitiveCount, ElementName=LadderRoot}" />
+                    <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock
+                            FontSize="14"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource Sar.DefBrush}"
+                            Text="Verified reconstruction" />
+                        <TextBlock
+                            Margin="0,2,0,0"
+                            FontSize="12"
+                            Foreground="{DynamicResource Sar.MutedBrush}"
+                            TextWrapping="Wrap"
+                            Text="Rebuilt from the captured key and checked byte-for-byte before anything is replaced." />
+                    </StackPanel>
+                </DockPanel>
+            </Grid>
+        </Grid>
+
+        <Grid
+            Margin="0,0,0,10"
+            AutomationProperties.Name="Second: a time-limited stored copy. A copy was kept before the damage and can be restored while its window is open, then it expires.">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="86*" />
+                <ColumnDefinition Width="14*" />
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0" Height="56">
+                <Rectangle
+                    RadiusX="10"
+                    RadiusY="10"
+                    Fill="{DynamicResource Sar.BndDecayBrush}"
+                    Stroke="{DynamicResource Sar.BndBrush}"
+                    StrokeThickness="1.5"
+                    StrokeDashArray="5 3"
+                    StrokeDashCap="Round" />
+                <Rectangle
+                    Height="3"
+                    Margin="6,0,0,0"
+                    VerticalAlignment="Bottom"
+                    RadiusX="1.5"
+                    RadiusY="1.5"
+                    Fill="{DynamicResource Sar.BndStripBrush}" />
+                <DockPanel Margin="16,0,18,0">
+                    <controls:CertaintyGlyph
+                        DockPanel.Dock="Left"
+                        VerticalAlignment="Center"
+                        Rung="Bounded"
+                        GlyphSize="34" />
+                    <TextBlock
+                        DockPanel.Dock="Right"
+                        Margin="18,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="{DynamicResource Sar.TextBrush}"
+                        Text="{Binding BoundedCount, ElementName=LadderRoot}" />
+                    <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock
+                            FontSize="14"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource Sar.BndBrush}"
+                            Text="Stored copy — time-limited" />
+                        <TextBlock
+                            Margin="0,2,0,0"
+                            FontSize="12"
+                            Foreground="{DynamicResource Sar.MutedBrush}"
+                            TextWrapping="Wrap"
+                            Text="A copy was kept before the damage. It expires — restore it while the window is open." />
+                    </StackPanel>
+                </DockPanel>
+            </Grid>
+        </Grid>
+
+        <Grid AutomationProperties.Name="Lowest: not recoverable. No key was captured and no copy exists — for example, data that was only stolen, not encrypted.">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="72*" />
+                <ColumnDefinition Width="28*" />
+            </Grid.ColumnDefinitions>
+            <Grid Grid.Column="0" Height="48">
+                <Rectangle
+                    RadiusX="10"
+                    RadiusY="10"
+                    Fill="Transparent"
+                    Stroke="{DynamicResource Sar.UnrLineBrush}"
+                    StrokeThickness="1"
+                    StrokeDashArray="1 3"
+                    StrokeDashCap="Round" />
+                <DockPanel Margin="16,0,18,0">
+                    <controls:CertaintyGlyph
+                        DockPanel.Dock="Left"
+                        VerticalAlignment="Center"
+                        Rung="Unrecoverable"
+                        GlyphSize="34" />
+                    <TextBlock
+                        DockPanel.Dock="Right"
+                        Margin="18,0,0,0"
+                        VerticalAlignment="Center"
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="{DynamicResource Sar.TextBrush}"
+                        Text="{Binding UnrecoverableCount, ElementName=LadderRoot}" />
+                    <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock
+                            FontSize="14"
+                            FontWeight="SemiBold"
+                            Foreground="{DynamicResource Sar.UnrBrush}"
+                            Text="Not recoverable" />
+                        <TextBlock
+                            Margin="0,2,0,0"
+                            FontSize="12"
+                            Foreground="{DynamicResource Sar.MutedBrush}"
+                            TextWrapping="Wrap"
+                            Text="No key was captured and no copy exists — for example, data that was only stolen, not encrypted." />
+                    </StackPanel>
+                </DockPanel>
+            </Grid>
+        </Grid>
+    </StackPanel>
+</UserControl>

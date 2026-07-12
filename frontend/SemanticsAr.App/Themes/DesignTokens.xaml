@@ -53,6 +53,18 @@
     <SolidColorBrush x:Key="Sar.RedLineBrush" Color="{StaticResource Sar.Color.RedLine}" po:Freeze="True" />
     <SolidColorBrush x:Key="Sar.BarUnattrBrush" Color="{StaticResource Sar.Color.BarUnattr}" po:Freeze="True" />
 
+    <LinearGradientBrush x:Key="Sar.BndDecayBrush" StartPoint="0,0.5" EndPoint="1,0.5" po:Freeze="True">
+        <GradientStop Offset="0" Color="#FBF0DF" />
+        <GradientStop Offset="0.55" Color="#FBF0DF" />
+        <GradientStop Offset="0.92" Color="#00FBF0DF" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Sar.BndStripBrush" StartPoint="0,0.5" EndPoint="1,0.5" po:Freeze="True">
+        <GradientStop Offset="0" Color="#B45309" />
+        <GradientStop Offset="0.7" Color="#33B45309" />
+        <GradientStop Offset="1" Color="#00B45309" />
+    </LinearGradientBrush>
+
     <DropShadowEffect x:Key="Sar.Shadow.Card" BlurRadius="16" ShadowDepth="1" Direction="270" Color="#1C1B1A" Opacity="0.06" />
     <DropShadowEffect x:Key="Sar.Shadow.Large" BlurRadius="48" ShadowDepth="10" Direction="270" Color="#1C1B1A" Opacity="0.18" />
 

@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using SemanticsAr.App.Controls;
 using SemanticsAr.Core.Domain;
 using SemanticsAr.Core.Services;
 
@@ -31,12 +32,25 @@ public partial class HomeViewModel : ObservableObject
     private string _glyph = "―";
 
     [ObservableProperty]
+    private VerdictTone _sealTone = VerdictTone.Unknown;
+
+    [ObservableProperty]
     private bool _isStale;
 
     [ObservableProperty]
     private string _modeText = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowModePill))]
+    private bool _isAudit;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowModePill))]
+    [NotifyPropertyChangedFor(nameof(IsEnforcing))]
+    private string _modePillText = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasCaptured))]
     private string _capturedText = string.Empty;
 
     public HomeViewModel(PostureService posture)
@@ -49,6 +63,12 @@ public partial class HomeViewModel : ObservableObject
     }
 
     public string AutomationText => $"{Headline}. {Detail}";
+
+    public bool ShowModePill => ModePillText.Length > 0;
+
+    public bool IsEnforcing => !IsAudit && ShowModePill;
+
+    public bool HasCaptured => CapturedText.Length > 0;
 
     private void OnPostureChanged(object? sender, PostureChangedEventArgs e)
     {
@@ -63,12 +83,36 @@ public partial class HomeViewModel : ObservableObject
         Level = v.Level;
         IsStale = v.IsStale;
         Glyph = GlyphFor(v.Level);
+        SealTone = ToneFor(v.Reason, v.Level);
         (Headline, Detail) = Describe(v.Reason);
         ModeText = ModeTextFor(v.Mode);
+        IsAudit = v.Mode == PostureMode.Audit;
+        ModePillText = ModePillTextFor(v.Mode);
         CapturedText = v.CapturedKeyCount > 0
             ? $"{v.CapturedKeyCount} files recoverable by captured key"
             : string.Empty;
     }
+
+    private static VerdictTone ToneFor(PostureReason reason, PostureLevel level) => reason switch
+    {
+        PostureReason.ServiceUnreachable => VerdictTone.Unknown,
+        PostureReason.ServerUntrusted => VerdictTone.Unknown,
+        PostureReason.VersionMismatch => VerdictTone.Unknown,
+        PostureReason.AccessDenied => VerdictTone.Unknown,
+        _ => level switch
+        {
+            PostureLevel.Green => VerdictTone.Healthy,
+            PostureLevel.Amber => VerdictTone.Attention,
+            _ => VerdictTone.Alarm,
+        },
+    };
+
+    private static string ModePillTextFor(PostureMode mode) => mode switch
+    {
+        PostureMode.Enforce => "Enforcing — blocks encryption",
+        PostureMode.Audit => "Audit — recording, not blocking",
+        _ => string.Empty,
+    };
 
     private static string GlyphFor(PostureLevel level) => level switch
     {
