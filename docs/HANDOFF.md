@@ -283,11 +283,44 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         transiently wedged the service once (StopPending + CPU spin) right after a driver reload; a clean
         single stop→load→start does not (verified <1s). Probe `Reload` fixed. Investigate service-stop
         robustness under rapid driver reload in Segment 4.
-- [ ] **Segment 2 — live end-to-end on VM against live engine. *NEXT.*** (Also gives C1's self-protect
-      fix its live exercise via redeploy.)
+- [~] **Segment 2 — live end-to-end on VM. SUBSTANTIALLY ADVANCED; two real integration bugs found
+      + fixed (`477b498`).** The app was launched on the VM (auto-logon interactive session, scheduled
+      task with Interactive principal — `vm_run_gui.ps1`) against the **live** C1 driver+service for the
+      first time. **It renders live** — window handle non-zero, title `semantics-ar`, all four nav
+      surfaces, first-run onboarding, Home posture, honest scope disclosure (screenshots in
+      `build_verify/gui_evidence.png`, `gui_fix.png`).
+      - **Bug A (fixed, `477b498`):** launched **non-elevated** (the normal case), Home showed red
+        "status could not be trusted" / MODE UNKNOWN. `sarapi_server_is_system` verified the pipe SERVER
+        PROCESS was SYSTEM via `OpenProcess`+`OpenProcessToken` — a medium-IL client can't query a
+        SYSTEM/session-0 token, so it always failed. Fix: verify the pipe OBJECT owner SID is SYSTEM via
+        `GetSecurityInfo` (integrity-independent) + service sets pipe SD owner `O:SY` (posture/events/
+        control). Owner=SYSTEM confirmed on the live pipe; elevated path stays OK.
+      - **Bug B (fixed, `477b498`):** once (A) let non-elevated callers reach the read, the sarapi
+        clients' **unbounded blocking `ReadFile`** could hang the app whenever the posture worker parked
+        behind the shared `g_control_lock`/an in-flight driver status query. Fix: `FILE_FLAG_OVERLAPPED`
+        + shared `sarapi_read_frame` with a 5 s overlapped timeout (posture+events); and
+        `sar_posture_serve` is now **wait-free** (`TryEnterCriticalSection` + SRWLock last-good cache).
+        **FABLE5 built a byte-exact repro** proving the token is causally inert (medium-IL reads 40 B in
+        ~2 ms healthy; bails at 5004 ms clean on a wedge) and reviewed the fix **ship**.
+      - **[Seg-4 follow-up]** The only remaining infinite wait is the **untimed `FilterSendMessage`**
+        (`service/commclient.c:172`) into the driver status query — now insulated, hunt with a service
+        dump next wedge (the preserve-lock family is the suspect).
+      - **REMAINING before Segment 2 closes:** (1) a clean non-elevated live capture of Home showing a
+        GOOD posture (blocked now by **VM-HOST degradation from repeated snapshot/reboot cycles** — §6;
+        let the host drain, then ONE restore); (2) exercise the remaining surfaces live end-to-end —
+        Recovery (induce incident → recover → **byte-for-byte** restore), Budget bars, Exemptions
+        add/remove/lapsed, mode control. Backends are separately VM-verified (vm_verify_new FN=0,
+        vm_verify_exemption 12/0, vm_verify_attribution 8/0) and the app VMs are Core.Tests 159/0; the gap
+        is the **GUI-driven** exercise.
+      - **VM OPERATIONAL LESSON (§6):** the scheduled-task-Interactive launch + auto-logon get flaky
+        after several reboots (Limited tasks stop executing; auto-logon intermittently doesn't fire). Do
+        NOT chase a "hang" conclusion from a Limited task that shows RUNNING with no output — verify the
+        task actually ran (a probe that writes a start-marker). Budget VM cycles hard.
 - [ ] Segment 3 — installer / packaging. *Not started.*
-- [ ] Segment 4 — hardening / soak + known-limitation resolution + service-stop robustness (above).
-- Owner-only pending: Part XII ratification; push (3 unpushed: `3f84a64`, `e5246f1`, `97f0247`); MS cert.
+- [ ] Segment 4 — hardening / soak + known-limitation resolution + service-stop robustness + untimed
+      FilterSendMessage (above).
+- Owner-only pending: Part XII ratification; push (4 unpushed: `3f84a64`, `e5246f1`, `97f0247`,
+  `477b498`); MS cert.
 - *Record every commit hash + one line of what it closed here as you go. If your context was
   compressed, this section is where you find yourself.*
 
