@@ -293,6 +293,36 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
   This drive's frontier hardening (recover lock split, service-stop robustness, prompt shutdown, frontend
   responsiveness sweep) is VM-verified and regression-clean; the broad cross-path soak is 22/0 on a fresh
   host (the earlier wedge was host degradation, not a bug — see the Segment-4 soak note).
+- [x] **[Frontier] Demo Kit — one-command test-mode deployment (DONE, commit `bc474dc`, FABLE5-designed).**
+      Production (WHQL/attestation) signing is months out; until then the product must be demoed
+      repeatedly, and a test-signed kernel driver only loads on a host in **test-signing mode + Secure
+      Boot OFF**. `demokit/` is a portable, VM-agnostic kit: the operator copies it into ANY throwaway
+      Windows VM and runs **one command** (`Demo.cmd` → `Start-SarDemo.ps1`) to go fresh-VM → DEMO READY.
+      - **Self-resuming single-reboot flow:** self-elevate → honest GO/NO-GO preflight (VM / Secure Boot
+        / HVCI / testsigning / disk / payload-hash) → apply boot policy once → reboot → AtLogon
+        self-deleting scheduled task auto-resumes → install (reuses the real `SemanticsAr-Setup.ps1`
+        `-NoProtect`) → seed sandbox → TEST MODE wallpaper → READY.
+      - **Idempotent / not VM-hardcoded:** every step re-derives current reality and skips what's done.
+        A checkpoint already in test-signing mode needs **no reboot** and installs immediately; a blank
+        VM runs the full one-reboot flow. Both paths share `Invoke-InstallTail`.
+      - **Safe attack kit** (`demokit/attack/`): reproduces the in-place high-entropy overwrite the
+        product convicts on, but confined by fixed sandbox root (NO path param), canary + manifest gating,
+        `GetFullPath` containment assertion, system/user-root denylist, no network, no persistence,
+        reversible. **Verified on host:** all containment cases pass incl. `..\..\Windows` traversal
+        resolving outside → blocked. `RUNBOOK.md` narrates ENFORCE-block → AUDIT-record+recover → reset.
+      - `Reset-SarDemo.ps1` = reversible teardown (uninstall + testsigning off + HVCI restore + one reboot).
+      - `installer/Build-DemoKit.ps1` regenerates a stamped kit from live sources; adds `-SelfContainedApp`
+        to `Build-SarPackage.ps1` (VM needs no .NET runtime) + a `.self-contained` marker the installer's
+        runtime gate honours (behavior-preserving for production payloads); self-checks kit-vs-repo
+        installer parity so a stale kit fails the build. `KIT-VERSION.json` stamps commit/dirty/payload
+        hashes; banner + wallpaper + README carry the TEST MODE disclaimer on every surface.
+      - **Honest about the unavoidable:** one reboot (boot policy) and Secure Boot OFF (firmware → crisp
+        NO-GO, not a silent fail). Refuses non-VM / domain-joined hosts without `-IAmSure`.
+      - **Verified on host:** 14/14 scripts AST-parse; attack guardrails 7/7; read-only detection correct
+        (this physical host → IsVm=False → would NO-GO, as designed). **Remaining (needs the demo VM):**
+        full end-to-end on SarTarget (preflight→reboot→resume→install→attack ENFORCE-block→AUDIT-recover
+        →teardown) + a `vm_verify_demokit.ps1` refresh test; requires `build_driver/pkg` + `build_win`
+        present to build the payload. `dist/` and `dist-demokit/` are gitignored (large payloads).
 - [x] **[Frontier] Visual-first feature communication — DONE (6 commits `0215993`..`94b323c`).** Owner
       asked (Q6) that every feature be conveyed through purpose-built VISUALS so non-experts understand
       intuitively, honestly (a bounded claim must never look as strong as a definitive one; invent no data).
