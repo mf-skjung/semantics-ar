@@ -293,6 +293,39 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
   This drive's frontier hardening (recover lock split, service-stop robustness, prompt shutdown, frontend
   responsiveness sweep) is VM-verified and regression-clean; the broad cross-path soak is 22/0 on a fresh
   host (the earlier wedge was host degradation, not a bug — see the Segment-4 soak note).
+- [x] **[Frontier] Visual-first feature communication — DONE (6 commits `0215993`..`94b323c`).** Owner
+      asked (Q6) that every feature be conveyed through purpose-built VISUALS so non-experts understand
+      intuitively, honestly (a bounded claim must never look as strong as a definitive one; invent no data).
+      FABLE5 designed one vocabulary — **SOLIDITY = CERTAINTY** (solid = verified/enforce, draining/fading =
+      time-limited, hollow/dashed = permeable/absent) — realised on four shared pieces (`Controls/SarArc`,
+      `SarPieWedge`, `Themes/Glyphs.xaml` 16px geometry set, `Converters/ExpiryToFractionConverter`) and
+      shipped across every surface. All built, **host/gallery-screenshot-verified**, no code comments,
+      a11y preserved (`AutomationProperties.Name` full sentences):
+      - **VerdictSeal** (Home hero): tone glyph (check/bang/tri/question) in a mode ring — solid = ENFORCE,
+        dotted = AUDIT (permeable). A distinct **Unknown** tone (`VerdictTone`, driven off `PostureReason`)
+        keeps "status unavailable" from wearing the alarm triangle. Home adds a mode pill + captured-key chip.
+      - **CertaintyGlyph** (seal / draining wedge / hollow dash) — the row/badge atom. Bounded shows a
+        countdown wedge only when a real per-file fraction exists, else a static hourglass (honesty gate: no
+        fabricated freshness). Now leads `CertaintyChip`, so every recovery list row already carries it.
+      - **CertaintyLadder** — descending staircase encoding rung inequality five ways (width 100/86/72, height,
+        fill solid→fading→none, border solid→dashed→dotted, badge) at FIXED semantic sizes (never scaled by
+        counts). Adopted in Recovery pre-elevation and onboarding; a `Collapsed` mode (top two rungs dimmed +
+        struck) is the **exemption confirm** visual.
+      - **ModePictogram** (wall vs watched gate): ENFORCE arrow stops at a solid wall, file sealed; AUDIT arrow
+        passes a dotted line, live file drawn **damaged**, copy+key drop to a tray. In ModeSwitch + onboarding.
+      - **StackMeter** (Budget "what's using it") — strict part-to-whole of held bytes, top-3 apps in the
+        validated palette + "Other"; **no track/ceiling** because the backend reports no storage limit.
+      - **RewindTimeline** (Budget) — the restorable window as a dated band, oldest (left) edge fading; shows
+        the real dated span, not a length vs an invented reference.
+      - **Exemption honesty verified against the engine** (driver capture path + `control/src/whitelist.c`):
+        exemption is forward-only — exempt actors' future writes skip capture; adding the whitelist entry never
+        purges the preserve store. The dialog says so ("copies already kept stay restorable until they expire")
+        and fixes a real bug: the consequence text was rendering in near-white hairline colour (invisible).
+      - **Verification harness:** a `--gallery` window rendered every visual in all states for host screenshots;
+        it was **removed** before finalising (never committed) so nothing dev-only ships.
+      - **Deferred (optional, lower value):** Recovery report composition bar (reuse StackMeter over
+        RecoveryOutcome counts); a live VerdictSeal + 4-seal legend in onboarding pane 1 (needs posture in
+        `OnboardingViewModel`); a per-app stable colour assignment persisted across Budget visits; dark theme.
 - [~] **[Frontier] Mock design-system applied to the WPF app (was generic Wpf.Ui Fluent).** The owner
       asked whether the approved mock (`frontend/mocks/recovery-and-budget.v1.html`) design was applied — it
       was NOT (only the ladder color tokens were; everything else was stock Fluent). Now applied + FABLE5
