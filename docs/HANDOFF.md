@@ -22,7 +22,28 @@
   the demo attack on `C:\SarDemo\Sandbox` produced **0 kept copies** even in AUDIT — the driver may not
   monitor that path, which would also break the recovery demo (see the deferred item in §9).
 
-- **BUG A — DECISIVELY NARROWED (2026-07-13, latest):** the mode dialog hangs on `ShowDialog()` **even with
+- **BUG A — CRITICAL RE-INTERPRETATION (2026-07-13, latest — READ THIS FIRST):** After converting
+  `ModeSwitchWindow` to a **plain `<Window>`** (no FluentWindow) AND `DataContext = null` AND placeholder
+  `<Border>`s instead of pictograms, the UIA harness STILL reports the same "hang" (ShowDialog doesn't
+  return, `windows-of-proc=0`, app alive). **A plain WPF Window with only static Borders/TextBlocks
+  CANNOT infinite-loop on ShowDialog.** This strongly implies the "hang" is a **TEST-HARNESS ARTIFACT,
+  not a real bug**: `ShowDialog()` is MODAL and blocks until the dialog closes; my UIA driver could not
+  FIND the modal dialog window (to click Cancel/Confirm), so it never closed it, so ShowDialog blocked
+  forever, which the driver misread as "app hung / no window". In other words **the mode dialog may be
+  opening perfectly fine** and only the automated driver can't drive it. (Counter-evidence to weigh: an
+  earlier FluentWindow build resisted `taskkill /F` for ~20s, which suggested a real spin — but that was
+  not re-measured on the plain-Window build.) **ALL experimental edits have been REVERTED to the clean
+  committed state (git checkout) — the tree is back to the original FluentWindow + pictograms + Viewbox.**
+  **DEFINITIVE NEXT STEP (do this before touching any more code): get a real VISUAL of the VM desktop
+  right after clicking the mode chip** — Hyper-V `Get-VMScreenshot`/WMI `Msvm_VideoHead` thumbnail, or
+  connect `vmconnect` and look — to SEE whether the "Protection mode" dialog is actually on screen
+  (⇒ NO BUG; the whole hang thread was a UIA false-positive; just confirm mode toggles by clicking in the
+  real UI) or the app is genuinely frozen/blank (⇒ real hang, resume bisection). The owner DID report it
+  as a crash, so confirm visually either way. If it's a real hang, the remaining un-eliminated factor is
+  `ShowDialog()` MODALITY itself in this app's message-loop/threading context (try `Show()` non-modal, or
+  the app-global exception handler interacting with the modal pump). Do NOT re-run the blind UIA driver as
+  proof of a hang — it cannot tell "hung" from "modal dialog I failed to close".
+- **BUG A — DECISIVELY NARROWED (2026-07-13, earlier):** the mode dialog hangs on `ShowDialog()` **even with
   `DataContext = null` AND placeholder `<Border>`s instead of pictograms.** So the cause is **NEITHER content,
   bindings, DataContext, ModeControlViewModel, pictograms, Viewbox, SizeToContent, NOR WindowStartupLocation** —
   it is the **`ui:FluentWindow` shell + `ShowDialog()` (modal) itself** (Wpf.Ui 4.3.0). Note: `MainWindow` is also
