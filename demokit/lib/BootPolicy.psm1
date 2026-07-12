@@ -3,7 +3,11 @@
 # teardown restores exactly what was changed. These require elevation; the orchestrator
 # guarantees it before calling.
 
-Import-Module (Join-Path $PSScriptRoot 'Preflight.psm1') -Force
+# BootPolicy calls Preflight's read-only probes. Import Preflight only if it is not already
+# loaded - a -Force re-import here would unload it from the orchestrator's scope mid-run.
+if (-not (Get-Command Test-TestSigningOn -ErrorAction SilentlyContinue)) {
+    Import-Module (Join-Path $PSScriptRoot 'Preflight.psm1')
+}
 
 # Enable test signing. Idempotent. Returns @{ Changed; AlreadyOn }
 function Enable-TestSigning {

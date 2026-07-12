@@ -23,6 +23,7 @@ param(
     [switch]$AutoLogon,    # opt-in one-shot hands-free logon across the reboot
     [switch]$Force,        # skip confirmations (repair / unattended)
     [switch]$Assume,       # answer prompts with their default (non-interactive)
+    [switch]$NoReboot,     # apply boot policy + schedule resume, but leave the reboot to the operator
     [switch]$NoElevate     # internal: do not attempt self-elevation (avoids relaunch loop)
 )
 
@@ -237,7 +238,10 @@ Write-Host 'This is unavoidable - test signing is a boot-loader policy.' -Foregr
 Write-Host '  * After reboot, LOG BACK IN with the same account.' -ForegroundColor Gray
 Write-Host '  * The demo will CONTINUE AUTOMATICALLY (install + launch).' -ForegroundColor Gray
 Write-Host ''
-if (Confirm-YesNo 'Reboot now?' -DefaultYes $true -Assume:($Assume -or $Force)) {
+if ($NoReboot) {
+    Write-Host 'Boot policy applied and auto-resume scheduled. Reboot when ready (-NoReboot set);' -ForegroundColor Gray
+    Write-Host 'the demo resumes automatically at the next logon.' -ForegroundColor Gray
+} elseif (Confirm-YesNo 'Reboot now?' -DefaultYes $true -Assume:($Assume -or $Force)) {
     Restart-Computer -Force
 } else {
     Write-Host 'Reboot yourself when ready; the demo resumes automatically at the next logon.' -ForegroundColor Gray

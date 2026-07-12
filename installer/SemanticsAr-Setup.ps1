@@ -162,7 +162,18 @@ function Invoke-Install {
         }
 
         # 3 ─ minifilter driver: pnputil stages to the driver store + registers the service.
-        if (-not (Get-Svc $DriverService)) {
+        #     Gate on the filter actually being LOADED, not on the service merely existing: a
+        #     stale service entry (present but pointing at a missing/old image, e.g. after an
+        #     imperfect prior uninstall) would otherwise cause registration to be skipped and the
+        #     load to fail with PATH_NOT_FOUND. pnputil /add-driver /install is idempotent and
+        #     rewrites a stale registration, so re-running it here is safe.
+        if (-not (Test-Filter)) {
+            if (Get-Svc $DriverService) {
+                # Clear a stale/mismatched service so pnputil registers a clean one.
+                & fltmc unload $DriverService 2>$null | Out-Null
+                & sc.exe delete $DriverService 2>$null | Out-Null
+                Log 'cleared a stale minifilter service registration' 'OK'
+            }
             Invoke-Native 'pnputil.exe' @('/add-driver', $infPath, '/install') @(0, 259) | Out-Null
             $rollback.Push({
                 & fltmc unload $DriverService 2>$null | Out-Null
@@ -171,8 +182,6 @@ function Invoke-Install {
                 & sc.exe delete $DriverService 2>$null | Out-Null
             })
             Log 'minifilter driver registered' 'OK'
-        }
-        if (-not (Test-Filter)) {
             Invoke-Native 'fltmc.exe' @('load', $DriverService) | Out-Null
         }
         if (-not (Test-Filter)) { Fail 'minifilter did not attach after load' }
