@@ -310,6 +310,11 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         interactive-session/scheduled-task harness) ran `sarapi_posture_read` and got **result=0
         (SARAPI_OK), elevated=False, svc=1 drv=1 mode=audit** — valid AMBER posture, no SERVER_UNTRUSTED,
         no hang. The earlier "hang" was the degraded VM + Limited-task-not-executing, not the code.
+        **APP-LEVEL CAPSTONE:** with onboarding pre-completed (HKCU flag), the app launched non-elevated
+        (Limited scheduled task, interactive session) renders Home as amber **"Recording, not blocking —
+        Mode: AUDIT"** against the live engine (`build_verify/gui_home.png`) — the correct posture, where
+        before the fix it showed red "status could not be trusted / MODE UNKNOWN". The "built → working
+        product" gate is visually met for Home; Recovery/Budget/Exemptions render as nav surfaces.
       - **REMAINING before Segment 2 closes:** exercise the remaining surfaces live end-to-end —
         Recovery (induce incident → recover → **byte-for-byte** restore), Budget bars, Exemptions
         add/remove/lapsed, mode control. Backends are separately VM-verified (vm_verify_new FN=0,
