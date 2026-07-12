@@ -302,9 +302,48 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         `sar_posture_serve` is now **wait-free** (`TryEnterCriticalSection` + SRWLock last-good cache).
         **FABLE5 built a byte-exact repro** proving the token is causally inert (medium-IL reads 40 B in
         ~2 ms healthy; bails at 5004 ms clean on a wedge) and reviewed the fix **ship**.
-      - **[Seg-4 follow-up]** The only remaining infinite wait is the **untimed `FilterSendMessage`**
-        (`service/commclient.c:172`) into the driver status query — now insulated, hunt with a service
-        dump next wedge (the preserve-lock family is the suspect).
+      - **[Seg-4 — untimed `FilterSendMessage` RESOLVED at the severe layer; residual owner-deferred.]**
+        Investigated the untimed `FilterSendMessage` (`service/commclient.c:172`) with FABLE5 (adversarial,
+        neutral framing). The driver-side `SarCommMessageNotify` callback is synchronous/PASSIVE/SEH-wrapped
+        with no unbounded waits, and self-reentrancy is defended (`SarNameIsOwnStore` OWN_STORE tagging +
+        capture skip + SKIP_PAGING_IO). **FABLE5 found a real defect I initially missed** (single-TU grep
+        blind spot): the *content* recover path `SarPreserveRestore` (`driver/preserve.c`) held
+        `Preserve->lock` **EXCLUSIVE across `SarPresDataRead`→`ZwReadFile(preserve.dat)`** (+ the PAGED
+        allocs, `SarPresCrypt`, verify) — a driver-wide exclusive lock held across synchronous kernel FS
+        I/O, which under a stall (3rd-party filter / paging pressure) would stall **every** capture path
+        that needs the lock (Stage/Reconcile/Promote/persist) → machine-wide write-capture stall, and hang
+        the untimed `FilterSendMessage`. (FABLE5's "sharpest" namespace/`SarPresReadLink` construction was
+        **wrong** — that branch releases the lock at `:1104` *before* its `ZwCreateFile`; I refuted it with
+        the code and FABLE5 accepted.) **FIX (applied, driver builds clean, FABLE5 final = SHIP):**
+        `SarPreserveRestore` now releases `Preserve->lock` immediately after snapshotting `rec` under the
+        lock, then does alloc + `SarPresDataRead` + `SarPresCrypt` + `sar_preserve_verify_extract` + copy
+        **unlocked**. Safe because: crypto material (`store_key`/`mac_key`/`aes_alg`/`key_obj_len`) is
+        init-stable (written only in Create/Load before `ready=1`, never rekeyed; restore gates on
+        `ready==0`), `SarPresDataRead` uses an explicit `ByteOffset` on the `FILE_SYNCHRONOUS_IO_NONALERT`
+        store handle (no shared file-position), and `verify_extract` gates all output against the `rec`
+        snapshot → a race with concurrent compaction can only yield `STATUS_DATA_ERROR` (fail-closed, never
+        stale/wrong bytes). Matches the existing recovery.c / namespace-branch unlocked-I/O discipline;
+        touches no MAC/rollback/security invariant. **Pending: VM recovery byte-for-byte regression** (in
+        the batched VM pass; re-signed pkg already carries the fix, thumbprint `1E4B3044…`).
+      - **[Seg-4 — residual, OWNER-DEFERRED with justification.]** The genuine remaining unbounded-I/O
+        surface is **not** the (now de-risked, own-store, cached-handle) preserve.dat read but
+        `SarRecoveryExecute` (`driver/recovery.c:426/439/457/469`): synchronous `ZwCreateFile`/`ZwReadFile`/
+        `ZwWriteFile` on the **arbitrary target file** inside the callback — an external path exposed to
+        stacked-filter interception / oplock / network / removable stalls, which `FilterSendMessage` cannot
+        cancel. A permanently-stuck recover worker never returns to `accept()`, permanently consuming one
+        **control**-pipe instance. **Blast radius is bounded by design:** the service runs THREE separate
+        pipe servers each with its own 4-worker pool (`control.c:459-461`) — **posture (the GUI liveness
+        poll) and events are fully isolated from control**, so a hung recover cannot starve the GUI's status
+        signal (it survives on the wait-free posture cache regardless). Only the control pool (4 workers,
+        shared by recover + catalog/preserve-query + whitelist/mode/budget) can be exhausted, and only by
+        **≥4 concurrently-hung recovers** — pathological, since `RecoverySession.Execute` serializes recovers
+        one-at-a-time per elevated session. **Owner decision needed** (do not paper over): choose (a) cheap
+        pool-isolation — cap concurrent in-flight recovers below the control pool size, or give recover its
+        own pipe endpoint; or (b) the heavyweight service-side deadline wrapper (must run on a dedicated
+        non-pool thread and **leak** the reply buffer on timeout, since the kernel owns it until the callback
+        returns) as defense-in-depth for the arbitrary-target `ZwCreateFile`; or (c) accept as a documented
+        limitation given the bounded blast radius. FABLE5 recommends (a) over (b) and agrees (b) is not a
+        ship gate now that the lock fix removed the amplification.
       - **NON-ELEVATED FIX LIVE-CONFIRMED:** with the committed binaries deployed and the engine live,
         a genuine medium-integrity process (`runas /trustlevel:0x20000`, session 0 — avoids the flaky
         interactive-session/scheduled-task harness) ran `sarapi_posture_read` and got **result=0
@@ -384,7 +423,36 @@ Env: .NET 10 SDK; CMake 4.x + VS2022 Community; WDK 10.0.26100; Hyper-V VM **`Sa
         after several reboots (Limited tasks stop executing; auto-logon intermittently doesn't fire). Do
         NOT chase a "hang" conclusion from a Limited task that shows RUNNING with no output — verify the
         task actually ran (a probe that writes a start-marker). Budget VM cycles hard.
-- [ ] Segment 3 — installer / packaging. *Not started.*
+- [~] **Segment 3 — installer / packaging. BUILT (transactional PowerShell installer); VM smoke pending.**
+      Chose a transactional PowerShell installer over a WiX MSI deliberately: (1) WiX isn't the constraint
+      here — the *driver* installs via inf/pnputil either way; (2) an MSI custom-action driver install is
+      hard to verify safely on the flaky VM and risks a plausible-but-broken uninstall; (3) the genuine
+      hard problem is **clean uninstall of a PPL-AM service** (a non-protected caller cannot stop it live),
+      which a script handles honestly (best-effort stop → `DeleteService` marks it → reboot finalizes). The
+      artifacts:
+      - `installer/Build-SarPackage.ps1` — assembles a self-contained `dist/` payload: `app\` (framework-
+        dependent `dotnet publish` + ABI-matched `sarapi.dll`/COM host/`.tlb`/service exe/`sar_install.exe`)
+        + `driver\` (signed `.sys`/`.inf`/`.cat`/ELAM/cert from `build_driver\pkg`) + the setup script.
+        **Verified locally:** produced `dist\` (334 app files, 5 driver files, all key binaries present).
+      - `installer/SemanticsAr-Setup.ps1 -Action Install|Uninstall|Verify` — transactional (rollback stack),
+        idempotent, logged (`%ProgramData%\semantics-ar\setup-*.log`). Install order: preflight (admin +
+        .NET 10 Desktop Runtime) → payload to `%ProgramFiles%\semantics-ar` → trust test-signing cert
+        (Root+TrustedPublisher, **skipped for a production-signed driver** — detected via Authenticode
+        subject) → `pnputil /add-driver /install` + `fltmc load` → create user service **`SemanticsAr`**
+        (own-process — the canonical name from `service/main.c` + the `sar_install` PPL target; the verify
+        harness's `semantics_ar_service` is a test-only alias) → ELAM+PPL via `sar_install.exe` (skippable
+        with `-NoProtect`) → start service → COM `/RegServer` → Start-Menu shortcut → Apps&Features
+        registration. Uninstall reverses all, reports orphans, flags **reboot-required** if the PPL service
+        can't be stopped live. `Verify` asserts filter+services+COM+app.
+      - **OWNER GATES (recorded, not resolved autonomously):** (i) **production driver signing** is
+        owner-only (MS attestation/WHQL) — the installer test-trusts the self-signed cert only when it
+        detects a test-signed `.sys`; a shipped product replaces this with a properly-signed driver and the
+        cert-trust step no-ops. (ii) **PPL-AM uninstall policy** — live removal of the protected service
+        requires a reboot; the installer stages the delete + flags reboot. If the owner wants reboot-free
+        uninstall, the service must expose a self-initiated protected-stop path (design change). (iii)
+        whether to enable PPL by default (production: yes; the `-NoProtect` switch is for dev installs).
+      - **DoD REMAINING:** clean install+uninstall smoke on a fresh `clean-baseline` VM via PowerShell
+        Direct (batched with the driver-fix recovery regression). Not yet run.
 - [ ] Segment 4 — hardening / soak + known-limitation resolution + service-stop robustness + untimed
       FilterSendMessage (above).
 - Owner-only pending: Part XII ratification; push (4 unpushed: `3f84a64`, `e5246f1`, `97f0247`,

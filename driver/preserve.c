@@ -1096,14 +1096,12 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
             break;
         }
     }
-    if (!found) {
-        FltReleasePushLock(&Preserve->lock);
+    FltReleasePushLock(&Preserve->lock);
+    if (!found)
         return STATUS_NOT_FOUND;
-    }
-    if (rec.kind == SAR_PRESERVE_KIND_NAMESPACE) {
-        FltReleasePushLock(&Preserve->lock);
+
+    if (rec.kind == SAR_PRESERVE_KIND_NAMESPACE)
         return SarPresReadLink(Path, rec.payload_offset, Offset, (ULONG)Length, Out, OutLen);
-    }
 
     ctbuf = (PUCHAR)ExAllocatePool2(POOL_FLAG_PAGED, (SIZE_T)rec.payload_length,
                                     SAR_POOL_TAG_PRESBUF);
@@ -1112,7 +1110,6 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
     if (ctbuf == NULL || ptbuf == NULL) {
         if (ctbuf != NULL) ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
         if (ptbuf != NULL) ExFreePoolWithTag(ptbuf, SAR_POOL_TAG_PRESBUF);
-        FltReleasePushLock(&Preserve->lock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -1135,7 +1132,6 @@ NTSTATUS SarPreserveRestore(_Inout_ PSAR_PRESERVE Preserve, _In_ const UINT16 *P
     RtlSecureZeroMemory(ptbuf, (SIZE_T)rec.payload_length);
     ExFreePoolWithTag(ctbuf, SAR_POOL_TAG_PRESBUF);
     ExFreePoolWithTag(ptbuf, SAR_POOL_TAG_PRESBUF);
-    FltReleasePushLock(&Preserve->lock);
     return status;
 }
 
