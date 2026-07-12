@@ -114,11 +114,6 @@ static sar_comm_status_t sar_comm_recv_message(sar_comm_client_t *client,
     if (capacity > SAR_COMM_RECV_BUFFER)
         capacity = SAR_COMM_RECV_BUFFER;
 
-    /* Overlapped receive so a shutdown wakes the inbound loop immediately. The port handle is async
-     * (FilterConnectCommunicationPort was called with dwOptions=0), so FilterGetMessage returns
-     * ERROR_IO_PENDING and signals ov.hEvent on completion. A dedicated per-call event is required:
-     * a NULL event would make GetOverlappedResult wait on the port handle, which also signals for the
-     * concurrent outbound FilterSendMessage calls on the same handle. */
     ev = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!ev)
         return SAR_COMM_ERR_TRANSPORT;
@@ -139,9 +134,6 @@ static sar_comm_status_t sar_comm_recv_message(sar_comm_client_t *client,
         if (w == WAIT_OBJECT_0) {
             completed = GetOverlappedResult(client->port, &ov, &bytes, FALSE);
         } else if (w == WAIT_OBJECT_0 + 1) {
-            /* Shutdown. Cancel our own pended get (targeted, so concurrent FilterSendMessage on the
-             * same handle is untouched), then drain: the completion always signals ev, and a message
-             * may have won the race and been delivered into msg - if so, dispatch it once. */
             CancelIoEx(client->port, &ov);
             WaitForSingleObject(ev, INFINITE);
             completed = GetOverlappedResult(client->port, &ov, &bytes, FALSE);

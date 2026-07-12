@@ -519,14 +519,6 @@ static void sar_control_serve(sar_pipe_conn_t *conn, void *vctx)
     }
 
     {
-        /* Recover is the only control op that can block for an unbounded time (its handler does
-         * synchronous I/O on an arbitrary target file, which a stalled filesystem/oplock/redirector
-         * can hang). Serializing it under the shared g_control_lock would let one hung recover stall
-         * every other control op AND the events-query + autoverdict paths that share that lock.
-         * Route recover through its own lock so a hung recover can only ever block another recover.
-         * Concurrent request/response on the single driver port is safe: the transport uses a local
-         * reply buffer and mutates no shared client state, and the driver's message callback is
-         * reentrant with per-domain locks and no shared reply buffer. */
         LPCRITICAL_SECTION lock =
             (cmd.op == SAR_CTL_OP_RECOVER || cmd.op == SAR_CTL_OP_PRESERVE_RECOVER)
                 ? &g_recover_lock : ctx->lock;
@@ -772,10 +764,6 @@ void sar_control_listener_stop(void)
     stuck |= sar_pipe_server_stop(&g_posture_server);
     stuck |= sar_pipe_server_stop(&g_control_server);
 
-    /* A worker that could not be joined may still own g_recover_lock (a stalled recover) or
-     * g_control_lock; deleting a held critical section is undefined. These are static objects, so
-     * leaving them initialized is harmless - the worker's eventual LeaveCriticalSection stays
-     * well-defined and the process is exiting. Only tear them down on a fully clean stop. */
     if (!stuck) {
         DeleteCriticalSection(&g_recover_lock);
         DeleteCriticalSection(&g_control_lock);

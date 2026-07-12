@@ -25,6 +25,30 @@ code and re-ground completely before continuing**:
 This file IS your cross-compression memory. **After you close each segment (or make a material
 decision), update §9 and the relevant §5 subsection** so a future compressed-you can resume exactly.
 
+### STANDING PRINCIPLES — OWNER-MANDATED, HOLD THESE THROUGH COMPLETION (survive every compaction)
+
+The owner is away and trusts you to run to full productization autonomously. These are absolute:
+
+1. **Frontier-or-beyond quality.** Every implementation must equal or exceed the global top-tier
+   frontier. No shortcuts, no "good enough."
+2. **Marshal every resource, autonomously, without stopping.** FABLE5 (adversarial code review + design
+   authority when the owner is unavailable), VM verification, host verification, web research. Do not
+   ask the owner to intervene or decide — resolve ambiguity via FABLE5/research and proceed. Do not
+   stop until productization is complete or you hit a true owner-only gate (§3).
+3. **NO COMMENTS IN CODE.** When you write or modify the core product source — the driver, service, and
+   frontend (C/C#) — write ZERO comments; the code must read cleanly without them. (This drive violated
+   this while hardening the service and had to strip them; do not repeat.) Operational scripts under
+   `scripts/` and `installer/` follow the established repo convention (they carry comment-based help),
+   but keep even those lean.
+4. **Never degrade already-attained quality.** Do NOT bypass or ignore the Constitution; do NOT weaken
+   driver/security logic; do NOT compromise the **"사용성 저해 0" / FN=0** guarantee (zero usability
+   impact — every recoverable file recovers, every legitimate write proceeds). The Constitution
+   outranks code. No stopgap/fallback/migration/schema-version/compat code (never-shipped product).
+5. **Never wait indefinitely on a VM test; poll status.** (See §6 — a wedged guest never fires its
+   notification.)
+
+If your context was just compressed and you are reading this: these principles are still in force.
+
 ---
 
 ## 1. MISSION & TERMINATION

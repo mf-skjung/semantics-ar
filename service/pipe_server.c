@@ -250,19 +250,10 @@ int sar_pipe_server_stop(sar_pipe_server_t *server)
                 CloseHandle(server->threads[i]);
                 server->threads[i] = NULL;
             } else {
-                /* Worker still inside an uncancelable FilterSendMessage (e.g. a recover whose target
-                 * filesystem has stalled). CancelIoEx cannot rescue an IOCTL parked in the driver's
-                 * message callback - it returns only when the callback returns. */
                 stuck = TRUE;
             }
         }
     }
-    /* Close only what no live worker can still reference. A stuck worker's conn still holds its pipe
-     * and the (already-signaled) stop event; closing them would hand the worker a recycled handle
-     * when it finally returns and calls sar_pipe_send. Each worker owns exactly one pipe (by index),
-     * so an exited worker's pipe is safe to close; a stuck worker's pipe and the shared stop event
-     * are leaked. The stop event is signaled, so a stuck worker exits on its own once its round-trip
-     * returns, and the process is terminating, so the OS reclaims the leak at exit. */
     for (i = 0; i < server->count; i++) {
         if (server->threads[i] == NULL &&
             server->pipes[i] && server->pipes[i] != INVALID_HANDLE_VALUE) {

@@ -35,10 +35,6 @@ int sar_pipe_server_start(sar_pipe_server_t *server, const wchar_t *name,
                           DWORD out_buffer, DWORD in_buffer, DWORD instances,
                           sar_pipe_serve_fn serve, void *ctx);
 
-/* Returns 1 if a worker could not be joined within the timeout (still inside an uncancelable
- * driver round-trip); in that case the worker's pipe + the shared stop event are intentionally
- * leaked rather than closed, so the returning worker cannot race a recycled handle. Returns 0 on a
- * clean stop. */
 int sar_pipe_server_stop(sar_pipe_server_t *server);
 
 BOOL sar_pipe_recv(sar_pipe_conn_t *conn, void *buffer, DWORD capacity,
